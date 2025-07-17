@@ -222,15 +222,8 @@ techItems.forEach((item, index) => {
 });
 
 // ===== Parallax Effect for Hero Section =====
-window.addEventListener('scroll', () => {
-    const scrolled = window.pageYOffset;
-    const parallax = document.querySelector('.hero');
-    const speed = scrolled * 0.5;
-    
-    if (parallax) {
-        parallax.style.transform = `translateY(${speed}px)`;
-    }
-});
+// Hero section is now fixed, so we don't need parallax scrolling
+// The fixed positioning creates the desired effect automatically
 
 // ===== Loading Animation =====
 window.addEventListener('load', () => {
