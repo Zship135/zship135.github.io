@@ -1119,7 +1119,7 @@ section.visible {
     display: flex;
     flex-direction: column-reverse;
     align-items: center;
-    gap: 2px;
+    gap: 2px; /* Tighter spacing for better 8-stack capacity */
 }
 
 .stack-item {
@@ -1230,7 +1230,7 @@ section.visible {
     }
     
     #game-canvas {
-        height: 550px; /* Increased height on mobile */
+        height: 700px; /* Much larger height on mobile for 8-stack capacity */
         padding: 15px;
         margin-bottom: 20px;
     }
@@ -1252,7 +1252,7 @@ section.visible {
     
     /* Better mobile positioning for falling numbers */
     #falling-numbers {
-        height: 280px; /* Increased height on mobile */
+        height: 280px; /* Adequate height for number display */
         top: 110px; /* Start well below mobile game info */
     }
     
@@ -1271,17 +1271,17 @@ section.visible {
     
     /* Stack display improvements for mobile */
     #stack-display {
-        bottom: 15px;
+        bottom: 20px; /* Keep good spacing from bottom */
         width: 90px;
     }
     
     .stack-item {
         width: 70px;
-        height: 45px;
+        height: 40px; /* Slightly smaller height to fit more items */
         font-size: 18px;
         font-weight: bold;
         border: 2px solid rgba(255, 255, 255, 0.3);
-        margin-bottom: 3px;
+        margin-bottom: 2px; /* Tighter spacing between stack items */
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
     }
     
@@ -1682,7 +1682,7 @@ section.visible {
     }
     
     #game-canvas {
-        height: 450px;
+        height: 720px; /* Extra height for touch devices with full stack */
         padding: 15px;
     }
     
@@ -1697,7 +1697,7 @@ section.visible {
     /* Better positioning for current number on touch devices */
     #falling-numbers {
         top: 115px; /* Position well below header on touch devices */
-        height: 300px; /* Increased height for touch devices */
+        height: 300px; /* Adequate height for number display */
     }
     
     .falling-number,
@@ -1712,13 +1712,14 @@ section.visible {
         z-index: 100; /* Ensure visibility above other elements */
     }
     
-    /* Enhanced stack visibility */
+    /* Enhanced stack visibility for touch devices */
     .stack-item {
         width: 75px;
-        height: 50px;
+        height: 45px; /* Balanced size for 8-item capacity */
         font-size: 20px;
         font-weight: bold;
         border: 2px solid rgba(255, 255, 255, 0.4);
         text-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+        margin-bottom: 2px; /* Tighter spacing for more items */
     }
 }
