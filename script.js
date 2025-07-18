@@ -49,12 +49,14 @@ const observer = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
         if (entry.isIntersecting) {
             entry.target.classList.add('visible');
+            entry.target.classList.remove('animate-in');
         }
     });
 }, observerOptions);
 
-// Observe all sections for scroll animations
-document.querySelectorAll('section').forEach(section => {
+// Observe all sections for scroll animations, but skip the hero
+document.querySelectorAll('section:not(.hero)').forEach(section => {
+    section.classList.add('animate-in');
     observer.observe(section);
 });
 
