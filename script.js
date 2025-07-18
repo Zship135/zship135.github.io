@@ -533,30 +533,60 @@ class StackOverflowGame {
     detectMobile() {
         const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) 
                        || (window.innerWidth <= 768) 
-                       || ('ontouchstart' in window);
+                       || ('ontouchstart' in window)
+                       || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0);
+        
+        console.log(`Mobile detection: ${isMobile}`);
+        console.log(`Screen width: ${window.innerWidth}`);
+        console.log(`Touch support: ${'ontouchstart' in window}`);
         
         if (isMobile) {
             this.mobileControls.classList.remove('hidden');
+            // Also show them whenever game starts on mobile
+            this.isMobileDevice = true;
+        } else {
+            this.isMobileDevice = false;
         }
     }
     
     // Handle mobile button actions
     handleAction(action) {
-        if (!this.gameRunning || !this.currentNumber) return;
+        if (!this.gameRunning || !this.waitingForChoice || !this.currentNumber) {
+            console.log(`Action blocked: gameRunning=${this.gameRunning}, waitingForChoice=${this.waitingForChoice}, currentNumber=${this.currentNumber}`);
+            return;
+        }
+        
+        console.log(`Mobile action: ${action}`);
         
         switch(action) {
             case 'push':
-                this.pushToStack();
+                this.pushToStack(this.currentNumber);
+                this.waitingForChoice = false;
+                // Move to next number
+                if (this.gameRunning) {
+                    setTimeout(() => this.presentNewNumber(), 500);
+                }
                 break;
             case 'throw':
                 this.throwNumber();
+                this.waitingForChoice = false;
+                // Move to next number
+                if (this.gameRunning) {
+                    setTimeout(() => this.presentNewNumber(), 500);
+                }
                 break;
             case 'pop':
-                if (!this.hasPopped) {
+                if (!this.hasPopped && this.stack.length > 0) {
                     this.popFromStack();
+                    // Don't move to next number - current number is still available
+                } else {
+                    console.log(`Pop blocked: hasPopped=${this.hasPopped}, stackLength=${this.stack.length}`);
                 }
                 break;
         }
+        
+        // Update mobile button states
+        this.updateMobileButtons();
     }
     
     // Update mobile button states
@@ -578,8 +608,15 @@ class StackOverflowGame {
         this.currentRule = this.rules[Math.floor(Math.random() * this.rules.length)];
         this.gameOver.classList.add('hidden');
         this.startBtn.style.display = 'none';
-        this.mobileControls.classList.remove('hidden'); // Show mobile controls when game starts
+        
+        // Always show mobile controls if on mobile device, or force show on smaller screens
+        if (this.isMobileDevice || window.innerWidth <= 768) {
+            this.mobileControls.classList.remove('hidden');
+            console.log('Mobile controls shown for game start');
+        }
+        
         this.updateDisplay();
+        this.updateMobileButtons(); // Initialize button states
         this.presentNewNumber();
     }
 
@@ -600,6 +637,11 @@ class StackOverflowGame {
         numberElement.className = 'current-number';
         numberElement.textContent = this.currentNumber;
         this.fallingNumbers.appendChild(numberElement);
+        
+        // Update mobile button states for new number
+        this.updateMobileButtons();
+        
+        console.log(`New number presented: ${this.currentNumber}, waitingForChoice: ${this.waitingForChoice}`);
     }
 
     handleKeyPress(e) {
@@ -632,12 +674,14 @@ class StackOverflowGame {
         }
     }
 
-    pushToStack(number) {
-        this.stack.push(number);
+    pushToStack(number = null) {
+        const numberToPush = number || this.currentNumber;
+        this.stack.push(numberToPush);
         this.score += 10;
         this.moveCount++; // Increment move counter
         this.playMoveSound('push'); // Play push sound
         this.updateDisplay();
+        this.updateMobileButtons(); // Update mobile button states
         this.checkRuleChange(); // Check if rule should change
         this.checkRule();
         this.checkStackHeight(); // Check if stack is too tall
@@ -653,6 +697,7 @@ class StackOverflowGame {
             // Note: Pop doesn't increment moveCount or change rules since it doesn't advance to next number
             this.playMoveSound('pop'); // Play pop sound
             this.updateDisplay();
+            this.updateMobileButtons(); // Update mobile button states
             this.checkRule();
             
             // Visual feedback that pop has been used
@@ -671,6 +716,7 @@ class StackOverflowGame {
         this.playMoveSound('throw'); // Play throw sound
         this.checkRuleChange(); // Check if rule should change
         this.updateDisplay(); // Make sure display updates
+        this.updateMobileButtons(); // Update mobile button states
         this.clearCurrentNumber();
     }
 
@@ -685,12 +731,22 @@ class StackOverflowGame {
     }
 
     checkRule() {
-        const ruleResult = this.currentRule.check(this.stack);
-        console.log(`Rule check: "${this.currentRule.name}" - Stack: ${JSON.stringify(this.stack)} - Result: ${ruleResult}`);
-        
-        if (!ruleResult) {
-            console.log(`Game ending due to rule violation: ${this.currentRule.name}`);
-            this.endGame();
+        try {
+            const ruleResult = this.currentRule.check(this.stack);
+            console.log(`Rule check: "${this.currentRule.name}"`);
+            console.log(`Stack: [${this.stack.join(', ')}]`);
+            console.log(`Rule result: ${ruleResult}`);
+            
+            if (!ruleResult) {
+                console.log(`❌ GAME ENDING - Rule violation: ${this.currentRule.name}`);
+                console.log(`Final stack state: [${this.stack.join(', ')}]`);
+                this.endGame();
+            } else {
+                console.log(`✅ Rule satisfied`);
+            }
+        } catch (error) {
+            console.error(`Error checking rule "${this.currentRule.name}":`, error);
+            // Don't end game on rule checking errors, just log them
         }
     }
 
