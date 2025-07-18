@@ -40,6 +40,11 @@ window.addEventListener('scroll', () => {
 });
 
 // ===== Scroll Animations =====
+// Disabled scroll animations to prevent transparency issues with fixed hero background
+// All sections now remain fully opaque at all times
+
+// If you want to re-enable animations later, uncomment the code below:
+/*
 const observerOptions = {
     threshold: 0.1,
     rootMargin: '0px 0px -50px 0px'
@@ -59,6 +64,7 @@ document.querySelectorAll('section:not(.hero)').forEach(section => {
     section.classList.add('animate-in');
     observer.observe(section);
 });
+*/
 
 // ===== Typing Animation for Hero Title =====
 class TypeWriter {

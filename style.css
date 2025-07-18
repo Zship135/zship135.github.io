@@ -317,7 +317,7 @@ body {
 /* ===== About Section ===== */
 .about {
     padding: 120px 0;
-    background: #ffffff;
+    background: #ffffff !important;
     position: relative;
     z-index: 1000;
     margin-top: 100vh; /* Push content below the hero */
@@ -330,12 +330,13 @@ body {
 .about::before {
     content: '';
     position: absolute;
-    top: -50px;
+    top: -100px;
     left: 0;
     right: 0;
-    bottom: -50px;
+    bottom: -100px;
     background: #ffffff;
     z-index: -1;
+    border-radius: 30px 30px 0 0;
 }
 
 .about-content {
@@ -429,10 +430,21 @@ body {
 /* ===== Skills Section ===== */
 .skills {
     padding: 100px 0;
-    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%) !important;
     position: relative;
     z-index: 1000;
     min-height: 80vh; /* Ensure solid coverage */
+}
+
+.skills::before {
+    content: '';
+    position: absolute;
+    top: -50px;
+    left: 0;
+    right: 0;
+    bottom: -50px;
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    z-index: -1;
 }
 
 .skills-grid {
@@ -484,10 +496,21 @@ body {
 /* ===== Projects Section ===== */
 .projects {
     padding: 100px 0;
-    background: #ffffff;
+    background: #ffffff !important;
     position: relative;
     z-index: 1000;
     min-height: 80vh; /* Ensure solid coverage */
+}
+
+.projects::before {
+    content: '';
+    position: absolute;
+    top: -50px;
+    left: 0;
+    right: 0;
+    bottom: -50px;
+    background: #ffffff;
+    z-index: -1;
 }
 
 .projects-grid {
@@ -596,11 +619,22 @@ body {
 /* ===== Contact Section ===== */
 .contact {
     padding: 100px 0;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
     color: white;
     position: relative;
     z-index: 1000;
     min-height: 80vh; /* Ensure solid coverage */
+}
+
+.contact::before {
+    content: '';
+    position: absolute;
+    top: -50px;
+    left: 0;
+    right: 0;
+    bottom: -50px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    z-index: -1;
 }
 
 .contact .section-title {
@@ -689,12 +723,23 @@ body {
 
 /* ===== Footer ===== */
 .footer {
-    background: #1a1a1a;
+    background: #1a1a1a !important;
     color: white;
     padding: 40px 0;
     text-align: center;
     position: relative;
     z-index: 1000;
+}
+
+.footer::before {
+    content: '';
+    position: absolute;
+    top: -50px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #1a1a1a;
+    z-index: -1;
 }
 
 .footer-content {
@@ -840,13 +885,14 @@ body {
 section {
     opacity: 1;
     transform: translateY(0);
-    transition: all 0.8s ease;
     position: relative;
+    background: inherit; /* Ensure sections inherit their background */
 }
 
+/* Remove all scroll animations to prevent transparency */
 section.animate-in {
-    opacity: 0;
-    transform: translateY(50px);
+    opacity: 1;
+    transform: translateY(0);
 }
 
 section.visible {
