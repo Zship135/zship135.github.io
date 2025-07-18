@@ -231,6 +231,18 @@ body {
     color: #666;
     margin-bottom: 20px;
     font-weight: 400;
+    min-height: 2rem; /* Prevent layout shift during typing */
+}
+
+/* Typing cursor effect */
+.hero-subtitle .txt {
+    border-right: 3px solid #667eea;
+    animation: blink-cursor 1s infinite;
+}
+
+@keyframes blink-cursor {
+    0%, 50% { border-color: #667eea; }
+    51%, 100% { border-color: transparent; }
 }
 
 .hero-description {
@@ -680,6 +692,17 @@ body {
     color: rgba(255, 255, 255, 0.8);
 }
 
+.contact-item a {
+    color: rgba(255, 255, 255, 0.8);
+    text-decoration: none;
+    transition: color 0.3s ease;
+}
+
+.contact-item a:hover {
+    color: white;
+    text-decoration: underline;
+}
+
 .contact-form {
     background: rgba(255, 255, 255, 0.1);
     backdrop-filter: blur(10px);
@@ -765,6 +788,30 @@ body {
 
 /* ===== Responsive Design ===== */
 @media (max-width: 768px) {
+    /* Disable parallax effect on mobile */
+    .hero {
+        position: relative !important;
+        top: auto !important;
+        left: auto !important;
+        width: auto !important;
+        z-index: auto !important;
+        min-height: auto !important;
+        padding-bottom: 40px; /* Add bottom padding to hero section */
+    }
+
+    /* Remove parallax spacing on mobile */
+    .about {
+        margin-top: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+    }
+
+    /* Ensure other sections display normally on mobile */
+    section:not(.hero) {
+        margin-top: 0 !important;
+        z-index: auto !important;
+    }
+
     .hamburger {
         display: flex;
     }
@@ -790,8 +837,8 @@ body {
         grid-template-columns: 1fr;
         text-align: center;
         gap: 50px;
-        padding: 80px 0 20px 0; /* Account for fixed navbar */
-        min-height: 100vh;
+        padding: 80px 20px 60px 20px; /* More bottom padding and horizontal padding */
+        min-height: auto; /* Remove fixed height on mobile */
     }
 
     .hero-title {
@@ -872,8 +919,8 @@ body {
     }
 
     .hero-content {
-        min-height: 100vh;
-        padding: 100px 0 10px 0; /* More padding for mobile navbar */
+        min-height: auto; /* Remove fixed height on smaller mobile */
+        padding: 100px 15px 60px 15px; /* Better padding for smaller screens */
     }
 
     .hero-buttons {
@@ -933,4 +980,573 @@ section.visible {
 @keyframes spin {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
+}
+
+/* ===== Stack Overflow Game Styles ===== */
+.game-section {
+    padding: 120px 0;
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%) !important;
+    position: relative;
+    z-index: 1000;
+    min-height: 100vh;
+}
+
+/* Ensure game section has solid background */
+.game-section::before {
+    content: '';
+    position: absolute;
+    top: -100px;
+    left: 0;
+    right: 0;
+    bottom: -100px;
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    z-index: -1;
+}
+
+.game-container {
+    max-width: 800px;
+    margin: 0 auto;
+    position: relative;
+    z-index: 10;
+}
+
+.game-area {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 40px;
+    align-items: start;
+}
+
+#game-canvas {
+    background: white;
+    border-radius: 15px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    height: 500px;
+    position: relative;
+    overflow: hidden;
+    z-index: 5;
+}
+
+#falling-numbers {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 300px;
+}
+
+.falling-number,
+.current-number {
+    position: absolute;
+    width: 50px;
+    height: 50px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 18px;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+    cursor: pointer;
+    transition: transform 0.1s ease;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.current-number {
+    animation: pulse 1s ease-in-out infinite alternate;
+    border: 2px solid #ffd700;
+}
+
+.current-number.pop-used {
+    border: 2px solid #ff6b6b;
+    box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+}
+
+.current-number.used {
+    animation: used 0.3s ease-out forwards;
+}
+
+@keyframes pulse {
+    0% { transform: translate(-50%, -50%) scale(1); }
+    100% { transform: translate(-50%, -50%) scale(1.1); }
+}
+
+@keyframes used {
+    0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+    50% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.8; }
+    100% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+}
+
+.falling-number {
+    animation: fall 3s linear;
+}
+
+.falling-number:hover,
+.current-number:hover {
+    transform: translate(-50%, -50%) scale(1.15);
+}
+
+.falling-number.captured {
+    animation: capture 0.3s ease-out forwards;
+}
+
+@keyframes capture {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.3); opacity: 0.8; }
+    100% { transform: scale(0); opacity: 0; }
+}
+
+@keyframes fall {
+    from { transform: translateY(-60px); }
+    to { transform: translateY(360px); }
+}
+
+#stack-display {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 80px;
+}
+
+#stack-items {
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: center;
+    gap: 2px;
+}
+
+.stack-item {
+    width: 60px;
+    height: 40px;
+    background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+    color: white;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    box-shadow: 0 2px 10px rgba(118, 75, 162, 0.3);
+    transition: all 0.3s ease;
+}
+
+.stack-item:hover {
+    transform: scale(1.05);
+}
+
+#game-ui {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    right: 20px;
+}
+
+.game-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 15px;
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.game-info > div {
+    font-weight: 600;
+    color: #333;
+}
+
+#current-rule {
+    color: #667eea;
+    font-weight: bold;
+}
+
+#game-over {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: white;
+    padding: 40px;
+    border-radius: 15px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+    text-align: center;
+    z-index: 1000;
+}
+
+#game-over h3 {
+    color: #e74c3c;
+    margin-bottom: 15px;
+    font-size: 24px;
+}
+
+#game-over p {
+    margin-bottom: 20px;
+    color: #666;
+}
+
+.game-controls {
+    background: white;
+    padding: 30px;
+    border-radius: 15px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+.controls-help {
+    margin-top: 20px;
+    text-align: left;
+}
+
+.controls-help p {
+    margin: 8px 0;
+    color: #666;
+}
+
+.controls-help strong {
+    color: #333;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Mobile responsive for game */
+@media (max-width: 768px) {
+    .game-area {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+    
+    #game-canvas {
+        height: 400px;
+    }
+    
+    .game-info {
+        flex-direction: column;
+        gap: 10px;
+        text-align: center;
+    }
+    
+    .falling-number {
+        width: 40px;
+        height: 40px;
+        font-size: 16px;
+    }
+}
+
+/* ===== Rule Change Notification Styles ===== */
+.rule-change-notification {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: linear-gradient(135deg, #ff6b6b, #feca57);
+    color: white;
+    padding: 20px;
+    border-radius: 15px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+    animation: ruleChangeAppear 0.5s ease-out;
+    text-align: center;
+    min-width: 250px;
+}
+
+.notification-content h4 {
+    margin: 0 0 10px 0;
+    font-size: 18px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.notification-content p {
+    margin: 5px 0;
+    font-size: 14px;
+}
+
+.grace-text {
+    font-style: italic;
+    opacity: 0.9;
+    font-size: 12px !important;
+}
+
+.rule-change-notification.fade-out {
+    animation: ruleChangeFadeOut 0.5s ease-in forwards;
+}
+
+@keyframes ruleChangeAppear {
+    0% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.3) rotate(-10deg);
+    }
+    50% {
+        transform: translate(-50%, -50%) scale(1.1) rotate(5deg);
+    }
+    100% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1) rotate(0deg);
+    }
+}
+
+@keyframes ruleChangeFadeOut {
+    0% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.8);
+    }
+}
+
+/* ===== Grace Warning Styles ===== */
+.grace-warning {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: linear-gradient(135deg, #ff9500, #ff6b6b);
+    color: white;
+    padding: 10px 15px;
+    border-radius: 8px;
+    box-shadow: 0 5px 15px rgba(255, 149, 0, 0.4);
+    z-index: 999;
+    animation: graceWarningPulse 0.5s ease-out;
+}
+
+.warning-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.warning-icon {
+    font-size: 16px;
+    animation: warningIconShake 0.3s ease-in-out;
+}
+
+.grace-warning.fade-out {
+    animation: graceFadeOut 0.3s ease-in forwards;
+}
+
+@keyframes graceWarningPulse {
+    0% {
+        opacity: 0;
+        transform: translateX(100%) scale(0.8);
+    }
+    50% {
+        transform: translateX(-5px) scale(1.05);
+    }
+    100% {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
+}
+
+@keyframes warningIconShake {
+    0%, 100% { transform: rotate(0deg); }
+    25% { transform: rotate(-5deg); }
+    75% { transform: rotate(5deg); }
+}
+
+@keyframes graceFadeOut {
+    0% {
+        opacity: 1;
+        transform: translateX(0);
+    }
+    100% {
+        opacity: 0;
+        transform: translateX(100%);
+    }
+}
+
+/* ===== Rule Display Animation Styles ===== */
+.rule-shake {
+    animation: ruleShake 0.6s ease-in-out;
+}
+
+@keyframes ruleShake {
+    0%, 100% { transform: translateX(0); }
+    10%, 30%, 50%, 70%, 90% { transform: translateX(-3px); }
+    20%, 40%, 60%, 80% { transform: translateX(3px); }
+}
+
+.rule-warning {
+    animation: ruleWarningPulse 1s ease-in-out infinite;
+}
+
+@keyframes ruleWarningPulse {
+    0%, 100% { 
+        background-color: transparent;
+        transform: scale(1);
+    }
+    50% { 
+        background-color: rgba(255, 193, 7, 0.2);
+        transform: scale(1.02);
+    }
+}
+
+/* Enhanced game info styles for better rule display */
+.game-info .rule {
+    transition: all 0.3s ease;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(5px);
+}
+
+/* ===== Mobile Controls Styles ===== */
+.mobile-controls {
+    margin: 20px 0;
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    backdrop-filter: blur(10px);
+}
+
+.mobile-buttons {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.mobile-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 80px;
+    min-height: 80px;
+    border: 3px solid;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.9);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-weight: bold;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-btn:active {
+    transform: scale(0.95);
+}
+
+.mobile-btn .btn-icon {
+    font-size: 24px;
+    margin-bottom: 4px;
+}
+
+.mobile-btn .btn-text {
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.push-btn {
+    border-color: #4CAF50;
+    color: #4CAF50;
+}
+
+.push-btn:hover, .push-btn:active {
+    background: #4CAF50;
+    color: white;
+    box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4);
+}
+
+.throw-btn {
+    border-color: #FF9800;
+    color: #FF9800;
+}
+
+.throw-btn:hover, .throw-btn:active {
+    background: #FF9800;
+    color: white;
+    box-shadow: 0 4px 15px rgba(255, 152, 0, 0.4);
+}
+
+.pop-btn {
+    border-color: #2196F3;
+    color: #2196F3;
+}
+
+.pop-btn:hover, .pop-btn:active {
+    background: #2196F3;
+    color: white;
+    box-shadow: 0 4px 15px rgba(33, 150, 243, 0.4);
+}
+
+.pop-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    border-color: #ccc;
+    color: #ccc;
+}
+
+.pop-btn:disabled:hover {
+    background: rgba(255, 255, 255, 0.9);
+    color: #ccc;
+    box-shadow: none;
+}
+
+/* Desktop/Mobile visibility controls */
+.desktop-controls {
+    display: block;
+}
+
+.mobile-controls-text {
+    display: none;
+}
+
+/* Mobile responsive design */
+@media screen and (max-width: 768px) {
+    .desktop-controls {
+        display: none;
+    }
+    
+    .mobile-controls-text {
+        display: block;
+    }
+    
+    .mobile-controls {
+        display: block !important; /* Override hidden class on mobile */
+    }
+    
+    .mobile-buttons {
+        justify-content: center;
+        gap: 20px;
+    }
+    
+    .mobile-btn {
+        min-width: 90px;
+        min-height: 90px;
+    }
+    
+    .mobile-btn .btn-icon {
+        font-size: 28px;
+    }
+    
+    .mobile-btn .btn-text {
+        font-size: 14px;
+    }
+}
+
+/* Touch device detection - show mobile controls on touch devices */
+@media (hover: none) and (pointer: coarse) {
+    .desktop-controls {
+        display: none;
+    }
+    
+    .mobile-controls-text {
+        display: block;
+    }
+    
+    .mobile-controls {
+        display: block !important;
+    }
 }

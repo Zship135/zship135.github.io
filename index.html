@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your Name - Data Analyst Portfolio</title>
+    <title>Zachary Shipley - Data Analyst Portfolio</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
@@ -13,7 +13,7 @@
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-logo">
-                <span class="logo-text">Data Analyst</span>
+                <span class="logo-text">Zachary Shipley</span>
             </div>
             <ul class="nav-menu">
                 <li class="nav-item">
@@ -24,6 +24,9 @@
                 </li>
                 <li class="nav-item">
                     <a href="#skills" class="nav-link">Skills</a>
+                </li>
+                <li class="nav-item">
+                    <a href="#game" class="nav-link">Game</a>
                 </li>
                 <li class="nav-item">
                     <a href="#projects" class="nav-link">Projects</a>
@@ -46,9 +49,9 @@
             <div class="hero-content">
                 <div class="hero-text">
                     <h1 class="hero-title">
-                        Hello, I'm <span class="highlight">Your Name</span>
+                        Hello, I'm <span class="highlight">Zachary Shipley</span>
                     </h1>
-                    <h2 class="hero-subtitle">Data Analyst & Insights Specialist</h2>
+                    <h2 class="hero-subtitle">Computer Science and Math Student</h2>
                     <p class="hero-description">
                         Transforming complex data into actionable insights through advanced analytics, 
                         visualization, and statistical modeling. Passionate about uncovering patterns 
@@ -81,7 +84,7 @@
             <div class="about-content">
                 <div class="about-text">
                     <p>
-                        I'm a dedicated data analyst with <strong>X years of experience</strong> in transforming 
+                        I'm a dedicated data analyst with experience in transforming 
                         raw data into meaningful insights. My expertise spans across statistical analysis, 
                         data visualization, and business intelligence.
                     </p>
@@ -91,20 +94,6 @@
                         or operational optimization, I bring data to life through compelling visualizations 
                         and actionable recommendations.
                     </p>
-                    <div class="about-stats">
-                        <div class="stat">
-                            <div class="stat-number">50+</div>
-                            <div class="stat-label">Projects Completed</div>
-                        </div>
-                        <div class="stat">
-                            <div class="stat-number">5+</div>
-                            <div class="stat-label">Years Experience</div>
-                        </div>
-                        <div class="stat">
-                            <div class="stat-number">10+</div>
-                            <div class="stat-label">Tools Mastered</div>
-                        </div>
-                    </div>
                 </div>
                 <div class="about-skills">
                     <h3>What I Do</h3>
@@ -157,7 +146,6 @@
                         <span class="tech-item">Python</span>
                         <span class="tech-item">R</span>
                         <span class="tech-item">SQL</span>
-                        <span class="tech-item">JavaScript</span>
                     </div>
                 </div>
                 <div class="skill-category">
@@ -172,7 +160,7 @@
                 <div class="skill-category">
                     <h3>Visualization Tools</h3>
                     <div class="tech-stack">
-                        <span class="tech-item">Tableau</span>
+                        <span class="tech-item">Excel</span>
                         <span class="tech-item">Power BI</span>
                         <span class="tech-item">Matplotlib</span>
                         <span class="tech-item">Plotly</span>
@@ -184,12 +172,20 @@
                         <span class="tech-item">MySQL</span>
                         <span class="tech-item">PostgreSQL</span>
                         <span class="tech-item">MongoDB</span>
-                        <span class="tech-item">SQLite</span>
+                                                <span class="tech-item">SQLServer</span>
                     </div>
                 </div>
             </div>
         </div>
     </section>
+
+    <!-- Projects Section -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
 
     <!-- Projects Section -->
     <section id="projects" class="projects">
@@ -201,96 +197,50 @@
             <div class="projects-grid">
                 <div class="project-card">
                     <div class="project-image">
-                        <img src="https://via.placeholder.com/400x250?text=Sales+Dashboard" alt="Sales Analytics Dashboard">
+                        <img src="assets/warehouse.jpg" alt="SQL Data Warehouse">
                         <div class="project-overlay">
                             <div class="project-links">
-                                <a href="#" class="project-link"><i class="fab fa-github"></i></a>
-                                <a href="#" class="project-link"><i class="fas fa-external-link-alt"></i></a>
+                                <a href="https://github.com/Zship135/SQL-Data-Warehouse" class="project-link" target="_blank"><i class="fab fa-github"></i></a>
                             </div>
                         </div>
                     </div>
                     <div class="project-content">
-                        <h3 class="project-title">Sales Analytics Dashboard</h3>
+                        <h3 class="project-title">SQL Data Warehouse</h3>
                         <p class="project-description">
-                            Interactive dashboard analyzing sales performance across multiple regions, 
-                            identifying key trends and forecasting future revenue.
+                            Designed and implemented a centralized data warehouse using PostgreSQL with Medallion Architecture 
+                            (bronze, silver, gold layers). Transforms CRM and ERP data through multiple refinement layers for 
+                            consistent, clean, and business-ready analytics.
                         </p>
                         <div class="project-tech">
-                            <span class="tech-tag">Python</span>
-                            <span class="tech-tag">Tableau</span>
+                            <span class="tech-tag">PostgreSQL</span>
                             <span class="tech-tag">SQL</span>
+                            <span class="tech-tag">ETL</span>
+                            <span class="tech-tag">Data Warehouse</span>
                         </div>
                     </div>
                 </div>
 
                 <div class="project-card">
                     <div class="project-image">
-                        <img src="https://via.placeholder.com/400x250?text=Customer+Segmentation" alt="Customer Segmentation Analysis">
+                        <img src="assets/earth.jpg" alt="FleetOps Geospatial Analysis">
                         <div class="project-overlay">
                             <div class="project-links">
-                                <a href="#" class="project-link"><i class="fab fa-github"></i></a>
-                                <a href="#" class="project-link"><i class="fas fa-external-link-alt"></i></a>
+                                <a href="https://github.com/Zship135/FleetOps_Service_Coverage_Analysis" class="project-link" target="_blank"><i class="fab fa-github"></i></a>
                             </div>
                         </div>
                     </div>
                     <div class="project-content">
-                        <h3 class="project-title">Customer Segmentation Analysis</h3>
+                        <h3 class="project-title">Geospatial Network Optimization</h3>
                         <p class="project-description">
-                            Machine learning-based customer segmentation using RFM analysis and 
-                            clustering algorithms to optimize marketing strategies.
+                            Leveraged geospatial data analysis to identify optimal warehouse locations for FleetOps delivery network. 
+                            Analyzed 12 warehouses across 8 Midwest states to reduce delivery costs and improve service coverage in 
+                            underperforming regions.
                         </p>
                         <div class="project-tech">
-                            <span class="tech-tag">Python</span>
-                            <span class="tech-tag">Scikit-learn</span>
-                            <span class="tech-tag">Pandas</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="project-card">
-                    <div class="project-image">
-                        <img src="https://via.placeholder.com/400x250?text=Financial+Analysis" alt="Financial Performance Analysis">
-                        <div class="project-overlay">
-                            <div class="project-links">
-                                <a href="#" class="project-link"><i class="fab fa-github"></i></a>
-                                <a href="#" class="project-link"><i class="fas fa-external-link-alt"></i></a>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="project-content">
-                        <h3 class="project-title">Financial Performance Analysis</h3>
-                        <p class="project-description">
-                            Comprehensive financial analysis with predictive modeling to identify 
-                            investment opportunities and risk assessment.
-                        </p>
-                        <div class="project-tech">
-                            <span class="tech-tag">R</span>
-                            <span class="tech-tag">Excel</span>
-                            <span class="tech-tag">Power BI</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="project-card">
-                    <div class="project-image">
-                        <img src="https://via.placeholder.com/400x250?text=Market+Research" alt="Market Research Dashboard">
-                        <div class="project-overlay">
-                            <div class="project-links">
-                                <a href="#" class="project-link"><i class="fab fa-github"></i></a>
-                                <a href="#" class="project-link"><i class="fas fa-external-link-alt"></i></a>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="project-content">
-                        <h3 class="project-title">Market Research Dashboard</h3>
-                        <p class="project-description">
-                            Real-time market analysis dashboard tracking competitor performance, 
-                            market share, and consumer sentiment analysis.
-                        </p>
-                        <div class="project-tech">
-                            <span class="tech-tag">Python</span>
-                            <span class="tech-tag">API Integration</span>
-                            <span class="tech-tag">Plotly</span>
+                            <span class="tech-tag">SQL</span>
+                            <span class="tech-tag">Geospatial Analysis</span>
+                            <span class="tech-tag">Data Modeling</span>
+                            <span class="tech-tag">PostgreSQL</span>
                         </div>
                     </div>
                 </div>
@@ -299,6 +249,73 @@
                 <a href="https://github.com/zship135" class="btn btn-outline" target="_blank">
                     <i class="fab fa-github"></i> View All Projects on GitHub
                 </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Interactive Game Section -->
+    <section id="game" class="game-section">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Stack Overflow</h2>
+                <p class="section-subtitle">A CS-inspired mini game - can you manage the stack?</p>
+            </div>
+            <div class="game-container">
+                <div class="game-area">
+                    <div id="game-canvas">
+                        <div id="falling-numbers"></div>
+                        <div id="stack-display">
+                            <div id="stack-items"></div>
+                        </div>
+                        <div id="game-ui">
+                            <div class="game-info">
+                                <div class="score">Score: <span id="score">0</span></div>
+                                <div class="level">Level: <span id="level">1</span></div>
+                                <div class="rule">Rule: <span id="current-rule">Keep stack sum even</span></div>
+                            </div>
+                        </div>
+                        <div id="game-over" class="hidden">
+                            <h3>Stack Overflow!</h3>
+                            <p>Final Score: <span id="final-score">0</span></p>
+                            <button id="restart-btn" class="btn btn-primary">Play Again</button>
+                        </div>
+                    </div>
+                    <div class="game-controls">
+                        <button id="start-btn" class="btn btn-primary">Start Game</button>
+                        
+                        <!-- Mobile Touch Controls -->
+                        <div id="mobile-controls" class="mobile-controls hidden">
+                            <div class="mobile-buttons">
+                                <button id="push-btn" class="mobile-btn push-btn">
+                                    <span class="btn-icon">←</span>
+                                    <span class="btn-text">PUSH</span>
+                                </button>
+                                <button id="throw-btn" class="mobile-btn throw-btn">
+                                    <span class="btn-icon">↓</span>
+                                    <span class="btn-text">THROW</span>
+                                </button>
+                                <button id="pop-btn" class="mobile-btn pop-btn">
+                                    <span class="btn-icon">→</span>
+                                    <span class="btn-text">POP</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="controls-help">
+                            <p><strong>How to Play:</strong></p>
+                            <p>🎲 A number appears - choose your action:</p>
+                            <p class="desktop-controls">← <strong>PUSH</strong> - Add number to your stack (+10 pts)</p>
+                            <p class="desktop-controls">↓ <strong>THROW</strong> - Discard the number (0 pts)</p>
+                            <p class="desktop-controls">→ <strong>POP</strong> - Remove top from stack (+3 pts, once per number)</p>
+                            <p class="mobile-controls-text">📱 On mobile: Use the touch buttons above</p>
+                            <p>🎯 <strong>Goal:</strong> <span id="rule-help">Keep stack sum even</span></p>
+                            <p>⚠️ Push or throw to get the next number</p>
+                            <p>📏 Stack can't exceed 8 items</p>
+                            <p>🔄 <strong>Smart rule changes every 10-15 moves!</strong></p>
+                            <p>🎯 New rules are always compatible with your stack</p>
+                            <p>💥 Break the rule = Game Over!</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </section>
@@ -316,21 +333,21 @@
                         <i class="fas fa-envelope"></i>
                         <div>
                             <h4>Email</h4>
-                            <p>your.email@example.com</p>
+                            <p>zshipley135@gmail.com</p>
                         </div>
                     </div>
                     <div class="contact-item">
                         <i class="fab fa-linkedin"></i>
                         <div>
                             <h4>LinkedIn</h4>
-                            <p>linkedin.com/in/yourprofile</p>
+                            <p><a href="https://www.linkedin.com/in/zachary-shipley-7950b6228/" target="_blank">linkedin.com/in/zachary-shipley</a></p>
                         </div>
                     </div>
                     <div class="contact-item">
                         <i class="fab fa-github"></i>
                         <div>
                             <h4>GitHub</h4>
-                            <p>github.com/zship135</p>
+                            <p><a href="https://github.com/zship135" target="_blank">github.com/zship135</a></p>
                         </div>
                     </div>
                 </div>
@@ -356,11 +373,10 @@
     <footer class="footer">
         <div class="container">
             <div class="footer-content">
-                <p>&copy; 2025 Your Name. All rights reserved.</p>
+                <p>&copy; 2025 Zachary Shipley. All rights reserved.</p>
                 <div class="social-links">
-                    <a href="#" aria-label="LinkedIn"><i class="fab fa-linkedin"></i></a>
-                    <a href="#" aria-label="GitHub"><i class="fab fa-github"></i></a>
-                    <a href="#" aria-label="Twitter"><i class="fab fa-twitter"></i></a>
+                    <a href="https://www.linkedin.com/in/zachary-shipley-7950b6228/" target="_blank" aria-label="LinkedIn"><i class="fab fa-linkedin"></i></a>
+                    <a href="https://github.com/zship135" target="_blank" aria-label="GitHub"><i class="fab fa-github"></i></a>
                 </div>
             </div>
         </div>
