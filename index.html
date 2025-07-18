@@ -65,9 +65,9 @@
                 <div class="hero-image">
                     <img src="assets/profile-pic.jpeg" alt="Profile Picture" class="profile-img">
                     <div class="floating-elements">
-                        <div class="floating-element" data-speed="2">📊</div>
-                        <div class="floating-element" data-speed="3">📈</div>
-                        <div class="floating-element" data-speed="1">🔍</div>
+                        <div class="floating-element" data-speed="2"><i class="fas fa-chart-line"></i></div>
+                        <div class="floating-element" data-speed="3"><i class="fas fa-chart-bar"></i></div>
+                        <div class="floating-element" data-speed="1"><i class="fas fa-search-plus"></i></div>
                     </div>
                 </div>
             </div>
@@ -302,17 +302,18 @@
                         </div>
                         <div class="controls-help">
                             <p><strong>How to Play:</strong></p>
-                            <p>🎲 A number appears - choose your action:</p>
-                            <p class="desktop-controls">← <strong>PUSH</strong> - Add number to your stack (+10 pts)</p>
+                            <p><span class="game-icon">▶</span> A number appears - choose your action:</p>
+                            <p class="desktop-controls">← <strong>PUSH</strong> - Add number to your stack (5-50 pts based on height!)</p>
                             <p class="desktop-controls">↓ <strong>THROW</strong> - Discard the number (0 pts)</p>
                             <p class="desktop-controls">→ <strong>POP</strong> - Remove top from stack (+3 pts, once per number)</p>
-                            <p class="mobile-controls-text">📱 On mobile: Use the touch buttons above</p>
-                            <p>🎯 <strong>Goal:</strong> <span id="rule-help">Keep stack sum even</span></p>
-                            <p>⚠️ Push or throw to get the next number</p>
-                            <p>📏 Stack can't exceed 8 items</p>
-                            <p>🔄 <strong>Smart rule changes every 10-15 moves!</strong></p>
-                            <p>🎯 New rules are always compatible with your stack</p>
-                            <p>💥 Break the rule = Game Over!</p>
+                            <p class="mobile-controls-text"><span class="game-icon">•</span> On mobile: Use the touch buttons above</p>
+                            <p><strong>Goal:</strong> <span id="rule-help">Keep stack sum even</span></p>
+                            <p><span class="game-icon">!</span> Push or throw to get the next number</p>
+                            <p><span class="game-icon">▌</span> Stack can't exceed 8 items</p>
+                            <p><span class="game-icon">⭐</span> <strong>Higher stacks = MORE POINTS!</strong> (5→10→15→25→50 pts)</p>
+                            <p><span class="game-icon">⟲</span> <strong>Smart rule changes every 10-15 moves!</strong></p>
+                            <p><span class="game-icon">→</span> New rules are always compatible with your stack</p>
+                            <p><span class="game-icon">✕</span> Break the rule = Game Over!</p>
                         </div>
                     </div>
                 </div>

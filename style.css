@@ -293,8 +293,18 @@ body {
     position: absolute;
     font-size: 1.8rem;
     animation: float 6s ease-in-out infinite;
-    opacity: 0.8;
+    opacity: 0.7;
     filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.1));
+    color: #667eea;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 60px;
+    height: 60px;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    backdrop-filter: blur(10px);
+    border: 2px solid rgba(102, 126, 234, 0.2);
 }
 
 .floating-element:nth-child(1) {
@@ -854,6 +864,12 @@ body {
         width: 280px;
         height: 280px;
     }
+    
+    .floating-element {
+        width: 50px;
+        height: 50px;
+        font-size: 1.4rem;
+    }
 
     .about-content {
         grid-template-columns: 1fr;
@@ -1167,6 +1183,38 @@ section.visible {
     font-weight: bold;
 }
 
+.push-preview {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    border-radius: 8px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 14px;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+    transition: all 0.3s ease;
+}
+
+.push-preview.hidden {
+    opacity: 0;
+    transform: translateY(-10px);
+    pointer-events: none;
+}
+
+.preview-text {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+}
+
+#push-points {
+    font-size: 16px;
+    font-weight: 900;
+    color: #ffd700;
+}
+
 #game-over {
     position: absolute;
     top: 50%;
@@ -1207,10 +1255,27 @@ section.visible {
 .controls-help p {
     margin: 8px 0;
     color: #666;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .controls-help strong {
     color: #333;
+}
+
+.game-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    flex-shrink: 0;
 }
 
 .hidden {
@@ -1352,6 +1417,14 @@ section.visible {
     margin: 0 0 10px 0;
     font-size: 18px;
     text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
+}
+
+.notification-content h4 i {
+    font-size: 16px;
 }
 
 .notification-content p {

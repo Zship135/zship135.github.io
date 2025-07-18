@@ -1,4 +1,3 @@
-// ===== Mobile Navigation Toggle =====
 const hamburger = document.querySelector('.hamburger');
 const navMenu = document.querySelector('.nav-menu');
 
@@ -7,13 +6,11 @@ hamburger.addEventListener('click', () => {
     navMenu.classList.toggle('active');
 });
 
-// Close mobile menu when clicking on a link
 document.querySelectorAll('.nav-link').forEach(n => n.addEventListener('click', () => {
     hamburger.classList.remove('active');
     navMenu.classList.remove('active');
 }));
 
-// ===== Smooth Scrolling for Navigation Links =====
 document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     anchor.addEventListener('click', function (e) {
         e.preventDefault();
@@ -27,7 +24,6 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     });
 });
 
-// ===== Navbar Background Change on Scroll =====
 window.addEventListener('scroll', () => {
     const navbar = document.querySelector('.navbar');
     if (window.scrollY > 50) {
@@ -39,34 +35,6 @@ window.addEventListener('scroll', () => {
     }
 });
 
-// ===== Scroll Animations =====
-// Disabled scroll animations to prevent transparency issues with fixed hero background
-// All sections now remain fully opaque at all times
-
-// If you want to re-enable animations later, uncomment the code below:
-/*
-const observerOptions = {
-    threshold: 0.1,
-    rootMargin: '0px 0px -50px 0px'
-};
-
-const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-        if (entry.isIntersecting) {
-            entry.target.classList.add('visible');
-            entry.target.classList.remove('animate-in');
-        }
-    });
-}, observerOptions);
-
-// Observe all sections for scroll animations, but skip the hero
-document.querySelectorAll('section:not(.hero)').forEach(section => {
-    section.classList.add('animate-in');
-    observer.observe(section);
-});
-*/
-
-// ===== Typing Animation for Hero Title =====
 class TypeWriter {
     constructor(txtElement, words, wait = 3000) {
         this.txtElement = txtElement;
@@ -88,13 +56,12 @@ class TypeWriter {
             this.txt = fullTxt.substring(0, this.txt.length + 1);
         }
 
-        // Add the blinking cursor and update content
         this.txtElement.innerHTML = `<span class="txt">${this.txt}</span>`;
 
-        let typeSpeed = 100; // Slower typing for more realistic effect
+        let typeSpeed = 100;
 
         if (this.isDeleting) {
-            typeSpeed /= 2; // Faster deleting
+            typeSpeed /= 2;
         }
 
         if (!this.isDeleting && this.txt === fullTxt) {
@@ -110,7 +77,6 @@ class TypeWriter {
     }
 }
 
-// ===== Initialize Typing Animation =====
 document.addEventListener('DOMContentLoaded', () => {
     const txtElement = document.querySelector('.hero-subtitle');
     const words = [
@@ -126,7 +92,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// ===== Animated Counter for Stats =====
 function animateCounters() {
     const counters = document.querySelectorAll('.stat-number');
     
@@ -149,7 +114,6 @@ function animateCounters() {
     });
 }
 
-// ===== Stats Animation Observer =====
 const statsObserver = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
         if (entry.isIntersecting) {
@@ -164,7 +128,6 @@ if (statsSection) {
     statsObserver.observe(statsSection);
 }
 
-// ===== Project Card Hover Effects =====
 document.querySelectorAll('.project-card').forEach(card => {
     card.addEventListener('mouseenter', function() {
         this.style.transform = 'translateY(-10px) scale(1.02)';
@@ -175,7 +138,6 @@ document.querySelectorAll('.project-card').forEach(card => {
     });
 });
 
-// ===== Floating Elements Animation =====
 function animateFloatingElements() {
     const elements = document.querySelectorAll('.floating-element');
     
@@ -191,40 +153,33 @@ function animateFloatingElements() {
     requestAnimationFrame(animateFloatingElements);
 }
 
-// Start floating animation
 animateFloatingElements();
 
-// ===== Form Handling =====
 const contactForm = document.querySelector('.contact-form form');
 if (contactForm) {
     contactForm.addEventListener('submit', function(e) {
         e.preventDefault();
         
-        // Get form data
         const formData = new FormData(this);
         const name = this.querySelector('input[type="text"]').value;
         const email = this.querySelector('input[type="email"]').value;
         const message = this.querySelector('textarea').value;
         
-        // Simple validation
         if (!name || !email || !message) {
             alert('Please fill in all fields.');
             return;
         }
         
-        // Show success message (you can integrate with a real form service)
         alert('Thank you for your message! I\'ll get back to you soon.');
         this.reset();
     });
 }
 
-// ===== Skill Items Animation =====
 const skillItems = document.querySelectorAll('.skill-item');
 skillItems.forEach((item, index) => {
     item.style.animationDelay = `${index * 0.1}s`;
 });
 
-// ===== Tech Stack Items Animation =====
 const techItems = document.querySelectorAll('.tech-item');
 techItems.forEach((item, index) => {
     item.addEventListener('mouseenter', function() {
@@ -236,11 +191,6 @@ techItems.forEach((item, index) => {
     });
 });
 
-// ===== Parallax Effect for Hero Section =====
-// Hero section is now fixed, so we don't need parallax scrolling
-// The fixed positioning creates the desired effect automatically
-
-// ===== Loading Animation =====
 window.addEventListener('load', () => {
     const loader = document.querySelector('.loading');
     if (loader) {
@@ -253,7 +203,6 @@ window.addEventListener('load', () => {
     }
 });
 
-// ===== Active Navigation Link Highlighting =====
 window.addEventListener('scroll', () => {
     const sections = document.querySelectorAll('section[id]');
     const navLinks = document.querySelectorAll('.nav-link');
@@ -276,9 +225,7 @@ window.addEventListener('scroll', () => {
     });
 });
 
-// ===== Smooth Page Transitions =====
 document.addEventListener('DOMContentLoaded', function() {
-    // Add fade-in animation to the body
     document.body.style.opacity = '0';
     document.body.style.transition = 'opacity 0.5s ease-in-out';
     
@@ -287,17 +234,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 100);
 });
 
-// ===== Keyboard Navigation =====
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-        // Close mobile menu if open
         hamburger.classList.remove('active');
         navMenu.classList.remove('active');
     }
 });
 
-// ===== Performance Optimization =====
-// Throttle scroll events
 function throttle(func, wait) {
     let timeout;
     return function executedFunction(...args) {
@@ -310,20 +253,15 @@ function throttle(func, wait) {
     };
 }
 
-// Apply throttling to scroll events
 const throttledScroll = throttle(() => {
-    // Your scroll handling code here
-}, 16); // ~60fps
+}, 16);
 
 window.addEventListener('scroll', throttledScroll);
 
-// ===== Accessibility Improvements =====
-// Focus management for mobile menu
 const focusableElements = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 hamburger.addEventListener('click', () => {
     if (navMenu.classList.contains('active')) {
-        // Focus first nav link when menu opens
         const firstFocusableElement = navMenu.querySelector(focusableElements);
         if (firstFocusableElement) {
             firstFocusableElement.focus();
@@ -331,11 +269,9 @@ hamburger.addEventListener('click', () => {
     }
 });
 
-// ===== Reduced Motion Support =====
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 if (prefersReducedMotion.matches) {
-    // Disable animations for users who prefer reduced motion
     document.querySelectorAll('*').forEach(el => {
         el.style.animationDuration = '0.01ms !important';
         el.style.animationIterationCount = '1 !important';
@@ -345,7 +281,6 @@ if (prefersReducedMotion.matches) {
 
 console.log('🚀 Portfolio website loaded successfully!');
 
-// ===== Stack Overflow Game =====
 class StackOverflowGame {
     constructor() {
         this.stack = [];
@@ -354,12 +289,11 @@ class StackOverflowGame {
         this.gameRunning = false;
         this.currentNumber = null;
         this.waitingForChoice = false;
-        this.hasPopped = false; // Track if player has popped for current number
-        this.maxStackHeight = 8; // Game ends when stack gets too tall
-        this.moveCount = 0; // Track number of moves made
-        this.nextRuleChange = 10 + Math.floor(Math.random() * 6); // 10-15 moves until rule change
+        this.hasPopped = false;
+        this.maxStackHeight = 8;
+        this.moveCount = 0;
+        this.nextRuleChange = 10 + Math.floor(Math.random() * 6);
         this.rules = [
-            // Sum-based rules
             { name: "Keep stack sum even", check: (stack) => stack.length === 0 || stack.reduce((a, b) => a + b, 0) % 2 === 0 },
             { name: "Sum must be multiple of 3", check: (stack) => stack.length === 0 || stack.reduce((a, b) => a + b, 0) % 3 === 0 },
             { name: "Sum must be multiple of 4", check: (stack) => stack.length === 0 || stack.reduce((a, b) => a + b, 0) % 4 === 0 },
@@ -369,14 +303,6 @@ class StackOverflowGame {
                 return sum < 30;
             }},
             { name: "Stack sum under 50", check: (stack) => stack.length === 0 || stack.reduce((a, b) => a + b, 0) < 50 },
-            { name: "Stack sum over 20", check: (stack) => stack.length === 0 || stack.reduce((a, b) => a + b, 0) > 20 },
-            { name: "Sum between 10-40", check: (stack) => {
-                if (stack.length === 0) return true;
-                const sum = stack.reduce((a, b) => a + b, 0);
-                return sum >= 10 && sum <= 40;
-            }},
-            
-            // Number type rules
             { name: "Only odd numbers allowed", check: (stack) => stack.length === 0 || stack.every(num => num % 2 === 1) },
             { name: "Only even numbers allowed", check: (stack) => stack.length === 0 || stack.every(num => num % 2 === 0) },
             { name: "No multiples of 3", check: (stack) => stack.length === 0 || stack.every(num => num % 3 !== 0) },
@@ -392,8 +318,6 @@ class StackOverflowGame {
             }},
             { name: "No single digits (>9)", check: (stack) => stack.length === 0 || stack.every(num => num > 9) },
             { name: "Only single digits (<10)", check: (stack) => stack.length === 0 || stack.every(num => num < 10) },
-            
-            // Order and pattern rules
             { name: "Stack must be ascending", check: (stack) => stack.length <= 1 || stack.every((val, i) => i === 0 || val >= stack[i-1]) },
             { name: "Stack must be descending", check: (stack) => stack.length <= 1 || stack.every((val, i) => i === 0 || val <= stack[i-1]) },
             { name: "Strictly ascending (no equals)", check: (stack) => stack.length <= 1 || stack.every((val, i) => i === 0 || val > stack[i-1]) },
@@ -407,17 +331,9 @@ class StackOverflowGame {
                 if (stack.length <= 1) return true;
                 return stack.every((val, i) => i === 0 || (val % 2) !== (stack[i-1] % 2));
             }},
-            
-            // Size-based rules
             { name: "Max 3 items in stack", check: (stack) => stack.length <= 3 },
             { name: "Max 5 items in stack", check: (stack) => stack.length <= 5 },
             { name: "Max 6 items in stack", check: (stack) => stack.length <= 6 },
-            { name: "At least 2 items required", check: (stack) => stack.length >= 2 },
-            { name: "Exactly 4 items required", check: (stack) => stack.length === 0 || stack.length === 4 },
-            
-            // Range and comparison rules
-            { name: "All numbers under 15", check: (stack) => stack.length === 0 || stack.every(num => num < 15) },
-            { name: "All numbers over 5", check: (stack) => stack.length === 0 || stack.every(num => num > 5) },
             { name: "Numbers between 3-12", check: (stack) => stack.length === 0 || stack.every(num => num >= 3 && num <= 12) },
             { name: "Top number must be largest", check: (stack) => {
                 if (stack.length <= 1) return true;
@@ -429,8 +345,6 @@ class StackOverflowGame {
                 const bottom = stack[0];
                 return stack.every(num => num >= bottom);
             }},
-            
-            // Mathematical sequence rules
             { name: "Fibonacci sequence only", check: (stack) => {
                 if (stack.length === 0) return true;
                 const fibs = [1, 1, 2, 3, 5, 8, 13, 21, 34];
@@ -447,8 +361,6 @@ class StackOverflowGame {
                 const isPowerOf2 = (n) => n > 0 && (n & (n - 1)) === 0;
                 return stack.length === 0 || stack.every(num => isPowerOf2(num));
             }},
-            
-            // Advanced mathematical rules
             { name: "Average must be whole number", check: (stack) => {
                 if (stack.length === 0) return true;
                 const avg = stack.reduce((a, b) => a + b, 0) / stack.length;
@@ -464,8 +376,6 @@ class StackOverflowGame {
                 const product = stack.reduce((a, b) => a * b, 1);
                 return product % 2 === 0;
             }},
-            
-            // Position-based rules
             { name: "Even positions = even numbers", check: (stack) => {
                 return stack.length === 0 || stack.every((num, i) => (i % 2 === 0) === (num % 2 === 0));
             }},
@@ -479,19 +389,57 @@ class StackOverflowGame {
                 const middleNum = stack[middle];
                 return stack.every(num => num <= middleNum);
             }},
-            
-            // Creative rules
             { name: "No 7s allowed (unlucky!)", check: (stack) => stack.length === 0 || stack.every(num => num !== 7) },
-            { name: "Must contain a 5", check: (stack) => stack.length === 0 || stack.includes(5) },
             { name: "Sum must be lucky (divisible by 7)", check: (stack) => stack.length === 0 || stack.reduce((a, b) => a + b, 0) % 7 === 0 },
-            { name: "No teens (13-19)", check: (stack) => stack.length === 0 || stack.every(num => num < 13 || num > 19) },
             { name: "Binary numbers only (1,2,4,8,16...)", check: (stack) => {
                 const isBinary = (n) => n > 0 && (n & (n - 1)) === 0;
                 return stack.length === 0 || stack.every(num => isBinary(num));
             }}
         ];
-        // Start with a random rule
-        this.currentRule = this.rules[Math.floor(Math.random() * this.rules.length)];
+        
+        this.starterRules = [
+            "Keep stack sum even",
+            "Sum must be multiple of 3", 
+            "Sum must be multiple of 4",
+            "Sum must be multiple of 5",
+            "Stack sum under 30",
+            "Stack sum under 50",
+            "Only odd numbers allowed",
+            "Only even numbers allowed", 
+            "No multiples of 3",
+            "Only prime numbers",
+            "No single digits (>9)",
+            "Stack must be ascending",
+            "Stack must be descending", 
+            "Strictly ascending (no equals)",
+            "Strictly descending (no equals)",
+            "No consecutive duplicates",
+            "All numbers must be unique",
+            "Alternating odd/even pattern",
+            "Max 3 items in stack",
+            "Max 5 items in stack",
+            "Max 6 items in stack",
+            "Numbers between 3-12",
+            "Top number must be largest",
+            "Bottom number must be smallest",
+            "Fibonacci sequence only",
+            "Perfect squares only", 
+            "Powers of 2 only",
+            "Average must be whole number",
+            "No number appears twice",
+            "Sum of digits must be even",
+            "Product must be even",
+            "Even positions = even numbers",
+            "First and last must match",
+            "Middle number must be largest",
+            "No 7s allowed (unlucky!)",
+            "Sum must be lucky (divisible by 7)",
+            "Binary numbers only (1,2,4,8,16...)"
+        ];
+        
+        const starterRuleNames = this.starterRules;
+        const starterRuleObjects = this.rules.filter(rule => starterRuleNames.includes(rule.name));
+        this.currentRule = starterRuleObjects[Math.floor(Math.random() * starterRuleObjects.length)];
         
         this.initializeGame();
     }
@@ -508,28 +456,27 @@ class StackOverflowGame {
         this.gameOver = document.getElementById('game-over');
         this.finalScore = document.getElementById('final-score');
         
-        // Mobile control elements
         this.mobileControls = document.getElementById('mobile-controls');
         this.pushBtn = document.getElementById('push-btn');
         this.throwBtn = document.getElementById('throw-btn');
         this.popBtn = document.getElementById('pop-btn');
+        
+        this.pushPreview = document.getElementById('push-preview');
+        this.pushPoints = document.getElementById('push-points');
 
         this.startBtn.addEventListener('click', () => this.startGame());
         this.restartBtn.addEventListener('click', () => this.restartGame());
         document.addEventListener('keydown', (e) => this.handleKeyPress(e));
         
-        // Mobile touch controls
         this.pushBtn.addEventListener('click', () => this.handleAction('push'));
         this.throwBtn.addEventListener('click', () => this.handleAction('throw'));
         this.popBtn.addEventListener('click', () => this.handleAction('pop'));
         
-        // Detect if device is mobile and show controls accordingly
         this.detectMobile();
 
         this.updateDisplay();
     }
 
-    // Detect if device is mobile and show appropriate controls
     detectMobile() {
         const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) 
                        || (window.innerWidth <= 768) 
@@ -542,7 +489,6 @@ class StackOverflowGame {
         
         if (isMobile) {
             this.mobileControls.classList.remove('hidden');
-            // Also show them whenever game starts on mobile
             this.isMobileDevice = true;
         } else {
             this.isMobileDevice = false;
@@ -596,6 +542,36 @@ class StackOverflowGame {
         }
     }
 
+    // Update push preview with points based on stack height
+    updatePushPreview() {
+        if (!this.pushPreview || !this.pushPoints) return;
+        
+        // Calculate points for current stack height
+        const currentHeight = this.stack.length;
+        let points;
+        
+        if (currentHeight === 0) {
+            points = 5; // First item gets 5 points
+        } else if (currentHeight <= 2) {
+            points = 10; // Heights 1-2 get 10 points
+        } else if (currentHeight <= 4) {
+            points = 15; // Heights 3-4 get 15 points
+        } else if (currentHeight <= 6) {
+            points = 25; // Heights 5-6 get 25 points
+        } else {
+            points = 50; // Height 7+ gets 50 points
+        }
+        
+        this.pushPoints.textContent = points;
+        
+        // Show preview if game is running and waiting for choice
+        if (this.gameRunning && this.waitingForChoice) {
+            this.pushPreview.classList.remove('hidden');
+        } else {
+            this.pushPreview.classList.add('hidden');
+        }
+    }
+
     startGame() {
         this.gameRunning = true;
         this.stack = [];
@@ -603,20 +579,19 @@ class StackOverflowGame {
         this.level = 1;
         this.hasPopped = false;
         this.moveCount = 0;
-        this.nextRuleChange = 10 + Math.floor(Math.random() * 6); // 10-15 moves until first rule change
-        // Randomize starting rule
-        this.currentRule = this.rules[Math.floor(Math.random() * this.rules.length)];
+        this.nextRuleChange = 10 + Math.floor(Math.random() * 6);
+        const starterRuleObjects = this.rules.filter(rule => this.starterRules.includes(rule.name));
+        this.currentRule = starterRuleObjects[Math.floor(Math.random() * starterRuleObjects.length)];
         this.gameOver.classList.add('hidden');
         this.startBtn.style.display = 'none';
         
-        // Always show mobile controls if on mobile device, or force show on smaller screens
         if (this.isMobileDevice || window.innerWidth <= 768) {
             this.mobileControls.classList.remove('hidden');
             console.log('Mobile controls shown for game start');
         }
         
         this.updateDisplay();
-        this.updateMobileButtons(); // Initialize button states
+        this.updateMobileButtons();
         this.presentNewNumber();
     }
 
@@ -629,16 +604,14 @@ class StackOverflowGame {
         
         this.currentNumber = Math.floor(Math.random() * 9) + 1;
         this.waitingForChoice = true;
-        this.hasPopped = false; // Reset pop tracking for new number
+        this.hasPopped = false;
         
-        // Clear any existing numbers and display the new one
         this.fallingNumbers.innerHTML = '';
         const numberElement = document.createElement('div');
         numberElement.className = 'current-number';
         numberElement.textContent = this.currentNumber;
         this.fallingNumbers.appendChild(numberElement);
         
-        // Update mobile button states for new number
         this.updateMobileButtons();
         
         console.log(`New number presented: ${this.currentNumber}, waitingForChoice: ${this.waitingForChoice}`);
@@ -650,34 +623,48 @@ class StackOverflowGame {
         e.preventDefault();
         
         if (e.key === 'ArrowLeft') {
-            // PUSH - Add number to stack
             this.pushToStack(this.currentNumber);
             this.waitingForChoice = false;
-            // Move to next number
             if (this.gameRunning) {
                 setTimeout(() => this.presentNewNumber(), 500);
             }
         } else if (e.key === 'ArrowDown') {
-            // THROW - Discard the number
             this.throwNumber();
             this.waitingForChoice = false;
-            // Move to next number
             if (this.gameRunning) {
                 setTimeout(() => this.presentNewNumber(), 500);
             }
         } else if (e.key === 'ArrowRight' && !this.hasPopped) {
-            // POP - Remove top number from stack (only once per number)
             this.popFromStack();
-            // Don't move to next number - current number is still available
         } else {
-            return; // Ignore other keys or if already popped
+            return;
         }
     }
 
     pushToStack(number = null) {
         const numberToPush = number || this.currentNumber;
         this.stack.push(numberToPush);
-        this.score += 10;
+        
+        // Calculate points based on stack height - more risk, more reward!
+        const stackHeight = this.stack.length;
+        let pointsEarned;
+        
+        if (stackHeight === 1) {
+            pointsEarned = 5; // Lower points for safe first push
+        } else if (stackHeight <= 3) {
+            pointsEarned = 10; // Standard points for early stack
+        } else if (stackHeight <= 5) {
+            pointsEarned = 15; // Bonus for medium risk
+        } else if (stackHeight <= 7) {
+            pointsEarned = 25; // High reward for high risk
+        } else {
+            pointsEarned = 50; // Maximum reward for maximum risk (stack of 8)
+        }
+        
+        this.score += pointsEarned;
+        
+        console.log(`Pushed ${numberToPush} to stack (height: ${stackHeight}), earned ${pointsEarned} points`);
+        
         this.moveCount++; // Increment move counter
         this.playMoveSound('push'); // Play push sound
         this.updateDisplay();
@@ -710,13 +697,12 @@ class StackOverflowGame {
     }
 
     throwNumber() {
-        // No points for throwing away the number
-        this.moveCount++; // Increment move counter for throw action too
+        this.moveCount++;
         console.log(`Throw action - Move count: ${this.moveCount}`);
-        this.playMoveSound('throw'); // Play throw sound
-        this.checkRuleChange(); // Check if rule should change
-        this.updateDisplay(); // Make sure display updates
-        this.updateMobileButtons(); // Update mobile button states
+        this.playMoveSound('throw');
+        this.checkRuleChange();
+        this.updateDisplay();
+        this.updateMobileButtons();
         this.clearCurrentNumber();
     }
 
@@ -761,7 +747,6 @@ class StackOverflowGame {
         console.log(`Current rule: "${this.currentRule.name}"`);
         console.log(`Current stack: ${JSON.stringify(this.stack)}`);
         
-        // Find rules that the current stack already satisfies
         const compatibleRules = this.rules.filter(rule => {
             const isCompatible = rule !== this.currentRule && rule.check(this.stack);
             console.log(`Rule "${rule.name}": ${isCompatible ? 'COMPATIBLE' : 'NOT COMPATIBLE'}`);
@@ -770,20 +755,30 @@ class StackOverflowGame {
         
         console.log(`Compatible rules found: ${compatibleRules.length}`);
         
-        // If we have compatible rules, pick one randomly
-        // If no compatible rules exist, keep the current rule and delay the change
         if (compatibleRules.length > 0) {
             const oldRule = this.currentRule.name;
             this.currentRule = compatibleRules[Math.floor(Math.random() * compatibleRules.length)];
             console.log(`Rule changed from "${oldRule}" to "${this.currentRule.name}"`);
-            this.nextRuleChange = this.moveCount + 10 + Math.floor(Math.random() * 6); // Next change in 10-15 moves
+            this.nextRuleChange = this.moveCount + 10 + Math.floor(Math.random() * 6);
             
-            // Show rule change notification (no grace period needed!)
             this.showRuleChangeNotification();
         } else {
-            // No compatible rules found, try again in a few moves
-            console.log(`No compatible rules found, delaying rule change`);
-            this.nextRuleChange = this.moveCount + 3 + Math.floor(Math.random() * 4); // Try again in 3-6 moves
+            console.log(`No compatible rules found, trying starter-friendly rules as fallback`);
+            const starterRuleObjects = this.rules.filter(rule => this.starterRules.includes(rule.name));
+            const compatibleStarterRules = starterRuleObjects.filter(rule => {
+                return rule !== this.currentRule && rule.check(this.stack);
+            });
+            
+            if (compatibleStarterRules.length > 0) {
+                const oldRule = this.currentRule.name;
+                this.currentRule = compatibleStarterRules[Math.floor(Math.random() * compatibleStarterRules.length)];
+                console.log(`Rule changed to starter-friendly rule: "${this.currentRule.name}"`);
+                this.nextRuleChange = this.moveCount + 10 + Math.floor(Math.random() * 6);
+                this.showRuleChangeNotification();
+            } else {
+                console.log(`Even starter-friendly rules don't work, delaying rule change`);
+                this.nextRuleChange = this.moveCount + 3 + Math.floor(Math.random() * 4);
+            }
         }
         
         console.log(`=== END RULE CHANGE ===`);
@@ -791,27 +786,22 @@ class StackOverflowGame {
     }
 
     showRuleChangeNotification() {
-        // Create notification element
         const notification = document.createElement('div');
         notification.className = 'rule-change-notification';
         notification.innerHTML = `
             <div class="notification-content">
-                <h4>🔄 RULE CHANGED!</h4>
+                <h4><i class="fas fa-sync-alt"></i> RULE CHANGED!</h4>
                 <p>New rule: <strong>${this.currentRule.name}</strong></p>
                 <p class="smart-text">Smart selection - already compatible!</p>
             </div>
         `;
         
-        // Add to game canvas
         this.gameCanvas.appendChild(notification);
         
-        // Add shake effect to rule display
         this.ruleDisplay.parentElement.classList.add('rule-shake');
         
-        // Play a notification sound (if we had audio)
         this.playNotificationSound();
         
-        // Remove notification after 3 seconds
         setTimeout(() => {
             if (notification.parentNode) {
                 notification.classList.add('fade-out');
@@ -823,14 +813,12 @@ class StackOverflowGame {
             }
         }, 3000);
         
-        // Remove shake effect
         setTimeout(() => {
             this.ruleDisplay.parentElement.classList.remove('rule-shake');
         }, 600);
     }
 
     playNotificationSound() {
-        // Create a simple beep sound using Web Audio API
         try {
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
             const oscillator = audioContext.createOscillator();
@@ -896,7 +884,6 @@ class StackOverflowGame {
                     break;
             }
         } catch (e) {
-            // If audio context fails, just continue silently
             console.log('Audio for move not available');
         }
     }
@@ -911,8 +898,6 @@ class StackOverflowGame {
         const newLevel = Math.floor(this.score / 100) + 1;
         if (newLevel > this.level) {
             this.level = newLevel;
-            // Note: We no longer change rules based on level ups
-            // Rules now change based on move count with proper notifications
             console.log(`Level up! New level: ${this.level}`);
         }
     }
@@ -921,10 +906,8 @@ class StackOverflowGame {
         this.scoreDisplay.textContent = this.score;
         this.levelDisplay.textContent = this.level;
         
-        // Simple rule display (no grace indicators needed)
         let ruleText = this.currentRule.name;
         
-        // Debug: Track if rule display changed unexpectedly
         if (this.lastDisplayedRule && this.lastDisplayedRule !== this.currentRule.name) {
             console.log(`🚨 RULE CHANGED DETECTED IN DISPLAY: "${this.lastDisplayedRule}" → "${this.currentRule.name}"`);
         }
@@ -932,13 +915,11 @@ class StackOverflowGame {
         
         this.ruleDisplay.textContent = ruleText;
 
-        // Update rule help text if it exists
         const ruleHelp = document.getElementById('rule-help');
         if (ruleHelp) {
             ruleHelp.textContent = this.currentRule.name;
         }
 
-        // Update stack display
         this.stackItems.innerHTML = '';
         this.stack.forEach(number => {
             const item = document.createElement('div');
@@ -947,18 +928,17 @@ class StackOverflowGame {
             this.stackItems.appendChild(item);
         });
 
-        // Update moves until next rule change (optional debug info)
-        // You could display this if you want players to know when rules will change
         const movesLeft = this.nextRuleChange - this.moveCount;
         if (movesLeft <= 3) {
-            // Hint that rule change is coming soon
             this.ruleDisplay.parentElement.classList.add('rule-warning');
         } else {
             this.ruleDisplay.parentElement.classList.remove('rule-warning');
         }
         
-        // Update mobile button states
         this.updateMobileButtons();
+        
+        // Update push preview (disabled for cleaner UI)
+        // this.updatePushPreview();
     }
 
     endGame() {
@@ -968,11 +948,10 @@ class StackOverflowGame {
         this.finalScore.textContent = this.score;
         this.gameOver.classList.remove('hidden');
         this.startBtn.style.display = 'inline-block';
-        this.mobileControls.classList.add('hidden'); // Hide mobile controls when game ends
+        this.mobileControls.classList.add('hidden');
     }
 }
 
-// Initialize game when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     if (document.getElementById('game-canvas')) {
         new StackOverflowGame();
