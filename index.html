@@ -3,385 +3,1079 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zachary Shipley - Data Analyst Portfolio</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>Zach Ship - CS/Data Portfolio</title>
     <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
-    <!-- Navigation -->
-    <nav class="navbar">
-        <div class="nav-container">
-            <div class="nav-logo">
-                <span class="logo-text">Zachary Shipley</span>
+    <!-- Animated Background Elements -->
+    <div class="background-container">
+        <div class="grid-pattern"></div>
+        <div class="radial-gradient"></div>
+    </div>
+
+    <!-- Terminal-style Navigation -->
+    <nav class="terminal-nav">
+        <div class="terminal-header">
+            <div class="terminal-controls">
+                <span class="control close"></span>
+                <span class="control minimize"></span>
+                <span class="control maximize"></span>
             </div>
-            <ul class="nav-menu">
-                <li class="nav-item">
-                    <a href="#home" class="nav-link">Home</a>
-                </li>
-                <li class="nav-item">
-                    <a href="#about" class="nav-link">About</a>
-                </li>
-                <li class="nav-item">
-                    <a href="#skills" class="nav-link">Skills</a>
-                </li>
-                <li class="nav-item">
-                    <a href="#game" class="nav-link">Game</a>
-                </li>
-                <li class="nav-item">
-                    <a href="#projects" class="nav-link">Projects</a>
-                </li>
-                <li class="nav-item">
-                    <a href="#contact" class="nav-link">Contact</a>
-                </li>
-            </ul>
-            <div class="hamburger">
-                <span class="bar"></span>
-                <span class="bar"></span>
-                <span class="bar"></span>
+            <div class="terminal-title">~/zach-ship-portfolio$</div>
+        </div>
+        
+        <div class="terminal-body">
+            <div class="terminal-prompt">
+                <span class="user">visitor@portfolio</span>
+                <span class="separator">:</span>
+                <span class="path">~</span>
+                <span class="dollar">$</span>
+                <span class="command">navigate --sections</span>
+                <span class="cursor">|</span>
+            </div>
+            
+            <div class="nav-output">
+                <div class="nav-items">
+                    <a href="#home" class="nav-item" data-command="cd ~/home">
+                        <span class="nav-icon">[~]</span>
+                        <span class="nav-text">home</span>
+                    </a>
+                    
+                    <a href="#about" class="nav-item" data-command="cat about.md">
+                        <span class="nav-icon">&lt;/&gt;</span>
+                        <span class="nav-text">about</span>
+                    </a>
+                    
+                    <a href="#projects" class="nav-item" data-command="ls -la projects/">
+                        <span class="nav-icon">[*]</span>
+                        <span class="nav-text">projects</span>
+                    </a>
+                    
+                    <a href="#skills" class="nav-item" data-command="python skills.py">
+                        <span class="nav-icon">[CODE]</span>
+                        <span class="nav-text">skills</span>
+                    </a>
+                    
+                    <a href="#contact" class="nav-item" data-command="ping contact">
+                        <span class="nav-icon">[@]</span>
+                        <span class="nav-text">contact</span>
+                    </a>
+                </div>
+                
+                <div class="execution-line">
+                    <span class="exec-text">5 directories found. Click to execute command.</span>
+                    <span class="blinking-cursor">_</span>
+                </div>
             </div>
         </div>
     </nav>
 
-    <!-- Hero Section -->
-    <section id="home" class="hero">
-        <div class="hero-container">
-            <div class="hero-content">
-                <div class="hero-text">
-                    <h1 class="hero-title">
-                        Hello, I'm <span class="highlight">Zachary Shipley</span>
-                    </h1>
-                    <h2 class="hero-subtitle">Computer Science and Math Student</h2>
-                    <p class="hero-description">
-                        Transforming complex data into actionable insights through advanced analytics, 
-                        visualization, and statistical modeling. Passionate about uncovering patterns 
-                        that drive business decisions.
-                    </p>
-                    <div class="hero-buttons">
-                        <a href="#projects" class="btn btn-primary">View My Work</a>
-                        <a href="#contact" class="btn btn-secondary">Get In Touch</a>
-                    </div>
-                </div>
-                <div class="hero-image">
-                    <img src="assets/profile-pic.jpeg" alt="Profile Picture" class="profile-img">
-                    <div class="floating-elements">
-                        <div class="floating-element" data-speed="2"><i class="fas fa-chart-line"></i></div>
-                        <div class="floating-element" data-speed="3"><i class="fas fa-chart-bar"></i></div>
-                        <div class="floating-element" data-speed="1"><i class="fas fa-search-plus"></i></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- About Section -->
-    <section id="about" class="about">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">About Me</h2>
-                <p class="section-subtitle">Data-driven professional with a passion for analytics</p>
-            </div>
-            <div class="about-content">
-                <div class="about-text">
-                    <p>
-                        I'm a dedicated data analyst with experience in transforming 
-                        raw data into meaningful insights. My expertise spans across statistical analysis, 
-                        data visualization, and business intelligence.
-                    </p>
-                    <p>
-                        I specialize in identifying trends, patterns, and opportunities that help organizations 
-                        make informed decisions. Whether it's customer behavior analysis, market research, 
-                        or operational optimization, I bring data to life through compelling visualizations 
-                        and actionable recommendations.
-                    </p>
-                </div>
-                <div class="about-skills">
-                    <h3>What I Do</h3>
-                    <div class="skills-list">
-                        <div class="skill-item">
-                            <i class="fas fa-chart-line"></i>
-                            <div>
-                                <h4>Data Analysis</h4>
-                                <p>Statistical analysis, hypothesis testing, and trend identification</p>
-                            </div>
+    <!-- Main content placeholder -->
+    <main class="main-content">
+        <section id="home" class="section active">
+            <div class="home-container">
+                <!-- Profile Terminal Window -->
+                <div class="profile-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
                         </div>
-                        <div class="skill-item">
-                            <i class="fas fa-chart-pie"></i>
-                            <div>
-                                <h4>Data Visualization</h4>
-                                <p>Creating compelling dashboards and interactive visualizations</p>
-                            </div>
+                        <div class="terminal-title-small">~/whoami</div>
+                    </div>
+                    
+                    <div class="profile-content">
+                        <div class="profile-image-container">
+                            <img src="./assets/profile-pic.jpeg" alt="Zachary Shipley" class="profile-image">
+                            <div class="image-border"></div>
                         </div>
-                        <div class="skill-item">
-                            <i class="fas fa-database"></i>
-                            <div>
-                                <h4>Database Management</h4>
-                                <p>SQL querying, data modeling, and database optimization</p>
-                            </div>
-                        </div>
-                        <div class="skill-item">
-                            <i class="fas fa-brain"></i>
-                            <div>
-                                <h4>Machine Learning</h4>
-                                <p>Predictive modeling and pattern recognition algorithms</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Skills Section -->
-    <section id="skills" class="skills">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">Technical Skills</h2>
-                <p class="section-subtitle">Tools and technologies I work with</p>
-            </div>
-            <div class="skills-grid">
-                <div class="skill-category">
-                    <h3>Programming Languages</h3>
-                    <div class="tech-stack">
-                        <span class="tech-item">Python</span>
-                        <span class="tech-item">R</span>
-                        <span class="tech-item">SQL</span>
-                    </div>
-                </div>
-                <div class="skill-category">
-                    <h3>Data Analysis Tools</h3>
-                    <div class="tech-stack">
-                        <span class="tech-item">Pandas</span>
-                        <span class="tech-item">NumPy</span>
-                        <span class="tech-item">Scikit-learn</span>
-                        <span class="tech-item">Excel</span>
-                    </div>
-                </div>
-                <div class="skill-category">
-                    <h3>Visualization Tools</h3>
-                    <div class="tech-stack">
-                        <span class="tech-item">Excel</span>
-                        <span class="tech-item">Power BI</span>
-                        <span class="tech-item">Matplotlib</span>
-                        <span class="tech-item">Plotly</span>
-                    </div>
-                </div>
-                <div class="skill-category">
-                    <h3>Databases</h3>
-                    <div class="tech-stack">
-                        <span class="tech-item">MySQL</span>
-                        <span class="tech-item">PostgreSQL</span>
-                        <span class="tech-item">MongoDB</span>
-                                                <span class="tech-item">SQLServer</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Projects Section -->
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-
-    <!-- Projects Section -->
-    <section id="projects" class="projects">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">Featured Projects</h2>
-                <p class="section-subtitle">Showcasing my data analysis expertise</p>
-            </div>
-            <div class="projects-grid">
-                <div class="project-card">
-                    <div class="project-image">
-                        <img src="assets/warehouse.jpg" alt="SQL Data Warehouse">
-                        <div class="project-overlay">
-                            <div class="project-links">
-                                <a href="https://github.com/Zship135/SQL-Data-Warehouse" class="project-link" target="_blank"><i class="fab fa-github"></i></a>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="project-content">
-                        <h3 class="project-title">SQL Data Warehouse</h3>
-                        <p class="project-description">
-                            Designed and implemented a centralized data warehouse using PostgreSQL with Medallion Architecture 
-                            (bronze, silver, gold layers). Transforms CRM and ERP data through multiple refinement layers for 
-                            consistent, clean, and business-ready analytics.
-                        </p>
-                        <div class="project-tech">
-                            <span class="tech-tag">PostgreSQL</span>
-                            <span class="tech-tag">SQL</span>
-                            <span class="tech-tag">ETL</span>
-                            <span class="tech-tag">Data Warehouse</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="project-card">
-                    <div class="project-image">
-                        <img src="assets/earth.jpg" alt="FleetOps Geospatial Analysis">
-                        <div class="project-overlay">
-                            <div class="project-links">
-                                <a href="https://github.com/Zship135/FleetOps_Service_Coverage_Analysis" class="project-link" target="_blank"><i class="fab fa-github"></i></a>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="project-content">
-                        <h3 class="project-title">Geospatial Network Optimization</h3>
-                        <p class="project-description">
-                            Leveraged geospatial data analysis to identify optimal warehouse locations for FleetOps delivery network. 
-                            Analyzed 12 warehouses across 8 Midwest states to reduce delivery costs and improve service coverage in 
-                            underperforming regions.
-                        </p>
-                        <div class="project-tech">
-                            <span class="tech-tag">SQL</span>
-                            <span class="tech-tag">Geospatial Analysis</span>
-                            <span class="tech-tag">Data Modeling</span>
-                            <span class="tech-tag">PostgreSQL</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="projects-footer">
-                <a href="https://github.com/zship135" class="btn btn-outline" target="_blank">
-                    <i class="fab fa-github"></i> View All Projects on GitHub
-                </a>
-            </div>
-        </div>
-    </section>
-
-    <!-- Interactive Game Section -->
-    <section id="game" class="game-section">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">Stack Overflow</h2>
-                <p class="section-subtitle">A CS-inspired mini game - can you manage the stack?</p>
-            </div>
-            <div class="game-container">
-                <div class="game-area">
-                    <div id="game-canvas">
-                        <div id="falling-numbers"></div>
-                        <div id="stack-display">
-                            <div id="stack-items"></div>
-                        </div>
-                        <div id="game-ui">
-                            <div class="game-info">
-                                <div class="score">Score: <span id="score">0</span></div>
-                                <div class="level">Level: <span id="level">1</span></div>
-                                <div class="rule">Rule: <span id="current-rule">Keep stack sum even</span></div>
-                            </div>
-                        </div>
-                        <div id="game-over" class="hidden">
-                            <h3>Stack Overflow!</h3>
-                            <p>Final Score: <span id="final-score">0</span></p>
-                            <button id="restart-btn" class="btn btn-primary">Play Again</button>
-                        </div>
-                    </div>
-                    <div class="game-controls">
-                        <button id="start-btn" class="btn btn-primary">Start Game</button>
                         
-                        <!-- Mobile Touch Controls -->
-                        <div id="mobile-controls" class="mobile-controls hidden">
-                            <div class="mobile-buttons">
-                                <button id="push-btn" class="mobile-btn push-btn">
-                                    <span class="btn-icon">←</span>
-                                    <span class="btn-text">PUSH</span>
-                                </button>
-                                <button id="throw-btn" class="mobile-btn throw-btn">
-                                    <span class="btn-icon">↓</span>
-                                    <span class="btn-text">THROW</span>
-                                </button>
-                                <button id="pop-btn" class="mobile-btn pop-btn">
-                                    <span class="btn-icon">→</span>
-                                    <span class="btn-text">POP</span>
-                                </button>
+                        <div class="profile-info">
+                            <div class="typing-line">
+                                <span class="prompt">zach@portfolio:~$</span>
+                                <span class="command">cat personal_info.json</span>
+                            </div>
+                            <div class="json-output">
+                                <div class="json-line">{</div>
+                                <div class="json-line">  <span class="json-key">"name"</span>: <span class="json-value">"Zachary Shipley"</span>,</div>
+                                <div class="json-line">  <span class="json-key">"role"</span>: <span class="json-value">"Computer Scientist"</span>,</div>
+                                <div class="json-line">  <span class="json-key">"passion"</span>: <span class="json-value">"Mathematics & Computing"</span>,</div>
+                                <div class="json-line">  <span class="json-key">"status"</span>: <span class="json-value">"Building the future"</span>,</div>
+                                <div class="json-line">  <span class="json-key">"location"</span>: <span class="json-value">"Ready to connect"</span></div>
+                                <div class="json-line">  <span class="json-key">"education"</span>: <span class="json-value">"Bachelor's in CS & Math"</span></div>
+                                <div class="json-line">}</div>
                             </div>
                         </div>
-                        <div class="controls-help">
-                            <p><strong>How to Play:</strong></p>
-                            <p><span class="game-icon">▶</span> A number appears - choose your action:</p>
-                            <p class="desktop-controls">← <strong>PUSH</strong> - Add number to your stack (5-50 pts based on height!)</p>
-                            <p class="desktop-controls">↓ <strong>THROW</strong> - Discard the number (0 pts)</p>
-                            <p class="desktop-controls">→ <strong>POP</strong> - Remove top from stack (+3 pts, once per number)</p>
-                            <p class="mobile-controls-text"><span class="game-icon">•</span> On mobile: Use the touch buttons above</p>
-                            <p><strong>Goal:</strong> <span id="rule-help">Keep stack sum even</span></p>
-                            <p><span class="game-icon">!</span> Push or throw to get the next number</p>
-                            <p><span class="game-icon">▌</span> Stack can't exceed 8 items</p>
-                            <p><span class="game-icon">⭐</span> <strong>Higher stacks = MORE POINTS!</strong> (5→10→15→25→50 pts)</p>
-                            <p><span class="game-icon">⟲</span> <strong>Smart rule changes every 10-15 moves!</strong></p>
-                            <p><span class="game-icon">→</span> New rules are always compatible with your stack</p>
-                            <p><span class="game-icon">✕</span> Break the rule = Game Over!</p>
+                    </div>
+                </div>
+                
+                <!-- Welcome Terminal -->
+                <div class="welcome-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
+                        </div>
+                        <div class="terminal-title-small">~/welcome.sh</div>
+                    </div>
+                    
+                    <div class="welcome-content">
+                        <div class="loading-text">
+                            <span class="loading-line">[INFO] Initializing portfolio systems...</span>
+                            <span class="loading-line">[SUCCESS] Neural networks online</span>
+                            <span class="loading-line">[SUCCESS] Mathematical models loaded</span>
+                            <span class="loading-line">[SUCCESS] Data pipelines active</span>
+                            <span class="loading-line">[READY] Welcome to my digital space</span>
+                        </div>
+                        
+                        <div class="welcome-message">
+                            <div class="message-line">
+                                <span class="highlight">></span> Hello! I'm passionate about the intersection of 
+                            </div>
+                            <div class="message-line">
+                                <span class="highlight">></span> mathematics, computer science, and data.
+                            </div>
+                            <div class="message-line">
+                                <span class="highlight">></span> Explore my projects, skills, and journey below.
+                            </div>
+                        </div>
+                        
+                        <div class="focus-areas">
+                            <div class="focus-item">
+                                <span class="focus-symbol">∫</span>
+                                <span class="focus-text">Data Analysis</span>
+                            </div>
+                            <div class="focus-item">
+                                <span class="focus-symbol">∇</span>
+                                <span class="focus-text">Machine Learning</span>
+                            </div>
+                            <div class="focus-item">
+                                <span class="focus-symbol">λ</span>
+                                <span class="focus-text">Software Development</span>
+                            </div>
                         </div>
                     </div>
                 </div>
+                
+                <!-- Quick Actions -->
+                <div class="quick-actions">
+                    <div class="action-item">
+                        <span class="action-icon">[*]</span>
+                        <span class="action-text">View Projects</span>
+                        <span class="action-command">ls -la ./projects/</span>
+                    </div>
+                    <div class="action-item">
+                        <span class="action-icon">[CODE]</span>
+                        <span class="action-text">Check Skills</span>
+                        <span class="action-command">python skills.py --all</span>
+                    </div>
+                    <div class="action-item">
+                        <span class="action-icon">[@]</span>
+                        <span class="action-text">Connect</span>
+                        <span class="action-command">ping zachary.contact</span>
+                    </div>
+                </div>
             </div>
-        </div>
-    </section>
+        </section>
+        
+        <section id="about" class="section">
+            <div class="about-container">
+                <!-- About Header -->
+                <div class="section-header">
+                    <div class="terminal-prompt-header">
+                        <span class="user">visitor@portfolio</span>
+                        <span class="separator">:</span>
+                        <span class="path">~/about</span>
+                        <span class="dollar">$</span>
+                        <span class="command">cat README.md</span>
+                    </div>
+                </div>
 
-    <!-- Contact Section -->
-    <section id="contact" class="contact">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">Let's Connect</h2>
-                <p class="section-subtitle">Ready to collaborate on your next data project</p>
-            </div>
-            <div class="contact-content">
-                <div class="contact-info">
-                    <div class="contact-item">
-                        <i class="fas fa-envelope"></i>
-                        <div>
-                            <h4>Email</h4>
-                            <p>zshipley135@gmail.com</p>
+                <!-- Story Terminal -->
+                <div class="about-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
                         </div>
+                        <div class="terminal-title-small">~/my-story</div>
                     </div>
-                    <div class="contact-item">
-                        <i class="fab fa-linkedin"></i>
-                        <div>
-                            <h4>LinkedIn</h4>
-                            <p><a href="https://www.linkedin.com/in/zachary-shipley-7950b6228/" target="_blank">linkedin.com/in/zachary-shipley</a></p>
-                        </div>
-                    </div>
-                    <div class="contact-item">
-                        <i class="fab fa-github"></i>
-                        <div>
-                            <h4>GitHub</h4>
-                            <p><a href="https://github.com/zship135" target="_blank">github.com/zship135</a></p>
+                    
+                    <div class="about-content">
+                        <div class="markdown-content">
+                            <h3># My Journey</h3>
+                            <p>My journey into computer science began as a hobby. Something that started as curiosity but 
+                                quickly grew into a passion when I discovered the incredible potential of technology to 
+                                innovate and help others. What began as tinkering with code evolved into a deep appreciation 
+                                for how programming can make the world a better place.</p>
+                            
+                            <h3>## Education & Growth</h3>
+                            <p>Currently pursuing a Bachelor's degree in Computer Science and Mathematics, my path took an 
+                                exciting turn when I discovered my love for mathematics in college. Taking those first math 
+                                courses opened my eyes to the beauty of mathematical thinking. I loved it so much that I 
+                                decided to double major! This dual focus has given me a unique perspective on how mathematical 
+                                principles can drive innovative technological solutions.</p>
+                            
+                            <h3>## What Drives Me</h3>
+                            <p>I'm truly motivated by three core values: innovation, collaboration, and using technology to 
+                                better serve the world and others. Every project is an opportunity to create something 
+                                meaningful that can make a positive impact. I believe that the intersection of mathematics 
+                                and computer science provides powerful tools to solve real-world problems and help people 
+                                in meaningful ways.</p>
                         </div>
                     </div>
                 </div>
-                <div class="contact-form">
-                    <form>
-                        <div class="form-group">
-                            <input type="text" placeholder="Your Name" required>
-                        </div>
-                        <div class="form-group">
-                            <input type="email" placeholder="Your Email" required>
-                        </div>
-                        <div class="form-group">
-                            <textarea placeholder="Your Message" rows="5" required></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Send Message</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </section>
 
-    <!-- Footer -->
-    <footer class="footer">
-        <div class="container">
-            <div class="footer-content">
-                <p>&copy; 2025 Zachary Shipley. All rights reserved.</p>
-                <div class="social-links">
-                    <a href="https://www.linkedin.com/in/zachary-shipley-7950b6228/" target="_blank" aria-label="LinkedIn"><i class="fab fa-linkedin"></i></a>
-                    <a href="https://github.com/zship135" target="_blank" aria-label="GitHub"><i class="fab fa-github"></i></a>
+                <!-- Skills & Technologies Grid -->
+                <div class="skills-grid">
+                    <!-- Programming Languages -->
+                    <div class="skill-terminal">
+                        <div class="terminal-header-small">
+                            <div class="terminal-controls">
+                                <span class="control close"></span>
+                                <span class="control minimize"></span>
+                                <span class="control maximize"></span>
+                            </div>
+                            <div class="terminal-title-small">~/languages</div>
+                        </div>
+                        <div class="skill-content">
+                            <div class="skill-category">
+                                <h4>Languages</h4>
+                                <div class="skill-list">
+                                    <span class="skill-item">Python</span>
+                                    <span class="skill-item">Java</span>
+                                    <span class="skill-item">C++</span>
+                                    <span class="skill-item">R</span>
+                                    <span class="skill-item">SQL</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Frameworks & Tools -->
+                    <div class="skill-terminal">
+                        <div class="terminal-header-small">
+                            <div class="terminal-controls">
+                                <span class="control close"></span>
+                                <span class="control minimize"></span>
+                                <span class="control maximize"></span>
+                            </div>
+                            <div class="terminal-title-small">~/frameworks</div>
+                        </div>
+                        <div class="skill-content">
+                            <div class="skill-category">
+                                <h4>Frameworks & Tools</h4>
+                                <div class="skill-list">
+                                    <span class="skill-item">TensorFlow</span>
+                                    <span class="skill-item">PyTorch</span>
+                                    <span class="skill-item">Pandas</span>
+                                    <span class="skill-item">NumPy</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Specializations -->
+                    <div class="skill-terminal">
+                        <div class="terminal-header-small">
+                            <div class="terminal-controls">
+                                <span class="control close"></span>
+                                <span class="control minimize"></span>
+                                <span class="control maximize"></span>
+                            </div>
+                            <div class="terminal-title-small">~/specializations</div>
+                        </div>
+                        <div class="skill-content">
+                            <div class="skill-category">
+                                <h4>Specializations</h4>
+                                <div class="skill-list">
+                                    <span class="skill-item">Machine Learning</span>
+                                    <span class="skill-item">Data Analysis</span>
+                                    <span class="skill-item">Algorithm Design</span>
+                                    <span class="skill-item">Statistical Modeling</span>
+                                    <span class="skill-item">Database Design</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Philosophy Terminal -->
+                <div class="philosophy-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
+                        </div>
+                        <div class="terminal-title-small">~/philosophy.py</div>
+                    </div>
+                    
+                    <div class="philosophy-content">
+                        <div class="code-block">
+                            <div class="code-line">
+                                <span class="code-comment"># My approach to problem-solving</span>
+                            </div>
+                            <div class="code-line">
+                                <span class="code-keyword">def</span> <span class="code-function">solve_problem</span><span class="code-bracket">(</span><span class="code-param">challenge</span><span class="code-bracket">):</span>
+                            </div>
+                            <div class="code-line code-indent">
+                                <span class="code-string"># Combine mathematical rigor with creative thinking</span>
+                            </div>
+                            <div class="code-line code-indent">
+                                <span class="code-keyword">return</span> <span class="code-function">analyze</span><span class="code-bracket">(</span><span class="code-param">challenge</span><span class="code-bracket">)</span> + <span class="code-function">innovate</span><span class="code-bracket">(</span><span class="code-param">solution</span><span class="code-bracket">)</span>
+                            </div>
+                        </div>
+                        
+                        <div class="philosophy-text">
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-    </footer>
+        </section>
+        
+        <section id="projects" class="section">
+            <div class="projects-container">
+                <!-- Projects Header -->
+                <div class="section-header">
+                    <div class="terminal-prompt-header">
+                        <span class="user">visitor@portfolio</span>
+                        <span class="separator">:</span>
+                        <span class="path">~/projects</span>
+                        <span class="dollar">$</span>
+                        <span class="command">ls -la --detailed</span>
+                    </div>
+                </div>
+
+                <!-- Project 1: SQL Data Warehouse -->
+                <div class="project-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
+                        </div>
+                        <div class="terminal-title-small">~/sql-data-warehouse</div>
+                    </div>
+                    
+                    <div class="project-content">
+                        <div class="project-header">
+                            <div class="project-title-section">
+                                <h3 class="project-title">
+                                    <span class="project-icon">[DB]</span>
+                                    SQL Data Warehouse - Medallion Architecture
+                                </h3>
+                                <div class="project-links">
+                                    <a href="https://github.com/Zship135/SQL-Data-Warehouse" target="_blank" class="project-link">
+                                        <span class="link-icon">[↗]</span>GitHub
+                                    </a>
+                                </div>
+                            </div>
+                            <div class="project-image-container">
+                                <img src="./assets/warehouse.jpg" alt="Data Warehouse Architecture" class="project-image">
+                                <div class="image-overlay">
+                                    <span class="overlay-text">Enterprise Data Architecture</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="project-description">
+                            <p>Enterprise-scale data warehouse implementing the Medallion Architecture (Bronze-Silver-Gold) 
+                               using PostgreSQL. Designed to solve data fragmentation across CRM and ERP systems by creating 
+                               a centralized, consistent data source for analytics and business intelligence.</p>
+                        </div>
+
+                        <div class="project-details">
+                            <div class="detail-section">
+                                <h4>Problem Solved</h4>
+                                <div class="code-block">
+                                    <div class="code-line">
+                                        <span class="code-comment"># Business Challenge</span>
+                                    </div>
+                                    <div class="code-line">
+                                        <span class="code-keyword">challenge</span> = {
+                                    </div>
+                                    <div class="code-line code-indent">
+                                        <span class="code-string">"fragmented_data"</span>: <span class="code-value">"CRM + ERP systems"</span>,
+                                    </div>
+                                    <div class="code-line code-indent">
+                                        <span class="code-string">"analyst_time_waste"</span>: <span class="code-value">"Manual reconciliation"</span>,
+                                    </div>
+                                    <div class="code-line code-indent">
+                                        <span class="code-string">"data_inconsistency"</span>: <span class="code-value">"Multiple sources"</span>
+                                    </div>
+                                    <div class="code-line">}</div>
+                                </div>
+                            </div>
+
+                            <div class="detail-section">
+                                <h4>Architecture Layers</h4>
+                                <div class="architecture-grid">
+                                    <div class="arch-layer bronze">
+                                        <span class="layer-name">Bronze</span>
+                                        <span class="layer-desc">Raw CSV ingestion</span>
+                                        <span class="layer-access">Data Engineers</span>
+                                    </div>
+                                    <div class="arch-arrow">→</div>
+                                    <div class="arch-layer silver">
+                                        <span class="layer-name">Silver</span>
+                                        <span class="layer-desc">Cleaned & normalized</span>
+                                        <span class="layer-access">Engineers + Analysts</span>
+                                    </div>
+                                    <div class="arch-arrow">→</div>
+                                    <div class="arch-layer gold">
+                                        <span class="layer-name">Gold</span>
+                                        <span class="layer-desc">Business-ready views</span>
+                                        <span class="layer-access">All stakeholders</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="detail-section">
+                                <h4>Technical Implementation</h4>
+                                <div class="tech-stack">
+                                    <div class="tech-category">
+                                        <span class="tech-label">Database:</span>
+                                        <span class="tech-item">PostgreSQL</span>
+                                    </div>
+                                    <div class="tech-category">
+                                        <span class="tech-label">Language:</span>
+                                        <span class="tech-item">pgSQL</span>
+                                    </div>
+                                    <div class="tech-category">
+                                        <span class="tech-label">ETL Process:</span>
+                                        <span class="tech-item">Stored Procedures</span>
+                                    </div>
+                                    <div class="tech-category">
+                                        <span class="tech-label">Schema Design:</span>
+                                        <span class="tech-item">Star Schema</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="detail-section">
+                                <h4>Key Features</h4>
+                                <div class="feature-list">
+                                    <div class="feature-item">
+                                        <span class="feature-bullet">▸</span>
+                                        <span class="feature-text">Full extraction with pull methodology from CSV sources</span>
+                                    </div>
+                                    <div class="feature-item">
+                                        <span class="feature-bullet">▸</span>
+                                        <span class="feature-text">SCD Type 1 implementation for dimensional modeling</span>
+                                    </div>
+                                    <div class="feature-item">
+                                        <span class="feature-bullet">▸</span>
+                                        <span class="feature-text">Automated data quality validation and integrity checks</span>
+                                    </div>
+                                    <div class="feature-item">
+                                        <span class="feature-bullet">▸</span>
+                                        <span class="feature-text">Business-friendly naming conventions in gold layer</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Project 2: FleetOps Analysis -->
+                <div class="project-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
+                        </div>
+                        <div class="terminal-title-small">~/fleetops-analysis</div>
+                    </div>
+                    
+                    <div class="project-content">
+                        <div class="project-header">
+                            <div class="project-title-section">
+                                <h3 class="project-title">
+                                    <span class="project-icon">[GEO]</span>
+                                    FleetOps Service Coverage Analysis
+                                </h3>
+                                <div class="project-links">
+                                    <a href="https://github.com/Zship135/FleetOps_Service_Coverage_Analysis" target="_blank" class="project-link">
+                                        <span class="link-icon">[↗]</span>GitHub
+                                    </a>
+                                </div>
+                            </div>
+                            <div class="project-image-container">
+                                <img src="./assets/earth.jpg" alt="Geospatial Analysis" class="project-image">
+                                <div class="image-overlay">
+                                    <span class="overlay-text">Geospatial Optimization</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="project-description">
+                            <p>Geospatial network optimization analysis for a Midwest delivery company with 12 warehouses. 
+                               Used data-driven insights to identify optimal new warehouse locations, addressing delivery 
+                               inefficiencies and 5.4x growth in delivery volume since 2020.</p>
+                        </div>
+
+                        <div class="project-details">
+                            <div class="detail-section">
+                                <h4>Business Impact</h4>
+                                <div class="impact-metrics">
+                                    <div class="metric-item">
+                                        <span class="metric-value">5.4x</span>
+                                        <span class="metric-label">Delivery Growth (2020-2024)</span>
+                                    </div>
+                                    <div class="metric-item">
+                                        <span class="metric-value">46</span>
+                                        <span class="metric-label">Underperforming Cities Identified</span>
+                                    </div>
+                                    <div class="metric-item">
+                                        <span class="metric-value">2</span>
+                                        <span class="metric-label">Strategic Locations Recommended</span>
+                                    </div>
+                                    <div class="metric-item">
+                                        <span class="metric-value">75mi</span>
+                                        <span class="metric-label">Optimal Service Radius</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="detail-section">
+                                <h4>Analysis Methodology</h4>
+                                <div class="code-block">
+                                    <div class="code-line">
+                                        <span class="code-comment"># Geospatial optimization approach</span>
+                                    </div>
+                                    <div class="code-line">
+                                        <span class="code-keyword">def</span> <span class="code-function">optimize_warehouse_placement</span><span class="code-bracket">(</span><span class="code-param">delivery_data</span><span class="code-bracket">):</span>
+                                    </div>
+                                    <div class="code-line code-indent">
+                                        <span class="code-keyword">struggling_cities</span> = <span class="code-function">identify_high_cost_areas</span><span class="code-bracket">()</span>
+                                    </div>
+                                    <div class="code-line code-indent">
+                                        <span class="code-keyword">optimal_locations</span> = <span class="code-function">geospatial_analysis</span><span class="code-bracket">(</span><span class="code-param">distance, cost</span><span class="code-bracket">)</span>
+                                    </div>
+                                    <div class="code-line code-indent">
+                                        <span class="code-keyword">return</span> <span class="code-function">coverage_recommendations</span><span class="code-bracket">(</span><span class="code-param">optimal_locations</span><span class="code-bracket">)</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="detail-section">
+                                <h4>Data Architecture</h4>
+                                <div class="data-tables">
+                                    <div class="table-item">
+                                        <span class="table-name">Warehouses</span>
+                                        <span class="table-desc">Facility capacity & utilization</span>
+                                    </div>
+                                    <div class="table-item">
+                                        <span class="table-name">Deliveries</span>
+                                        <span class="table-desc">Cost, distance, efficiency metrics</span>
+                                    </div>
+                                    <div class="table-item">
+                                        <span class="table-name">Service_Areas</span>
+                                        <span class="table-desc">Geographic coverage zones</span>
+                                    </div>
+                                    <div class="table-item">
+                                        <span class="table-name">Drivers</span>
+                                        <span class="table-desc">Performance & route efficiency</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="detail-section">
+                                <h4>Key Findings & Recommendations</h4>
+                                <div class="findings-grid">
+                                    <div class="finding-card">
+                                        <h5>Rochester, IN</h5>
+                                        <div class="finding-details">
+                                            <span class="finding-cities">Covers: South Bend, Niles, Logansport, Peru, West Lafayette</span>
+                                            <span class="finding-impact">Reduces delivery costs for 8 struggling cities</span>
+                                        </div>
+                                    </div>
+                                    <div class="finding-card">
+                                        <h5>Ballville, OH</h5>
+                                        <div class="finding-details">
+                                            <span class="finding-cities">Covers: Toledo, Sandusky, Mansfield, Marion, Bucyrus</span>
+                                            <span class="finding-impact">Serves 9 underperforming Ohio locations</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="detail-section">
+                                <h4>Technical Stack</h4>
+                                <div class="tech-stack">
+                                    <div class="tech-category">
+                                        <span class="tech-label">Language:</span>
+                                        <span class="tech-item">Python</span>
+                                    </div>
+                                    <div class="tech-category">
+                                        <span class="tech-label">Analysis:</span>
+                                        <span class="tech-item">Geospatial Analytics</span>
+                                    </div>
+                                    <div class="tech-category">
+                                        <span class="tech-label">Modeling:</span>
+                                        <span class="tech-item">Network Optimization</span>
+                                    </div>
+                                    <div class="tech-category">
+                                        <span class="tech-label">Visualization:</span>
+                                        <span class="tech-item">Geographic Mapping</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section id="skills" class="section">
+            <div class="skills-container">
+                <!-- Skills Header -->
+                <div class="section-header">
+                    <div class="terminal-prompt-header">
+                        <span class="user">visitor@portfolio</span>
+                        <span class="separator">:</span>
+                        <span class="path">~/skills</span>
+                        <span class="dollar">$</span>
+                        <span class="command">python skills.py --display-all</span>
+                    </div>
+                </div>
+
+                <!-- Core Programming Languages -->
+                <div class="skills-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
+                        </div>
+                        <div class="terminal-title-small">~/programming-languages</div>
+                    </div>
+                    
+                    <div class="skills-content">
+                        <div class="skill-category-main">
+                            <h3>Programming Languages</h3>
+                            <div class="skills-grid-main">
+                                <div class="skill-card">
+                                    <div class="skill-header">
+                                        <span class="skill-icon">[PY]</span>
+                                        <span class="skill-name">Python</span>
+                                    </div>
+                                    <div class="skill-applications">
+                                        <span class="app-tag">Data Analysis</span>
+                                        <span class="app-tag">Machine Learning</span>
+                                        <span class="app-tag">Scientific Computing</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="skill-card">
+                                    <div class="skill-header">
+                                        <span class="skill-icon">[R]</span>
+                                        <span class="skill-name">R</span>
+                                    </div>
+                                    <div class="skill-applications">
+                                        <span class="app-tag">Statistical Analysis</span>
+                                        <span class="app-tag">Data Visualization</span>
+                                        <span class="app-tag">Research</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="skill-card">
+                                    <div class="skill-header">
+                                        <span class="skill-icon">[SQL]</span>
+                                        <span class="skill-name">SQL</span>
+                                    </div>
+                                    <div class="skill-applications">
+                                        <span class="app-tag">Database Design</span>
+                                        <span class="app-tag">Data Warehousing</span>
+                                        <span class="app-tag">Analytics</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="skill-card">
+                                    <div class="skill-header">
+                                        <span class="skill-icon">[JAVA]</span>
+                                        <span class="skill-name">Java</span>
+                                    </div>
+                                    <div class="skill-applications">
+                                        <span class="app-tag">Object-Oriented Programming</span>
+                                        <span class="app-tag">Software Development</span>
+                                        <span class="app-tag">Algorithm Implementation</span>
+                                    </div>
+                                </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Data Science & Analytics -->
+                <div class="skills-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
+                        </div>
+                        <div class="terminal-title-small">~/data-science</div>
+                    </div>
+                    
+                    <div class="skills-content">
+                        <div class="skill-category-main">
+                            <h3>Data Science & Analytics</h3>
+                            <div class="skills-list-detailed">
+                                <div class="skill-item-detailed">
+                                    <div class="skill-primary">
+                                        <span class="skill-bullet">∫</span>
+                                        <span class="skill-title">Machine Learning</span>
+                                    </div>
+                                    <div class="skill-description">
+                                        Supervised and unsupervised learning, neural networks, model evaluation and optimization
+                                    </div>
+                                </div>
+                                
+                                <div class="skill-item-detailed">
+                                    <div class="skill-primary">
+                                        <span class="skill-bullet">∇</span>
+                                        <span class="skill-title">Statistical Analysis</span>
+                                    </div>
+                                    <div class="skill-description">
+                                        Hypothesis testing, regression analysis, probability theory, experimental design
+                                    </div>
+                                </div>
+                                
+                                <div class="skill-item-detailed">
+                                    <div class="skill-primary">
+                                        <span class="skill-bullet">Σ</span>
+                                        <span class="skill-title">Data Mining & Exploration</span>
+                                    </div>
+                                    <div class="skill-description">
+                                        Pattern recognition, feature engineering, data cleaning and preprocessing
+                                    </div>
+                                </div>
+                                
+                                <div class="skill-item-detailed">
+                                    <div class="skill-primary">
+                                        <span class="skill-bullet">λ</span>
+                                        <span class="skill-title">Geospatial Analysis</span>
+                                    </div>
+                                    <div class="skill-description">
+                                        Spatial data processing, network optimization, geographic information systems
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Technical Frameworks & Tools -->
+                <div class="skills-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
+                        </div>
+                        <div class="terminal-title-small">~/frameworks-tools</div>
+                    </div>
+                    
+                    <div class="skills-content">
+                        <div class="skill-category-main">
+                            <h3>Frameworks & Tools</h3>
+                            <div class="tools-grid">
+                                <div class="tool-category">
+                                    <h4>Machine Learning</h4>
+                                    <div class="tool-list">
+                                        <span class="tool-item">TensorFlow</span>
+                                        <span class="tool-item">PyTorch</span>
+                                        <span class="tool-item">Scikit-learn</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="tool-category">
+                                    <h4>Data Processing</h4>
+                                    <div class="tool-list">
+                                        <span class="tool-item">Pandas</span>
+                                        <span class="tool-item">NumPy</span>
+                                        <span class="tool-item">Matplotlib</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="tool-category">
+                                    <h4>Database Systems</h4>
+                                    <div class="tool-list">
+                                        <span class="tool-item">PostgreSQL</span>
+                                        <span class="tool-item">MySQL</span>
+                                        <span class="tool-item">SQLite</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="tool-category">
+                                    <h4>Development & Analysis</h4>
+                                    <div class="tool-list">
+                                        <span class="tool-item">Jupyter</span>
+                                        <span class="tool-item">Git</span>
+                                        <span class="tool-item">Docker</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mathematical & Theoretical Foundation -->
+                <div class="skills-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
+                        </div>
+                        <div class="terminal-title-small">~/mathematical-foundation</div>
+                    </div>
+                    
+                    <div class="skills-content">
+                        <div class="skill-category-main">
+                            <h3>Mathematical & Theoretical Foundation</h3>
+                            <div class="math-skills-grid">
+                                <div class="math-area">
+                                    <div class="math-header">
+                                        <span class="math-symbol">∂</span>
+                                        <span class="math-title">Calculus & Analysis</span>
+                                    </div>
+                                    <div class="math-topics">
+                                        <span class="math-topic">Multivariable Calculus</span>
+                                        <span class="math-topic">Differential Equations</span>
+                                        <span class="math-topic">Mathematical Optimization</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="math-area">
+                                    <div class="math-header">
+                                        <span class="math-symbol">Σ</span>
+                                        <span class="math-title">Linear Algebra</span>
+                                    </div>
+                                    <div class="math-topics">
+                                        <span class="math-topic">Matrix Operations</span>
+                                        <span class="math-topic">Eigenvalues & Eigenvectors</span>
+                                        <span class="math-topic">Vector Spaces</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="math-area">
+                                    <div class="math-header">
+                                        <span class="math-symbol">P</span>
+                                        <span class="math-title">Probability & Statistics</span>
+                                    </div>
+                                    <div class="math-topics">
+                                        <span class="math-topic">Bayesian Statistics</span>
+                                        <span class="math-topic">Stochastic Processes</span>
+                                        <span class="math-topic">Statistical Inference</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="math-area">
+                                    <div class="math-header">
+                                        <span class="math-symbol">O</span>
+                                        <span class="math-title">Algorithms & Complexity</span>
+                                    </div>
+                                    <div class="math-topics">
+                                        <span class="math-topic">Algorithm Design</span>
+                                        <span class="math-topic">Complexity Analysis</span>
+                                        <span class="math-topic">Data Structures</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Professional Skills -->
+                <div class="skills-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
+                        </div>
+                        <div class="terminal-title-small">~/professional-capabilities</div>
+                    </div>
+                    
+                    <div class="skills-content">
+                        <div class="skill-category-main">
+                            <h3>Professional Capabilities</h3>
+                            <div class="professional-grid">
+                                <div class="professional-skill">
+                                    <div class="prof-header">
+                                        <span class="prof-icon">[SOLVE]</span>
+                                        <span class="prof-title">Problem Solving</span>
+                                    </div>
+                                    <div class="prof-description">
+                                        Breaking down complex challenges into manageable components using mathematical and computational thinking
+                                    </div>
+                                </div>
+                                
+                                <div class="professional-skill">
+                                    <div class="prof-header">
+                                        <span class="prof-icon">[DESIGN]</span>
+                                        <span class="prof-title">System Architecture</span>
+                                    </div>
+                                    <div class="prof-description">
+                                        Designing scalable data systems and implementing efficient algorithms for large-scale problems
+                                    </div>
+                                </div>
+                                
+                                <div class="professional-skill">
+                                    <div class="prof-header">
+                                        <span class="prof-icon">[RESEARCH]</span>
+                                        <span class="prof-title">Research & Analysis</span>
+                                    </div>
+                                    <div class="prof-description">
+                                        Conducting thorough analysis, validating hypotheses, and deriving actionable insights from data
+                                    </div>
+                                </div>
+                                
+                                <div class="professional-skill">
+                                    <div class="prof-header">
+                                        <span class="prof-icon">[COLLAB]</span>
+                                        <span class="prof-title">Collaboration</span>
+                                    </div>
+                                    <div class="prof-description">
+                                        Working effectively in interdisciplinary teams to deliver innovative solutions that create positive impact
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section id="contact" class="section">
+            <div class="contact-container">
+                <!-- Contact Header -->
+                <div class="section-header">
+                    <div class="terminal-prompt-header">
+                        <span class="user">visitor@portfolio</span>
+                        <span class="separator">:</span>
+                        <span class="path">~/contact</span>
+                        <span class="dollar">$</span>
+                        <span class="command">ping zshipley24@bw.edu</span>
+                    </div>
+                </div>
+
+                <!-- Connection Terminal -->
+                <div class="contact-terminal">
+                    <div class="terminal-header-small">
+                        <div class="terminal-controls">
+                            <span class="control close"></span>
+                            <span class="control minimize"></span>
+                            <span class="control maximize"></span>
+                        </div>
+                        <div class="terminal-title-small">~/establish-connection</div>
+                    </div>
+                    
+                    <div class="contact-content">
+                        <div class="connection-status">
+                            <div class="status-line">
+                                <span class="status-icon">[●]</span>
+                                <span class="status-text">Connection Status: READY</span>
+                            </div>
+                            <div class="status-line">
+                                <span class="status-icon">[◆]</span>
+                                <span class="status-text">Email Server: ONLINE</span>
+                            </div>
+                            <div class="status-line">
+                                <span class="status-icon">[▲]</span>
+                                <span class="status-text">Response Time: &lt; 24 hours</span>
+                            </div>
+                        </div>
+
+                        <div class="contact-info">
+                            <div class="contact-method">
+                                <div class="method-header">
+                                    <span class="method-icon">[@]</span>
+                                    <span class="method-title">Primary Communication Channel</span>
+                                </div>
+                                <div class="method-details">
+                                    <div class="email-display">
+                                        <span class="email-label">email:</span>
+                                        <a href="mailto:zshipley24@bw.edu" class="email-link">zshipley24@bw.edu</a>
+                                    </div>
+                                    <div class="protocol-info">
+                                        <span class="protocol-text">Protocol: SMTP | Encryption: TLS | Format: Professional</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="contact-message">
+                            <div class="message-header">
+                                <span class="message-icon">[MSG]</span>
+                                <span class="message-title">Ready to Connect</span>
+                            </div>
+                            <div class="message-content">
+                                <div class="message-line">
+                                    <span class="prompt">></span> I'm always interested in discussing new opportunities,
+                                </div>
+                                <div class="message-line">
+                                    <span class="prompt">></span> collaborative projects, or innovative ideas in CS and data.
+                                </div>
+                                <div class="message-line">
+                                    <span class="prompt">></span> Whether it's internships, research, or just connecting
+                                </div>
+                                <div class="message-line">
+                                    <span class="prompt">></span> with fellow enthusiasts, feel free to reach out!
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quick Contact Actions -->
+                <div class="contact-actions">
+                    <div class="action-terminal">
+                        <div class="terminal-header-small">
+                            <div class="terminal-controls">
+                                <span class="control close"></span>
+                                <span class="control minimize"></span>
+                                <span class="control maximize"></span>
+                            </div>
+                            <div class="terminal-title-small">~/quick-actions</div>
+                        </div>
+                        
+                        <div class="actions-content">
+                            <div class="action-grid">
+                                <a href="mailto:zshipley24@bw.edu?subject=Portfolio Inquiry" class="action-card">
+                                    <div class="action-icon">[EMAIL]</div>
+                                    <div class="action-title">Send Email</div>
+                                    <div class="action-desc">Direct communication</div>
+                                    <div class="action-command">mailto:zshipley24@bw.edu</div>
+                                </a>
+                                
+                                <a href="mailto:zshipley24@bw.edu?subject=Collaboration Opportunity" class="action-card">
+                                    <div class="action-icon">[COLLAB]</div>
+                                    <div class="action-title">Collaborate</div>
+                                    <div class="action-desc">Project partnerships</div>
+                                    <div class="action-command">subject: collaboration</div>
+                                </a>
+                                
+                                <a href="mailto:zshipley24@bw.edu?subject=Internship Opportunity" class="action-card">
+                                    <div class="action-icon">[OPPTY]</div>
+                                    <div class="action-title">Opportunities</div>
+                                    <div class="action-desc">Career discussions</div>
+                                    <div class="action-command">subject: opportunity</div>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
 
     <script src="script.js"></script>
 </body>
