@@ -37,6 +37,7 @@ function upsertActivity(current, entry) {
 
 function activityMessageClass(message, entry) {
   if (entry.type === "location") return "world-text";
+  if (/^(You gain \d+ experience\.|Loot:|No items dropped\.)/i.test(message)) return "reward-text";
   if (/\brolls D\d+\b|\bhits you for\b|\bis defeated\b/i.test(message)) return "enemy-text";
   return "player-text";
 }

@@ -76,6 +76,7 @@ a { color: inherit; text-decoration: none; }
 .action-result p { max-width: 66ch; margin: 7px 0; color: #d1c5b9; font-size: 13px; line-height: 1.7; }
 .action-result p.player-text { color: var(--player-text); }
 .action-result p.enemy-text { color: var(--enemy-text); }
+.action-result p.reward-text { color: var(--party-text); }
 .action-result p.world-text { color: var(--world-text); }
 .action-result { border-bottom: 1px solid var(--line); padding: 17px 5px; }
 .dialogue-interaction { max-width: 66ch; margin: 14px 0; border: 1px solid #60452f; background: #1e1915; padding: 12px; }

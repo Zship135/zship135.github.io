@@ -985,7 +985,7 @@ function LootTableEditor({ entries, items, onChange }) {
   return (
     <section className="studio-subsection">
       <div className="studio-subsection-heading">
-        <div><h3>Loot table</h3><p>Each entry rolls once when this enemy is defeated.</p></div>
+        <div><h3>Loot table</h3><p>Choose an existing item, weapon/gear, or resource; set its drop chance and quantity range.</p></div>
         <button
           className="studio-small-button"
           disabled={items.length === 0}
@@ -1003,7 +1003,7 @@ function LootTableEditor({ entries, items, onChange }) {
       {entries.map((entry, index) => (
         <div className="studio-loot-row" key={`${entry.item_id}-${index}`}>
           <SelectField
-            label="Dropped item"
+            label="Dropped item or gear"
             options={items}
             value={entry.item_id}
             onChange={(value) => updateEntry(index, "item_id", value)}
@@ -1018,15 +1018,17 @@ function LootTableEditor({ entries, items, onChange }) {
             value={Number((entry.chance * 100).toFixed(1))}
           />
           <Field
-            label="Minimum"
+            label="Minimum quantity"
             min={1}
+            max={1_000_000}
             onChange={(value) => updateEntry(index, "minimum_quantity", value)}
             type="number"
             value={entry.minimum_quantity}
           />
           <Field
-            label="Maximum"
+            label="Maximum quantity"
             min={1}
+            max={1_000_000}
             onChange={(value) => updateEntry(index, "maximum_quantity", value)}
             type="number"
             value={entry.maximum_quantity}
