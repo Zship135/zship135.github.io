@@ -227,7 +227,7 @@ def resolve_command(
                 "armor": "armor",
                 "armour": "armor",
                 "hands": "hands",
-                "weapons": "weapons",
+                "weapons": "hands",
             }
             normalized_subject = str(subject).casefold()
             if normalized_subject in inventory_subjects:

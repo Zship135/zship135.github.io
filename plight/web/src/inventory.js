@@ -18,14 +18,14 @@ export function inventoryViewForSubject(subject) {
     armor: "armor",
     armour: "armor",
     hands: "hands",
-    weapons: "weapons",
+    weapons: "hands",
   };
   return views[subject?.toLowerCase()] || null;
 }
 
 export function equipmentSlotsForView(view) {
   if (view === "armor") return EQUIPMENT_SLOT_GROUPS.armor;
-  if (view === "hands" || view === "weapons") return EQUIPMENT_SLOT_GROUPS.hands;
+  if (view === "hands") return EQUIPMENT_SLOT_GROUPS.hands;
   return EQUIPMENT_SLOTS;
 }
 

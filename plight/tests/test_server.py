@@ -647,7 +647,7 @@ def test_observe_inventory_phrases_open_canonical_menu_views(client: TestClient)
         ("what am I carrying?", "all"),
         ("observe armor", "armor"),
         ("observe hands", "hands"),
-        ("observe weapons", "weapons"),
+        ("observe weapons", "hands"),
     ]
     for index, (text, expected_view) in enumerate(examples, start=31):
         result = client.post(

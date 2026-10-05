@@ -12,7 +12,7 @@ test("inventory observation selects the requested menu view", () => {
   assert.equal(inventoryViewForSubject("inventory"), "all");
   assert.equal(inventoryViewForSubject("armor"), "armor");
   assert.equal(inventoryViewForSubject("hands"), "hands");
-  assert.equal(inventoryViewForSubject("weapons"), "weapons");
+  assert.equal(inventoryViewForSubject("weapons"), "hands");
   assert.equal(inventoryViewForSubject("dragon"), null);
 });
 
@@ -24,6 +24,7 @@ test("inventory menu exposes every requested equipment slot", () => {
   ]);
   assert.deepEqual(equipmentSlotsForView("armor"), EQUIPMENT_SLOTS.slice(0, 13));
   assert.deepEqual(equipmentSlotsForView("hands"), ["left_hand", "right_hand"]);
+  assert.deepEqual(equipmentSlotsForView(inventoryViewForSubject("weapons")), ["left_hand", "right_hand"]);
 });
 
 test("items without an equipment definition remain non-equippable", () => {
