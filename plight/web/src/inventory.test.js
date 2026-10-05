@@ -24,6 +24,7 @@ test("inventory menu exposes every requested equipment slot", () => {
   ]);
   assert.deepEqual(equipmentSlotsForView("armor"), EQUIPMENT_SLOTS.slice(0, 13));
   assert.deepEqual(equipmentSlotsForView("hands"), ["left_hand", "right_hand"]);
+  assert.deepEqual(equipmentSlotsForView("weapons"), ["left_hand", "right_hand"]);
   assert.deepEqual(equipmentSlotsForView(inventoryViewForSubject("weapons")), ["left_hand", "right_hand"]);
 });
 

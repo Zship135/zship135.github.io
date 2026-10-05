@@ -1123,7 +1123,7 @@ function InventoryDialog({ busy, onClose, onEquip, onUnequip, onSelectView, snap
   const visibleSlots = equipmentSlotsForView(view);
   const visibleItems = items.filter((item) => {
     if (view === "armor") return item.equipable_slots.some((slot) => !EQUIPMENT_SLOT_GROUPS.hands.includes(slot));
-    if (view === "hands") return item.equipable_slots.some((slot) => EQUIPMENT_SLOT_GROUPS.hands.includes(slot));
+    if (view === "hands" || view === "weapons") return item.equipable_slots.some((slot) => EQUIPMENT_SLOT_GROUPS.hands.includes(slot));
     return true;
   });
   const views = [["all", "All"], ["armor", "Armor"], ["hands", "Hands"]];

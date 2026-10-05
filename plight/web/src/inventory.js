@@ -25,7 +25,7 @@ export function inventoryViewForSubject(subject) {
 
 export function equipmentSlotsForView(view) {
   if (view === "armor") return EQUIPMENT_SLOT_GROUPS.armor;
-  if (view === "hands") return EQUIPMENT_SLOT_GROUPS.hands;
+  if (view === "hands" || view === "weapons") return EQUIPMENT_SLOT_GROUPS.hands;
   return EQUIPMENT_SLOTS;
 }
 
