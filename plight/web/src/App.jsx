@@ -141,6 +141,7 @@ export default function App() {
   const [characterBusy, setCharacterBusy] = useState(false);
   const [activity, setActivity] = useState([]);
   const [dialogueBusyKey, setDialogueBusyKey] = useState("");
+  const [questBusyId, setQuestBusyId] = useState("");
   const [canEditContent, setCanEditContent] = useState(false);
   const [studioMode, setStudioMode] = useState(false);
   const [channels, setChannels] = useState([{ id: "global", label: "World" }]);
@@ -619,6 +620,9 @@ export default function App() {
             return;
           }
         }
+        if (data.type === "quest.updated") {
+          await refreshWorld(token);
+        }
       };
       socket.onclose = () => {
         if (cancelled) return;
@@ -748,6 +752,37 @@ export default function App() {
       showError(error);
     } finally {
       setDialogueBusyKey("");
+    }
+  }
+
+  async function runQuestAction(quest, action, body) {
+    setQuestBusyId(quest.id);
+    setNotice("");
+    try {
+      const result = await api(`/api/v1/quests/${encodeURIComponent(quest.id)}/${action}`, {
+        token,
+        method: "POST",
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      setSnapshot(result.snapshot);
+      const messages = result.messages || [result.message];
+      setActivity((current) => [
+        ...current,
+        {
+          id: `quest-${quest.id}-${Date.now()}`,
+          type: "quest",
+          result: { messages },
+        },
+      ].slice(-30));
+    } catch (error) {
+      showError(error);
+      try {
+        await refreshWorld(token);
+      } catch (refreshError) {
+        showError(refreshError);
+      }
+    } finally {
+      setQuestBusyId("");
     }
   }
 
@@ -954,6 +989,8 @@ export default function App() {
               <p className="location-description">{snapshot?.area?.description || "The world is loading."}</p>
               <div className="location-stat-block">
                 <span>{snapshot?.character?.name}</span>
+                <span>LVL {snapshot?.character?.level ?? "—"}</span>
+                <span>XP {snapshot?.character?.experience_progress ?? "—"}/{snapshot?.character?.experience_to_next_level ?? "—"}</span>
                 <span>HP {snapshot?.character?.stats?.health ?? "—"}/{snapshot?.character?.stats?.max_health ?? "—"}</span>
                 <span>ATK {snapshot?.character?.stats?.attack ?? "—"}</span>
                 <span>DEF {snapshot?.character?.stats?.defense ?? "—"}</span>
@@ -965,13 +1002,23 @@ export default function App() {
               </div>
               <WorldEntityList
                 title="Exits"
-                entities={snapshot?.area?.exits || []}
-                renderItem={(direction) => {
+                entities={snapshot?.area?.exit_details || snapshot?.area?.exits || []}
+                renderItem={(exit) => {
+                  const direction = typeof exit === "string" ? exit : exit.direction;
                   const destination = snapshot?.area?.exit_destinations?.[direction];
                   return (
-                    <button key={direction} onClick={() => enterCommand(`travel ${direction}`)} type="button">
-                      {direction}{destination ? ` → ${destination}` : ""}
-                    </button>
+                    <div className={`world-exit ${exit.accessible === false ? "locked" : ""}`} key={direction}>
+                      <button
+                        aria-label={exit.reason || `Travel ${direction}${destination ? ` to ${destination}` : ""}`}
+                        onClick={() => enterCommand(`travel ${direction}`)}
+                        title={exit.reason || undefined}
+                        type="button"
+                      >
+                        {direction}{destination ? ` → ${destination}` : ""}
+                        {exit.accessible === false ? " · SEALED" : ""}
+                      </button>
+                      {exit.reason && <small>{exit.reason}</small>}
+                    </div>
                   );
                 }}
               />
@@ -979,8 +1026,86 @@ export default function App() {
                 <article className="world-entity npc-entity" key={npc.id}>
                   <strong>{npc.name}</strong><p>{npc.description}</p>
                   <button onClick={() => enterCommand(`talk to ${npc.name}`)} type="button">Talk</button>
+                  {(npc.quests || []).map((quest) => (
+                    <section className="quest-offer" key={quest.id}>
+                      <h3>{quest.title}</h3>
+                      <p>{quest.description}</p>
+                      <span className={`quest-status ${quest.status}`}>{quest.status.replace("_", " ")}</span>
+                      {quest.objectives.map((objective) => (
+                        <p className="quest-objective" key={objective.id}>
+                          {objective.type === "collect" ? "Collect" : objective.type === "kill" ? "Defeat" : objective.type === "talk" ? "Talk to" : "Visit"} {objective.target_name}: {objective.current}/{objective.required}
+                        </p>
+                      ))}
+                      {quest.status === "available" && (
+                        <button
+                          className="dialogue-choice-button"
+                          disabled={questBusyId === quest.id}
+                          onClick={() => runQuestAction(quest, "accept")}
+                          type="button"
+                        >
+                          {questBusyId === quest.id ? "Accepting…" : "Accept quest"}
+                        </button>
+                      )}
+                      {quest.status === "active" && (
+                        <button
+                          className="dialogue-choice-button"
+                          disabled={!quest.can_turn_in || questBusyId === quest.id}
+                          onClick={() => runQuestAction(quest, "turn-in")}
+                          type="button"
+                        >
+                          {questBusyId === quest.id ? "Claiming…" : "Turn in and claim rewards"}
+                        </button>
+                      )}
+                      {quest.status === "completed" && (
+                        <p className="quest-complete">
+                          Completed · {quest.reward_experience} XP
+                          {(quest.reward_items || []).map((reward) => ` · ${reward.quantity} ${reward.item_name}`).join("")}
+                        </p>
+                      )}
+                    </section>
+                  ))}
                 </article>
               )} />
+              <WorldEntityList
+                title="Quest tracker"
+                entities={snapshot?.quest_log || []}
+                renderItem={(quest) => (
+                  <article className="quest-tracker-entry" key={quest.id}>
+                    <div className="quest-tracker-heading">
+                      <strong>{quest.title}</strong>
+                      <span className={`quest-status ${quest.status}`}>{quest.status}</span>
+                    </div>
+                    <p>{quest.description}</p>
+                    <small>Given by {quest.giver_name}</small>
+                    {quest.current_step_title && <strong className="quest-step-title">{quest.current_step_title}</strong>}
+                    {quest.step_description && <p>{quest.step_description}</p>}
+                    {quest.objectives.map((objective) => (
+                      <p className="quest-objective" key={objective.id}>
+                        {objective.type === "collect" ? "Collect" : objective.type === "kill" ? "Defeat" : objective.type === "talk" ? "Talk to" : "Visit"} {objective.target_name}: {objective.current}/{objective.required}
+                      </p>
+                    ))}
+                    {quest.can_choose && (
+                      <div className="quest-step-choices">
+                        {quest.choices.map((choice) => (
+                          <button
+                            className="dialogue-choice-button"
+                            disabled={questBusyId === quest.id}
+                            key={choice.id}
+                            onClick={() => runQuestAction(quest, "choose", {
+                              step_id: quest.current_step_id,
+                              choice_id: choice.id,
+                            })}
+                            type="button"
+                          >
+                            {choice.text}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {quest.can_turn_in && <small>Return to {quest.giver_name} to claim your rewards.</small>}
+                  </article>
+                )}
+              />
               <WorldEntityList title="Enemies" entities={snapshot?.area?.enemies || []} renderItem={(enemy) => (
                 <article className="world-entity enemy-entity" key={enemy.id}>
                   <strong>{enemy.name}</strong>

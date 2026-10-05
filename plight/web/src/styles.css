@@ -365,3 +365,28 @@ a { color: inherit; text-decoration: none; }
   .studio-dialogue-choice .studio-remove-button { grid-column: 2; grid-row: 1; }
   .studio-two-fields, .studio-exit-grid { gap: 8px; }
 }
+.world-exit { display: grid; gap: 4px; }
+.world-exit.locked button { border-color: #704548; color: #f09a84; }
+.world-exit small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.quest-offer, .quest-tracker-entry { display: grid; gap: 7px; margin-top: 10px; border: 1px solid #5b4937; background: #171511; padding: 10px; }
+.quest-offer h3 { margin: 0; color: var(--warm); font: 12px var(--mono); }
+.quest-offer p, .quest-tracker-entry p { margin: 0; color: var(--soft); font-size: 11px; line-height: 1.5; }
+.quest-tracker-entry small { color: var(--muted); font-size: 10px; }
+.quest-tracker-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--warm); }
+.quest-step-title { color: var(--warm); font: 10px var(--mono); }
+.quest-step-choices { display: grid; gap: 6px; }
+.quest-objective { color: var(--npc-text) !important; font: 10px var(--mono); }
+.quest-status { width: fit-content; border: 1px solid var(--line); color: var(--muted); font: 9px var(--mono); padding: 3px 5px; text-transform: uppercase; }
+.quest-status.active { border-color: #64734c; color: #bdd18c; }
+.quest-status.completed, .quest-complete { color: var(--player-text) !important; }
+.studio-gate-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.studio-loot-row, .studio-quest-objective { display: grid; grid-template-columns: minmax(140px, 2fr) repeat(3, minmax(80px, 1fr)) auto; align-items: end; gap: 9px; margin: 10px 0; }
+.studio-quest-objective { grid-template-columns: repeat(2, minmax(120px, 1fr)) minmax(80px, 0.5fr) auto; }
+.studio-quest-choice { display: grid; grid-template-columns: minmax(180px, 2fr) minmax(160px, 1fr) auto; align-items: end; gap: 9px; margin: 10px 0; }
+.studio-quest-step { display: grid; gap: 8px; margin-top: 12px; border: 1px solid var(--line); background: #171511; padding: 12px; }
+.studio-quest-step h3, .studio-quest-step h4 { margin: 0; color: var(--warm); font: 11px var(--mono); }
+.studio-quest-step .studio-subsection-heading p { margin: 4px 0 0; }
+@media (max-width: 700px) {
+  .studio-gate-list { grid-template-columns: 1fr; }
+  .studio-loot-row, .studio-quest-objective, .studio-quest-choice { grid-template-columns: 1fr 1fr; }
+}

@@ -9,12 +9,13 @@ const NAVIGATION = [
   ["items", "Items"],
   ["weapons", "Weapons"],
   ["recipes", "Recipes"],
+  ["quests", "Quests"],
   ["environment", "Furniture / objects"],
   ["resources", "Resources"],
 ];
 
 const ENTITY_TABS = {
-  enemies: ["enemy", { health: 20, attack: 3, defense: 1, speed: 10 }],
+  enemies: ["enemy", { health: 20, attack: 3, defense: 1, speed: 10, experience: 10 }],
   npcs: ["npc", { health: 100 }],
   items: ["item", { weight: 1, stack_size: 99, value: 1 }],
   weapons: ["weapon", { damage: 5, speed: 10, stamina_cost: 1, value: 10 }],
@@ -278,15 +279,26 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
     [content],
   );
   const recipes = content?.recipes || [];
+  const quests = content?.quests || [];
   const currentLocation = content?.locations.find((location) => location.id === selectedId);
   const currentRecipe = recipes.find((recipe) => recipe.id === selectedId);
-  const currentEntity = (content?.entities || []).find((entity) => entity.id === selectedId);
+  const currentQuest = quests.find((quest) => quest.id === selectedId);
+  const currentEntity = ["enemies", "npcs", "items", "weapons", "environment", "resources"].includes(tab)
+    ? (content?.entities || []).find((entity) => entity.id === selectedId)
+    : null;
   const visibleEntities = useMemo(() => {
     if (!content) return [];
     if (tab === "environment") return content.entities.filter((entity) => ["furniture", "object"].includes(entity.type));
     const entityType = ENTITY_TABS[tab]?.[0];
     return entityType ? content.entities.filter((entity) => entity.type === entityType) : [];
   }, [content, tab]);
+  const currentEntries = tab === "locations"
+    ? content?.locations || []
+    : tab === "recipes"
+      ? recipes
+      : tab === "quests"
+        ? quests
+        : visibleEntities;
 
   function updateContent(mutator) {
     setContent((current) => {
@@ -304,6 +316,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
       ? content.locations
       : nextTab === "recipes"
         ? content.recipes
+        : nextTab === "quests"
+          ? content.quests
         : (content.entities || []).filter((entity) =>
           nextTab === "environment"
             ? ["furniture", "object"].includes(entity.type)
@@ -323,11 +337,48 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
           position: { x: 50, y: 50 },
           starting_species: [],
           exits: {},
+          exit_requirements: {},
           ambience: [],
           enemy_ids: [],
           npc_ids: [],
           object_ids: [],
           resource_ids: [],
+        });
+      });
+      setSelectedId(id);
+      return;
+    }
+    if (tab === "quests") {
+      const giver = content.entities.find((entity) => entity.type === "npc");
+      const item = content.entities.find((entity) => ["item", "weapon", "resource"].includes(entity.type));
+      const enemy = content.entities.find((entity) => entity.type === "enemy");
+      const location = content.locations[0];
+      if (!giver || (!item && !enemy && !location)) {
+        setError("Create an NPC and at least one objective target before adding a quest.");
+        return;
+      }
+      const id = makeId("new_quest", new Set(quests.map((quest) => quest.id)));
+      const objective = item
+        ? { id: "objective_1", type: "collect", target_id: item.id, quantity: 1 }
+        : enemy
+          ? { id: "objective_1", type: "kill", target_id: enemy.id, quantity: 1 }
+          : { id: "objective_1", type: "visit", target_id: location.id, quantity: 1 };
+      updateContent((next) => {
+        next.quests.push({
+          id,
+          title: "New quest",
+          description: "",
+          giver_npc_id: giver.id,
+          start_step_id: "step_1",
+          steps: [{
+            id: "step_1",
+            title: "First step",
+            description: "",
+            objectives: [objective],
+            choices: [{ id: "finish", text: "Return to the quest giver", next_step_id: null }],
+          }],
+          reward_experience: 50,
+          reward_items: [],
         });
       });
       setSelectedId(id);
@@ -375,30 +426,61 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         ambience: [],
         stock: [],
         weapon_ids: [],
+        loot_table: [],
       });
     });
     setSelectedId(id);
   }
 
   function deleteEntry() {
-    const name = currentLocation?.name || currentRecipe?.name || currentEntity?.name;
+    const name = currentLocation?.name || currentRecipe?.name || currentQuest?.title || currentEntity?.name;
     if (!name || !window.confirm(`Delete "${name}"? References to this content will be removed.`)) return;
     updateContent((next) => {
       if (tab === "locations") {
+        const removedQuestIds = next.quests
+          .filter((quest) => quest.steps.some((step) => step.objectives.some(
+            (objective) => objective.type === "visit" && objective.target_id === selectedId,
+          )))
+          .map((quest) => quest.id);
+        next.quests = next.quests.filter((quest) => !removedQuestIds.includes(quest.id));
         next.locations = next.locations.filter((location) => location.id !== selectedId);
         for (const location of next.locations) {
           for (const [direction, destination] of Object.entries(location.exits)) {
-            if (destination === selectedId) delete location.exits[direction];
+            if (destination === selectedId) {
+              delete location.exits[direction];
+              delete location.exit_requirements?.[direction];
+            }
+            if (removedQuestIds.includes(location.exit_requirements?.[direction])) {
+              delete location.exit_requirements[direction];
+            }
           }
         }
       } else if (tab === "recipes") {
         next.recipes = next.recipes.filter((recipe) => recipe.id !== selectedId);
+      } else if (tab === "quests") {
+        next.quests = next.quests.filter((quest) => quest.id !== selectedId);
+        for (const location of next.locations) {
+          for (const [direction, questId] of Object.entries(location.exit_requirements || {})) {
+            if (questId === selectedId) delete location.exit_requirements[direction];
+          }
+        }
       } else {
         const removed = entitiesById.get(selectedId);
         next.entities = next.entities.filter((entity) => entity.id !== selectedId);
+        const removedQuestIds = next.quests
+          .filter((quest) => quest.giver_npc_id === selectedId
+              || quest.reward_items?.some((reward) => reward.item_id === selectedId)
+              || quest.steps.some((step) => step.objectives.some(
+                (objective) => objective.type !== "visit" && objective.target_id === selectedId,
+              )))
+          .map((quest) => quest.id);
+        next.quests = next.quests.filter((quest) => !removedQuestIds.includes(quest.id));
         for (const location of next.locations) {
           for (const key of ["enemy_ids", "npc_ids", "object_ids", "resource_ids"]) {
             location[key] = location[key].filter((entityId) => entityId !== selectedId);
+          }
+          for (const [direction, questId] of Object.entries(location.exit_requirements || {})) {
+            if (removedQuestIds.includes(questId)) delete location.exit_requirements[direction];
           }
         }
         for (const entity of next.entities) {
@@ -519,7 +601,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
             {NAVIGATION.map(([id, label]) => (
               <button aria-current={tab === id ? "page" : undefined} className={tab === id ? "active" : ""} key={id} onClick={() => changeTab(id)} type="button">
                 <span>{label}</span>
-                <small>{id === "map" ? content.locations.length : id === "locations" ? content.locations.length : id === "recipes" ? content.recipes.length : visibleCount(content, id)}</small>
+                <small>{id === "map" || id === "locations" ? content.locations.length : id === "recipes" ? content.recipes.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
               </button>
             ))}
             <div className="studio-nav-note">
@@ -553,19 +635,19 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                   <div className="studio-list-heading">
                     <div><p className="eyebrow">{tab === "locations" ? "WORLD AREAS" : tab === "recipes" ? "CRAFTING" : "CATALOG"}</p><h2>{NAVIGATION.find(([id]) => id === tab)?.[1]}</h2></div>
                     {tab !== "locations" || content.locations.length > 0 ? (
-                      <button aria-label={`Create ${tab === "locations" ? "location" : tab === "recipes" ? "recipe" : "entity"}`} className="studio-add-button" onClick={createEntry} type="button">+</button>
+                      <button aria-label={`Create ${tab === "locations" ? "location" : tab === "recipes" ? "recipe" : tab === "quests" ? "quest" : "entity"}`} className="studio-add-button" onClick={createEntry} type="button">+</button>
                     ) : null}
                   </div>
                   <div className="studio-entry-list">
-                    {(tab === "locations" ? content.locations : tab === "recipes" ? recipes : visibleEntities).map((entry) => (
+                    {currentEntries.map((entry) => (
                       <button className={`studio-entry ${selectedId === entry.id ? "selected" : ""}`} key={entry.id} onClick={() => setSelectedId(entry.id)} type="button">
-                        <span>{entry.name}</span>
+                        <span>{tab === "quests" ? entry.title : entry.name}</span>
                         <small>{entry.id}</small>
                       </button>
                     ))}
-                    {(tab === "locations" ? content.locations : tab === "recipes" ? recipes : visibleEntities).length === 0 && <p className="studio-empty">Nothing here yet. Use + to create one.</p>}
+                    {currentEntries.length === 0 && <p className="studio-empty">Nothing here yet. Use + to create one.</p>}
                   </div>
-                  {(currentLocation || currentRecipe || currentEntity) && (
+                  {(currentLocation || currentRecipe || currentQuest || currentEntity) && (
                     <button className="studio-delete-button" onClick={deleteEntry} type="button">Delete selected</button>
                   )}
                 </aside>
@@ -575,6 +657,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       location={currentLocation}
                       entitiesById={entitiesById}
                       locations={content.locations}
+                      quests={quests}
                       onChange={updateLocation}
                     />
                   )}
@@ -583,6 +666,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       entity={currentEntity}
                       locations={content.locations}
                       entities={content.entities}
+                      lootItems={eligibleItems}
                       onChange={updateEntity}
                       onLocationToggle={(locationId, relationField, checked) => updateContent((next) => {
                         const location = next.locations.find((item) => item.id === locationId);
@@ -606,7 +690,19 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       })}
                     />
                   )}
-                  {!currentLocation && !currentEntity && !currentRecipe && <div className="studio-empty-detail">Select an entry or create a new one.</div>}
+                  {currentQuest && tab === "quests" && (
+                    <QuestEditor
+                      quest={currentQuest}
+                      npcs={content.entities.filter((entity) => entity.type === "npc")}
+                      entities={content.entities}
+                      locations={content.locations}
+                      onChange={(field, value) => updateContent((next) => {
+                        const quest = next.quests.find((item) => item.id === selectedId);
+                        if (quest) field(quest, value);
+                      })}
+                    />
+                  )}
+                  {!currentLocation && !currentEntity && !currentRecipe && !currentQuest && <div className="studio-empty-detail">Select an entry or create a new one.</div>}
                 </div>
               </div>
             )}
@@ -623,7 +719,7 @@ function visibleCount(content, tab) {
   return content.entities.filter((entity) => entity.type === type).length;
 }
 
-function LocationEditor({ location, entitiesById, locations, onChange }) {
+function LocationEditor({ location, entitiesById, locations, quests, onChange }) {
   function change(field, value) {
     onChange((current, nextValue) => { current[field] = nextValue; }, value);
   }
@@ -689,6 +785,25 @@ function LocationEditor({ location, entitiesById, locations, onChange }) {
             />
           ))}
         </div>
+        <h4>Quest-gated exits</h4>
+        <p>Players who have not completed the selected quest can see the exit but cannot use it.</p>
+        <div className="studio-gate-list">
+          {Object.keys(location.exits).map((direction) => (
+            <SelectField
+              key={direction}
+              label={`${direction} exit requirement`}
+              options={quests.map((quest) => ({ id: quest.id, name: quest.title }))}
+              value={location.exit_requirements?.[direction]}
+              onChange={(questId) => onChange((current) => {
+                current.exit_requirements ||= {};
+                if (questId) current.exit_requirements[direction] = questId;
+                else delete current.exit_requirements[direction];
+              })}
+              emptyLabel="No quest required"
+            />
+          ))}
+          {Object.keys(location.exits).length === 0 && <p className="studio-hint">Connect an exit before adding a gate.</p>}
+        </div>
       </section>
       <section className="studio-subsection">
         <h3>Location population</h3>
@@ -703,7 +818,7 @@ function LocationEditor({ location, entitiesById, locations, onChange }) {
   );
 }
 
-function EntityEditor({ entity, entities, locations, onChange, onLocationToggle }) {
+function EntityEditor({ entity, entities, locations, lootItems, onChange, onLocationToggle }) {
   const relationField = {
     enemy: "enemy_ids",
     npc: "npc_ids",
@@ -826,6 +941,9 @@ function EntityEditor({ entity, entities, locations, onChange, onLocationToggle 
           {Object.keys(entity.attributes).length === 0 && <p className="studio-hint">No attributes. Add stats such as health, speed, damage, or value.</p>}
         </div>
       </section>
+      {entity.type === "enemy" && (
+        <LootTableEditor entries={entity.loot_table || []} items={lootItems} onChange={(value) => set("loot_table", value)} />
+      )}
       {relationField && (
         <EntityPicker
           title="Present in locations"
@@ -853,6 +971,367 @@ function EntityEditor({ entity, entities, locations, onChange, onLocationToggle 
           </section>
         </>
       )}
+    </div>
+  );
+}
+
+function LootTableEditor({ entries, items, onChange }) {
+  function updateEntry(index, field, value) {
+    onChange(entries.map((entry, entryIndex) => (
+      entryIndex === index ? { ...entry, [field]: value } : entry
+    )));
+  }
+
+  return (
+    <section className="studio-subsection">
+      <div className="studio-subsection-heading">
+        <div><h3>Loot table</h3><p>Each entry rolls once when this enemy is defeated.</p></div>
+        <button
+          className="studio-small-button"
+          disabled={items.length === 0}
+          onClick={() => onChange([...entries, {
+            item_id: items[0].id,
+            chance: 0.5,
+            minimum_quantity: 1,
+            maximum_quantity: 1,
+          }])}
+          type="button"
+        >
+          Add drop
+        </button>
+      </div>
+      {entries.map((entry, index) => (
+        <div className="studio-loot-row" key={`${entry.item_id}-${index}`}>
+          <SelectField
+            label="Dropped item"
+            options={items}
+            value={entry.item_id}
+            onChange={(value) => updateEntry(index, "item_id", value)}
+          />
+          <Field
+            label="Chance (%)"
+            min={0}
+            max={100}
+            step={0.1}
+            onChange={(value) => updateEntry(index, "chance", value / 100)}
+            type="number"
+            value={Number((entry.chance * 100).toFixed(1))}
+          />
+          <Field
+            label="Minimum"
+            min={1}
+            onChange={(value) => updateEntry(index, "minimum_quantity", value)}
+            type="number"
+            value={entry.minimum_quantity}
+          />
+          <Field
+            label="Maximum"
+            min={1}
+            onChange={(value) => updateEntry(index, "maximum_quantity", value)}
+            type="number"
+            value={entry.maximum_quantity}
+          />
+          <button
+            aria-label={`Remove ${entry.item_id} loot entry`}
+            className="studio-remove-button"
+            onClick={() => onChange(entries.filter((_, entryIndex) => entryIndex !== index))}
+            type="button"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      {entries.length === 0 && <p className="studio-hint">This enemy does not drop loot.</p>}
+      {items.length === 0 && <p className="studio-hint">Create an item or resource before adding a drop.</p>}
+    </section>
+  );
+}
+
+function QuestEditor({ quest, npcs, entities, locations, onChange }) {
+  function set(field, value) {
+    onChange((current, next) => { current[field] = next; }, value);
+  }
+
+  const objectiveTypes = [
+    { id: "collect", name: "Collect item" },
+    { id: "kill", name: "Defeat enemy" },
+    { id: "talk", name: "Talk to NPC" },
+    { id: "visit", name: "Visit location" },
+  ];
+
+  function targetsFor(type) {
+    if (type === "visit") return locations;
+    const validTypes = {
+      collect: ["item", "weapon", "resource"],
+      kill: ["enemy"],
+      talk: ["npc"],
+    }[type] || [];
+    return entities.filter((entity) => validTypes.includes(entity.type));
+  }
+
+  function createObjective(step) {
+    const type = objectiveTypes.find((candidate) => targetsFor(candidate.id).length)?.id;
+    const target = type ? targetsFor(type)[0] : null;
+    if (!target) return null;
+    const id = makeId("objective", new Set(step.objectives.map((objective) => objective.id)));
+    return { id, type, target_id: target.id, quantity: 1 };
+  }
+
+  function updateStep(stepIndex, mutator) {
+    onChange((current) => mutator(current.steps[stepIndex], current));
+  }
+
+  function removeStep(stepIndex) {
+    onChange((current) => {
+      const removedId = current.steps[stepIndex].id;
+      const nextId = current.steps[stepIndex + 1]?.id || null;
+      current.steps.splice(stepIndex, 1);
+      for (const step of current.steps) {
+        for (const choice of step.choices) {
+          if (choice.next_step_id === removedId) choice.next_step_id = nextId;
+        }
+      }
+      if (current.start_step_id === removedId) current.start_step_id = nextId || current.steps[0].id;
+    });
+  }
+
+  return (
+    <div className="studio-form">
+      <div className="studio-detail-heading">
+        <div><p className="eyebrow">QUEST / {quest.id}</p><h2>{quest.title}</h2></div>
+        <span className="studio-kind-tag">QUEST</span>
+      </div>
+      <Field label="Quest title" value={quest.title} onChange={(value) => set("title", value)} />
+      <TextAreaField label="Description shown to players" value={quest.description} onChange={(value) => set("description", value)} />
+      <SelectField
+        label="Quest giver"
+        options={npcs}
+        value={quest.giver_npc_id}
+        onChange={(value) => set("giver_npc_id", value)}
+      />
+      <section className="studio-subsection studio-quest-steps">
+        <div className="studio-subsection-heading">
+          <div><h3>Quest steps</h3><p>Each step needs objectives and explicit player choices. Ending choices send the player back to the giver.</p></div>
+          <button
+            className="studio-small-button"
+            disabled={quest.steps.length >= 100 || quest.steps[quest.steps.length - 1].choices.length >= 20}
+            onClick={() => onChange((current) => {
+              const stepId = makeId(`step_${current.steps.length + 1}`, new Set(current.steps.map((step) => step.id)));
+              const step = {
+                id: stepId,
+                title: `Step ${current.steps.length + 1}`,
+                description: "",
+                objectives: [],
+                choices: [{ id: "finish", text: "Return to the quest giver", next_step_id: null }],
+              };
+              const objective = createObjective(step);
+              if (!objective) return;
+              step.objectives.push(objective);
+              const previous = current.steps[current.steps.length - 1];
+              previous.choices.push({
+                id: makeId("continue", new Set(previous.choices.map((choice) => choice.id))),
+                text: `Continue to ${step.title}`,
+                next_step_id: stepId,
+              });
+              current.steps.push(step);
+            })}
+            type="button"
+          >
+            Add step
+          </button>
+        </div>
+        {quest.steps.map((step, stepIndex) => (
+          <section className="studio-quest-step" key={step.id}>
+            <div className="studio-subsection-heading">
+              <h3>Step {stepIndex + 1}</h3>
+              <button
+                aria-label={`Remove step ${stepIndex + 1}`}
+                className="studio-remove-button"
+                disabled={quest.steps.length === 1}
+                onClick={() => removeStep(stepIndex)}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <Field
+              label="Step title"
+              value={step.title}
+              onChange={(value) => updateStep(stepIndex, (current) => { current.title = value; })}
+            />
+            <TextAreaField
+              label="Step description"
+              value={step.description}
+              onChange={(value) => updateStep(stepIndex, (current) => { current.description = value; })}
+              rows={2}
+            />
+            <div className="studio-subsection-heading">
+              <div><h4>Objectives</h4><p>Collect checks inventory; defeated enemies, NPC conversations, and visits count as they happen.</p></div>
+              <button
+                className="studio-small-button"
+                disabled={step.objectives.length >= 20}
+                onClick={() => updateStep(stepIndex, (current) => {
+                  const objective = createObjective(current);
+                  if (objective) current.objectives.push(objective);
+                })}
+                type="button"
+              >
+                Add objective
+              </button>
+            </div>
+            {step.objectives.map((objective, objectiveIndex) => {
+              const targets = targetsFor(objective.type);
+              return (
+                <div className="studio-quest-objective" key={objective.id}>
+                  <SelectField
+                    label="Objective type"
+                    options={objectiveTypes.filter((candidate) => targetsFor(candidate.id).length)}
+                    value={objective.type}
+                    onChange={(type) => updateStep(stepIndex, (current) => {
+                      const target = targetsFor(type)[0];
+                      current.objectives[objectiveIndex] = {
+                        ...current.objectives[objectiveIndex],
+                        type,
+                        target_id: target?.id || "",
+                        quantity: ["talk", "visit"].includes(type) ? 1 : current.objectives[objectiveIndex].quantity,
+                      };
+                    })}
+                  />
+                  <SelectField
+                    label="Target"
+                    options={targets}
+                    value={objective.target_id}
+                    onChange={(targetId) => updateStep(stepIndex, (current) => {
+                      current.objectives[objectiveIndex].target_id = targetId;
+                    })}
+                  />
+                  <Field
+                    label="Count"
+                    min={1}
+                    onChange={(value) => updateStep(stepIndex, (current) => {
+                      current.objectives[objectiveIndex].quantity = value;
+                    })}
+                    type="number"
+                    value={objective.quantity}
+                  />
+                  <button
+                    aria-label={`Remove objective ${objectiveIndex + 1} from step ${stepIndex + 1}`}
+                    className="studio-remove-button"
+                    disabled={step.objectives.length === 1}
+                    onClick={() => updateStep(stepIndex, (current) => {
+                      current.objectives.splice(objectiveIndex, 1);
+                    })}
+                    type="button"
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+            <div className="studio-subsection-heading">
+              <div><h4>Player choices</h4><p>Choices only appear after every objective in this step is complete.</p></div>
+              <button
+                className="studio-small-button"
+                disabled={step.choices.length >= 20}
+                onClick={() => updateStep(stepIndex, (current) => {
+                  current.choices.push({
+                    id: makeId("choice", new Set(current.choices.map((choice) => choice.id))),
+                    text: "Return to the quest giver",
+                    next_step_id: null,
+                  });
+                })}
+                type="button"
+              >
+                Add choice
+              </button>
+            </div>
+            {step.choices.map((choice, choiceIndex) => (
+              <div className="studio-quest-choice" key={choice.id}>
+                <Field
+                  label="Choice text"
+                  value={choice.text}
+                  onChange={(value) => updateStep(stepIndex, (current) => {
+                    current.choices[choiceIndex].text = value;
+                  })}
+                />
+                <SelectField
+                  emptyLabel="Complete quest"
+                  label="Then go to"
+                  options={quest.steps.slice(stepIndex + 1).map((targetStep) => ({
+                    id: targetStep.id,
+                    name: targetStep.title,
+                  }))}
+                  value={choice.next_step_id}
+                  onChange={(nextStepId) => updateStep(stepIndex, (current) => {
+                    current.choices[choiceIndex].next_step_id = nextStepId;
+                  })}
+                />
+                <button
+                  aria-label={`Remove choice ${choiceIndex + 1} from step ${stepIndex + 1}`}
+                  className="studio-remove-button"
+                  disabled={step.choices.length === 1}
+                  onClick={() => updateStep(stepIndex, (current) => {
+                    current.choices.splice(choiceIndex, 1);
+                  })}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </section>
+        ))}
+      </section>
+      <Field
+        label="Experience reward"
+        min={0}
+        onChange={(value) => set("reward_experience", value)}
+        type="number"
+        value={quest.reward_experience}
+      />
+      <section className="studio-subsection">
+        <div className="studio-subsection-heading">
+          <div><h3>Item rewards</h3><p>Players receive these when they return to the giver for final turn-in.</p></div>
+          <button
+            className="studio-small-button"
+            disabled={(quest.reward_items || []).length >= 20 || !entities.some((entity) => ["item", "weapon", "resource"].includes(entity.type))}
+            onClick={() => onChange((current) => {
+              const rewardItems = entities.filter((entity) => ["item", "weapon", "resource"].includes(entity.type));
+              if (!rewardItems.length) return;
+              current.reward_items.push({ item_id: rewardItems[0].id, quantity: 1 });
+            })}
+            type="button"
+          >
+            Add reward
+          </button>
+        </div>
+        {(quest.reward_items || []).map((reward, index) => (
+          <div className="studio-quest-objective" key={`${reward.item_id}-${index}`}>
+            <SelectField
+              label="Reward item"
+              options={entities.filter((entity) => ["item", "weapon", "resource"].includes(entity.type))}
+              value={reward.item_id}
+              onChange={(itemId) => onChange((current) => { current.reward_items[index].item_id = itemId; })}
+            />
+            <Field
+              label="Quantity"
+              min={1}
+              onChange={(value) => onChange((current) => { current.reward_items[index].quantity = value; })}
+              type="number"
+              value={reward.quantity}
+            />
+            <button
+              aria-label={`Remove ${reward.item_id} quest reward`}
+              className="studio-remove-button"
+              onClick={() => onChange((current) => { current.reward_items.splice(index, 1); })}
+              type="button"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </section>
+      <p className="studio-hint">To gate a passage, select this quest as the exit requirement in the destination location's editor.</p>
     </div>
   );
 }
