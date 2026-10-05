@@ -1,0 +1,338 @@
+{
+  "schema_version": 1,
+  "locations": [
+    {
+      "id": "human_city",
+      "name": "Dawnmere",
+      "description": "Stone streets climb toward Dawnmere's lantern-lit keep.",
+      "position": {
+        "x": 27,
+        "y": 48
+      },
+      "starting_species": [
+        "human"
+      ],
+      "exits": {
+        "east": "goblin_town",
+        "west": "new_location_2"
+      },
+      "ambience": [],
+      "enemy_ids": [],
+      "npc_ids": [],
+      "object_ids": [
+        "city_workbench"
+      ],
+      "resource_ids": []
+    },
+    {
+      "id": "goblin_town",
+      "name": "Mossback",
+      "description": "Moss-covered homes gather beneath the old forest canopy.",
+      "position": {
+        "x": 73,
+        "y": 48
+      },
+      "starting_species": [
+        "goblin"
+      ],
+      "exits": {
+        "west": "human_city"
+      },
+      "ambience": [],
+      "enemy_ids": [
+        "forest_rat"
+      ],
+      "npc_ids": [],
+      "object_ids": [],
+      "resource_ids": [
+        "wild_herbs"
+      ]
+    },
+    {
+      "id": "new_location",
+      "name": "The Plain",
+      "description": "An opening in a forest of dense, stubby, bushy trees hosts a campfire and logs to sit on. The grass is dark green, and the only noise to hear is that of howling wind and rustling leaves.",
+      "position": {
+        "x": 50,
+        "y": 50
+      },
+      "starting_species": [],
+      "exits": {
+        "east": "new_location_2"
+      },
+      "ambience": [
+        "Wind howls as it surfs over the grass.",
+        "The campfire spits ash that you can feel heat your body."
+      ],
+      "enemy_ids": [],
+      "npc_ids": [
+        "old_guide"
+      ],
+      "object_ids": [
+        "new_furniture"
+      ],
+      "resource_ids": []
+    },
+    {
+      "id": "new_location_2",
+      "name": "Path to Oblivion",
+      "description": "A dirt path surrounded by trees opens up, lit only by oil lamps hung on makeshift poles. The wind blowing through the trees is a reminder of how hollow and lifeless this area is. ",
+      "position": {
+        "x": 50,
+        "y": 50
+      },
+      "starting_species": [],
+      "exits": {
+        "west": "new_location",
+        "east": "human_city"
+      },
+      "ambience": [
+        "Oil lamps creak as they swing in the wind.",
+        "Leaves are blown through the forest, sounding like a creature sprinting through the bushes."
+      ],
+      "enemy_ids": [
+        "new_enemy"
+      ],
+      "npc_ids": [],
+      "object_ids": [],
+      "resource_ids": []
+    }
+  ],
+  "entities": [
+    {
+      "id": "forest_rat",
+      "type": "enemy",
+      "name": "Forest rat",
+      "description": "A wary rat, at home beneath the forest canopy.",
+      "attributes": {
+        "health": 12,
+        "attack": 2,
+        "defense": 0,
+        "speed": 10,
+        "experience": 3
+      },
+      "attack_die_sides": 2,
+      "race": null,
+      "present_for": null,
+      "dialogue": null,
+      "ambience": [],
+      "stock": [],
+      "weapon_ids": []
+    },
+    {
+      "id": "old_guide",
+      "type": "npc",
+      "name": "The Old Man",
+      "description": "An old man with blue robes, white hair, a makeshift cane, and a hunched back mutters to himself as he stands near the fire. ",
+      "attributes": {
+        "health": 100
+      },
+      "race": "human",
+      "present_for": [
+        "human"
+      ],
+      "dialogue": {
+        "start_node_id": "dialogue_node",
+        "nodes": [
+          {
+            "id": "dialogue_node",
+            "title": "Intro",
+            "text": "Ah. Another one has been sent down to this bleak place. I have been around a long time, young man. I have taken a vow of assistance to those new to these lands. You just 'ave to let me know what it is ya need.",
+            "choices": [
+              {
+                "id": "choice",
+                "text": "Help me with navigating the world.",
+                "next_node_id": "dialogue_node_2"
+              },
+              {
+                "id": "choice_2",
+                "text": "Help with resting",
+                "next_node_id": "dialogue_node_3"
+              }
+            ]
+          },
+          {
+            "id": "dialogue_node_2",
+            "title": "Typing Help",
+            "text": "Yes, yes. This place is different from other adventures you may have been on. Yes indeed, there are no silent protagonists or creatures of few words. Feel free to express yourself however ya'd like here.",
+            "choices": [
+              {
+                "id": "choice",
+                "text": "Back",
+                "next_node_id": "dialogue_node"
+              }
+            ]
+          },
+          {
+            "id": "dialogue_node_3",
+            "title": "Resting",
+            "text": "There are many a way to feel refreshed round here. Like this campfire here!",
+            "choices": [
+              {
+                "id": "choice",
+                "text": "Back",
+                "next_node_id": "dialogue_node"
+              }
+            ]
+          },
+          {
+            "id": "dialogue_node_4",
+            "title": "Where",
+            "text": "...that is what e'ry one wants to know. Yes. This land is a desolate, unforgiving, disgusting place of pure PLIGHT. The races are at odds; class inequality is e'ry where, not to mention the crime. This world can be whatever ya need it be if ya're persistent enough!",
+            "choices": [
+              {
+                "id": "choice",
+                "text": "Back",
+                "next_node_id": "dialogue_node"
+              }
+            ]
+          }
+        ]
+      },
+      "ambience": [
+        "The Old Man mumbles to himself.",
+        "The Old Man taps his cane, seemingly impatient."
+      ],
+      "stock": [],
+      "weapon_ids": []
+    },
+    {
+      "id": "wood",
+      "type": "item",
+      "name": "Wood",
+      "description": "Useful timber gathered from the forest.",
+      "attributes": {
+        "weight": 1,
+        "stack_size": 99,
+        "value": 1
+      },
+      "race": null,
+      "present_for": null,
+      "dialogue": null,
+      "ambience": [],
+      "stock": [],
+      "weapon_ids": []
+    },
+    {
+      "id": "wooden_club",
+      "type": "weapon",
+      "name": "Wooden club",
+      "description": "A simple weapon shaped from a sturdy length of wood.",
+      "attributes": {
+        "damage": 3,
+        "speed": 8,
+        "stamina_cost": 1,
+        "value": 2
+      },
+      "race": null,
+      "present_for": null,
+      "dialogue": null,
+      "ambience": [],
+      "stock": [],
+      "weapon_ids": []
+    },
+    {
+      "id": "iron_sword",
+      "type": "weapon",
+      "name": "Iron sword",
+      "description": "A dependable one-handed blade.",
+      "attributes": {
+        "damage": 5,
+        "speed": 10,
+        "stamina_cost": 1,
+        "value": 10
+      },
+      "race": null,
+      "present_for": null,
+      "dialogue": null,
+      "ambience": [],
+      "stock": [],
+      "weapon_ids": []
+    },
+    {
+      "id": "city_workbench",
+      "type": "furniture",
+      "name": "Woodworker's bench",
+      "description": "A sturdy bench for shaping gathered timber.",
+      "attributes": {
+        "durability": 100
+      },
+      "race": null,
+      "present_for": null,
+      "dialogue": null,
+      "ambience": [],
+      "stock": [],
+      "weapon_ids": []
+    },
+    {
+      "id": "wild_herbs",
+      "type": "resource",
+      "name": "Wild herbs",
+      "description": "A patch of fragrant herbs growing beside the path.",
+      "attributes": {
+        "yield": 2,
+        "respawn_minutes": 60
+      },
+      "race": null,
+      "present_for": null,
+      "dialogue": null,
+      "ambience": [],
+      "stock": [],
+      "weapon_ids": []
+    },
+    {
+      "id": "new_enemy",
+      "type": "enemy",
+      "name": "Slug",
+      "description": "A squishy, moist, slow creature. The slug is a common dweller in most places.",
+      "attributes": {
+        "health": 20,
+        "attack": 3,
+        "defense": 1,
+        "speed": 10
+      },
+      "attack_die_sides": 2,
+      "race": null,
+      "present_for": null,
+      "dialogue": null,
+      "ambience": [
+        "A slug squishes at your feet.",
+        "A trail of slug slime is in the corner of your eye."
+      ],
+      "stock": [],
+      "weapon_ids": []
+    },
+    {
+      "id": "new_furniture",
+      "type": "furniture",
+      "name": "Campfire",
+      "description": "A campfire is bright, tall, and spitting.",
+      "attributes": {
+        "durability": 100
+      },
+      "race": null,
+      "present_for": null,
+      "dialogue": null,
+      "ambience": [],
+      "stock": [],
+      "weapon_ids": []
+    }
+  ],
+  "recipes": [
+    {
+      "id": "craft_wooden_club",
+      "name": "Wooden club",
+      "output_item_id": "wooden_club",
+      "output_quantity": 1,
+      "ingredients": [
+        {
+          "item_id": "wood",
+          "quantity": 2
+        }
+      ],
+      "station_id": "city_workbench",
+      "skill": "woodworking",
+      "skill_level": 1
+    }
+  ]
+}
