@@ -1017,7 +1017,6 @@ export default function App() {
                         {direction}{destination ? ` → ${destination}` : ""}
                         {exit.accessible === false ? " · SEALED" : ""}
                       </button>
-                      {exit.reason && <small>{exit.reason}</small>}
                     </div>
                   );
                 }}
