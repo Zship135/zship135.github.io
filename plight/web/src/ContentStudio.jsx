@@ -1020,7 +1020,6 @@ function LootTableEditor({ entries, items, onChange }) {
           <Field
             label="Minimum quantity"
             min={1}
-            max={1_000_000}
             onChange={(value) => updateEntry(index, "minimum_quantity", value)}
             type="number"
             value={entry.minimum_quantity}
@@ -1028,7 +1027,6 @@ function LootTableEditor({ entries, items, onChange }) {
           <Field
             label="Maximum quantity"
             min={1}
-            max={1_000_000}
             onChange={(value) => updateEntry(index, "maximum_quantity", value)}
             type="number"
             value={entry.maximum_quantity}
