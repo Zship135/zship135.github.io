@@ -1044,7 +1044,7 @@ export default function App() {
             <p>{profile.species} · Last seen in {profile.area_name}{profile.pronouns ? ` · ${profile.pronouns}` : ""}</p>
             {profile.account_id === snapshot?.account_id ? (
               <form className="profile-edit-form" onSubmit={saveProfile}>
-                <label>Pronouns (optional)<input maxLength={64} onChange={(event) => setProfileForm((current) => ({ ...current, pronouns: event.target.value }))} value={profileForm.pronouns} /></label>
+                <label>Pronouns<input maxLength={64} onChange={(event) => setProfileForm((current) => ({ ...current, pronouns: event.target.value }))} value={profileForm.pronouns} /></label>
                 <label>Character lore<textarea maxLength={2000} onChange={(event) => setProfileForm((current) => ({ ...current, lore: event.target.value }))} rows={5} value={profileForm.lore} /></label>
                 <label>Profile picture<input accept="image/png,image/jpeg,image/webp" disabled={profileBusy} onChange={(event) => { uploadProfilePicture(event.target.files?.[0]); event.target.value = ""; }} type="file" /></label>
                 {profile.picture_src && <button className="text-button" disabled={profileBusy} onClick={removeProfilePicture} type="button">Remove profile picture</button>}
@@ -1083,7 +1083,7 @@ export default function App() {
             {incomingRequests.length > 0 && <section className="people-section"><h3>Friend requests</h3>
               {incomingRequests.map((request) => <article className="player-card" key={request.request_id}>
                 <button className="player-name-link" onClick={() => openPlayerProfile(request.player.account_id)} type="button">{request.player.name}</button>
-                <p>{request.player.species} · {request.player.pronouns || "Pronouns not shared"}</p>
+                <p>{[request.player.species, request.player.pronouns].filter(Boolean).join(" · ")}</p>
                 <p>{request.player.lore || "No lore has been shared yet."}</p>
                 <button className="dialogue-choice-button" disabled={peopleBusy} onClick={() => requestFriend({ ...request.player, friend_status: "incoming_pending" })} type="button">Accept request</button>
               </article>)}
@@ -1099,7 +1099,7 @@ export default function App() {
                     <button className="player-name-link" onClick={() => openPlayerProfile(player.account_id)} type="button">{player.name}</button>
                     {directoryPictureUrls[player.account_id] && <img alt="" className="player-thumb" src={directoryPictureUrls[player.account_id]} />}
                   </div>
-                  <p>{player.species} · {player.pronouns || "Pronouns not shared"} · Last seen in {player.area_name}</p>
+                  <p>{[player.species, player.pronouns, player.area_name ? `Last seen in ${player.area_name}` : ""].filter(Boolean).join(" · ")}</p>
                   <p>{player.lore || "No lore has been shared yet."}</p>
                   <button className="dialogue-choice-button" disabled={peopleBusy || action.disabled} onClick={() => requestFriend(player)} type="button">{action.label}</button>
                 </article>;
