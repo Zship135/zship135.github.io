@@ -32,6 +32,52 @@ const CATEGORY_NAMES = {
   resource: "Resources",
 };
 
+const NPC_RACE_GROUPS = [
+  ["Common peoples", [
+    "human", "elf", "high_elf", "wood_elf", "dark_elf", "sea_elf",
+    "dwarf", "hill_dwarf", "mountain_dwarf", "gnome", "halfling",
+    "orc", "half_orc", "goblin", "hobgoblin", "bugbear", "kobold",
+    "ogre", "troll", "giant", "cyclops",
+  ]],
+  ["Fey and nature folk", [
+    "fae", "fairy", "pixie", "sprite", "brownie", "dryad", "nymph",
+    "satyr", "faun", "centaur", "minotaur", "changeling", "fey_touched",
+    "plantfolk", "mushroom_folk", "slimefolk",
+  ]],
+  ["Sea and mythic folk", [
+    "harpy", "siren", "mermaid", "merman", "merfolk", "selkie", "sea_folk",
+    "triton", "naiad", "undine", "sylph", "salamander", "oni", "tengu",
+    "kitsune", "kappa",
+  ]],
+  ["Elemental and constructed", [
+    "elemental", "air_elemental", "earth_elemental", "fire_elemental",
+    "water_elemental", "djinn", "genie", "golem", "construct", "automaton",
+    "homunculus",
+  ]],
+  ["Scaled and beast folk", [
+    "dragon", "dragonkin", "draconic", "drakefolk", "lizardfolk", "snakefolk",
+    "beastfolk", "catfolk", "wolfkin", "foxfolk", "ratfolk", "bearfolk",
+    "boarfolk", "rabbitfolk", "deerfolk", "lionfolk", "birdfolk", "avian",
+    "insectfolk", "mothfolk", "spiderfolk", "fishfolk", "sharkfolk",
+    "turtlefolk", "octopoid", "amphibian", "reptilian",
+  ]],
+  ["Undead", [
+    "vampire", "dhampir", "werewolf", "lycanthrope", "undead", "revenant",
+    "skeleton", "ghost", "ghoul", "lich", "mummy", "zombie",
+  ]],
+  ["Celestial, fiendish, and otherworldly", [
+    "angel", "celestial", "nephilim", "demon", "devil", "fiend", "spirit",
+    "shadowborn", "starborn", "dreamborn", "void_touched", "shapeshifter",
+    "half_elf", "half_giant", "half_dragon", "half_fae",
+  ]],
+].map(([label, races]) => ({
+  label,
+  options: races.map((id) => ({
+    id,
+    name: id.split("_").map((word) => word[0].toUpperCase() + word.slice(1)).join(" "),
+  })),
+}));
+
 const OPPOSITE_EXIT = { north: "south", south: "north", east: "west", west: "east" };
 
 function makeId(label, existingIds) {
@@ -712,12 +758,16 @@ function EntityEditor({ entity, entities, locations, onChange, onLocationToggle 
       <TextAreaField label="Description" value={entity.description} onChange={(value) => set("description", value)} />
       {entity.type === "npc" && (
         <>
-          <SelectField
-            label="NPC race"
-            options={[{ id: "human", name: "Human" }, { id: "goblin", name: "Goblin" }]}
-            value={entity.race}
-            onChange={(value) => set("race", value)}
-          />
+          <label className="studio-field">
+            <span>NPC race</span>
+            <select onChange={(event) => set("race", event.target.value)} value={entity.race}>
+              {NPC_RACE_GROUPS.map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.options.map((race) => <option key={race.id} value={race.id}>{race.name}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </label>
           <EntityPicker
             title="Present for player races"
             options={[{ id: "human", name: "Human players" }, { id: "goblin", name: "Goblin players" }]}
