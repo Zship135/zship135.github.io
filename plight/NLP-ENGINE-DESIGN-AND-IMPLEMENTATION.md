@@ -158,7 +158,7 @@ IDs below are internal examples of stable lowercase identifiers. The implementat
 
 | Canonical ID | Player intent / argument | MVP rule |
 |---|---|---|
-| `observe` | Optional visible entity/object target | Without a target, describe the current area. With a target, report details the character is currently allowed to perceive. Resolve immediately; it does not use a combat action slot. |
+| `observe` | Optional visible entity/object target or self-view subject | Without a target, describe the current area. `inventory` opens the player's own inventory/equipment menu; `armor`, `hands`, and `weapons` open that menu on the corresponding view. Phrases such as “look in my inventory” and “what am I carrying?” map to `observe` with subject `inventory`. Observing a co-located player opens that player's existing profile with equipped gear only; it never reveals their inventory. Resolve immediately; it does not use a combat action slot. |
 | `talk` | Required NPC target plus utterance/topic | Carry the player's utterance/topic to NPC dialogue rules. The NPC system, not the parser, generates the reply. Resolve immediately and do not use a combat action slot. Player-to-player chat is not this action. |
 | `travel` | One directly connected exit/direction | Move only through an exit from the current area; do not path-find to a farther destination. Resolve immediately outside combat and through the appropriate combat queue during combat. Validate the exit and current state at execution. |
 | `attack` | Enemy target | Strike with both equipped hands. Fists are the default; an owned weapon adds its authored damage to the player's attack stat. A named target must be present. |
@@ -169,8 +169,9 @@ IDs below are internal examples of stable lowercase identifiers. The implementat
 | `gather` | Resource/action plus required tool | Require a suitable resource in the current area and the correct tool. Start a timed gathering state; consume the resource and grant yield only on completion. While gathering, the character is action-locked except for `wait` and `cancel_gather`; the queue resumes after completion or cancellation. |
 | `cancel_gather` | No target | Cancel the active gathering state. Award no yield, consume no resource, and discard elapsed progress; a later attempt starts over. |
 | `craft` | Recipe ID or unambiguous recipe/product reference | Require a known recipe, all ingredients, required station, and required skill. Validate then consume ingredients and grant outputs atomically. |
-| `inspect_inventory` | Optional item filter | Return the character's own current inventory; no world-state mutation. |
-| `use_item` | Item and optional target | Defer effect, target, and consumption rules to item data and the authoritative item handler. The server checks ownership, context, and target. |
+| `equip_item` | Owned item and optional equipment slot | The server validates item ownership, authored equipment definition, and slot compatibility. The current content defines weapons for `left_hand` and `right_hand`; other item types are rejected with a clear missing-definition message. |
+| `unequip_item` | Equipment slot or equipped item | Clear the selected slot or locate the named equipped item. Hands return to fists. |
+| `use_item` | Item and optional target | Defer consumption/effect rules to item data and the authoritative item handler. Equipping is a separate `equip_item` action. |
 | `shop_buy` / `shop_sell` | Shop, item, quantity | Require a local NPC shop and valid stock/inventory. Use configured shop prices with local modifiers; do not feed player sales into global market prices in the MVP. Apply payment and item transfer atomically. |
 | `give_item` | Co-located player, item, quantity | Transfer immediately only when both players are in the same area; validate and transfer atomically. |
 | `trade_offer` / `trade_accept` | Co-located player and exact offered items/currency | A proposal reserves the proposer's offered items/currency. Both players must be co-located when proposed and accepted. Acceptance is explicit and atomic. Offers expire after 24 hours; rejection, cancellation, and expiry release reservations. |
@@ -179,6 +180,8 @@ IDs below are internal examples of stable lowercase identifiers. The implementat
 | `market_cancel` | Listing | Seller may cancel; immediately return unsold reserved goods. |
 
 Unknown named action words may map to the highest-ranked supported action as specified in Section 2, but handlers must never accept unknown action IDs. In particular, natural-language matching cannot create items, bypass tools/stations, skip costs, or transfer another character's assets without the corresponding server-side rule.
+
+The equipment schema supports `helm`, `tunic`, `pants`, `sleeves`, `gloves`, `boots`, `ring_1`–`ring_5`, `necklace_1`–`necklace_2`, `left_hand`, and `right_hand`. Empty armor/jewelry slots are stored explicitly. Existing two-hand equipment is retained when adding the expanded slots. New equipment definitions and bonuses belong in authored item data and server rules; do not infer or fabricate them from item names.
 
 ### 5.1 Starter recipes and resources
 

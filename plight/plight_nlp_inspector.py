@@ -17,7 +17,10 @@ LOCAL_PARSER_VERSION = "plight-local-0.1"
 
 # Each entry is an allow-listed Plight action and its player-facing verb aliases.
 ACTION_ALIASES: dict[str, tuple[str, ...]] = {
-    "observe": ("observe", "look", "look at", "inspect", "examine", "study", "check"),
+    "observe": (
+        "observe", "look", "look at", "inspect", "examine", "study", "check",
+        "what am i carrying", "what do i carry", "show my inventory", "open my inventory",
+    ),
     "talk": ("talk", "speak", "say", "tell", "ask", "whisper", "shout", "chat"),
     "travel": ("travel", "go", "walk", "run", "move", "head", "travel to", "sprint"),
     "attack": ("attack", "hit", "strike", "slash", "stab", "shoot", "kick", "fight"),
@@ -28,8 +31,9 @@ ACTION_ALIASES: dict[str, tuple[str, ...]] = {
     "gather": ("gather", "chop", "mine", "harvest", "collect", "forage"),
     "cancel_gather": ("cancel gathering", "cancel gather", "stop gathering"),
     "craft": ("craft", "make", "build", "create", "forge"),
-    "inspect_inventory": ("inspect inventory", "check inventory", "inventory", "view inventory"),
-    "use_item": ("use", "drink", "eat", "equip", "activate", "open"),
+    "equip_item": ("equip", "wear", "wield"),
+    "unequip_item": ("unequip", "remove", "take off"),
+    "use_item": ("use", "drink", "eat", "activate", "open"),
     "shop_buy": ("buy", "purchase"),
     "shop_sell": ("sell", "vend"),
     "give_item": ("give", "gift"),
@@ -52,7 +56,8 @@ ACTION_DESCRIPTIONS: dict[str, str] = {
     "gather": "gather, chop, mine, or harvest a resource with a tool",
     "cancel_gather": "cancel active gathering",
     "craft": "craft or make an item from a recipe",
-    "inspect_inventory": "inspect inventory or owned items",
+    "equip_item": "equip an owned item in a compatible equipment slot",
+    "unequip_item": "unequip an item or clear an equipment slot",
     "use_item": "use an item on a target",
     "shop_buy": "buy an item from a shop",
     "shop_sell": "sell an item to a shop",
@@ -225,7 +230,36 @@ def _extract_arguments(
         None,
     )
 
-    if mention.action_id in {"travel"}:
+    if mention.action_id == "observe":
+        if mention.phrase.casefold() in {
+            "what am i carrying", "what do i carry", "show my inventory", "open my inventory",
+        }:
+            args["subject"] = "inventory"
+            target = ""
+        else:
+            target = _clean_phrase(
+                re.sub(r"^(?:at|around|about|over|in|into)\s+", "", fragment, flags=re.I)
+            )
+        area_phrases = {
+            "area",
+            "current area",
+            "here",
+            "around",
+            "about",
+            "there",
+            "surroundings",
+            "my surroundings",
+            "the surroundings",
+            "room",
+            "the room",
+            "everything",
+            "the area",
+            "the whole area",
+        }
+        target_key = target.casefold().removeprefix("my ").removeprefix("the ")
+        if target and target.casefold() not in area_phrases:
+            args["subject"] = target_key if target_key in {"inventory", "armor", "armour", "hands", "weapons"} else target
+    elif mention.action_id in {"travel"}:
         direction = _DIRECTION_PATTERN.search(fragment)
         if direction:
             args["direction"] = re.sub(r"\s+", " ", direction.group(0).casefold())
@@ -277,6 +311,35 @@ def _extract_arguments(
     elif mention.action_id in {"inspect_inventory"}:
         if fragment:
             args["item_filter"] = _clean_phrase(fragment)
+    elif mention.action_id in {"equip_item", "unequip_item"}:
+        slot_names = (
+            "left hand", "right hand", "helm", "tunic", "pants", "sleeves",
+            "gloves", "boots", "ring 1", "ring 2", "ring 3", "ring 4", "ring 5",
+            "necklace 1", "necklace 2",
+        )
+        slot_pattern = re.compile(
+            r"\b(?:(?:in|to|from|into|off|out of)\s+)?(?:my\s+)?("
+            + "|".join(re.escape(name) for name in slot_names)
+            + r")\b",
+            re.I,
+        )
+        slot = slot_pattern.search(fragment)
+        if not slot:
+            slot = re.search(
+                r"\b(?:in|to|from|into|off|out of)\s+(?:my\s+)?"
+                r"([a-z][a-z0-9_]*(?:\s+\d+)?)\s*$",
+                fragment,
+                re.I,
+            )
+        if slot:
+            slot_name = re.sub(r"\s+", "_", slot.group(1).casefold())
+            args["slot"] = slot_name
+        item_text = fragment[: slot.start()] if slot else fragment
+        item_text = re.sub(r"^(?:my|the|a|an)\s+", "", item_text, flags=re.I)
+        if _clean_phrase(item_text) and _clean_phrase(item_text).casefold() not in {
+            "left hand", "right hand", *slot_names[2:],
+        }:
+            args["item"] = _quantity_and_name(item_text)
     elif mention.action_id in {"use_item", "shop_buy", "shop_sell", "market_list", "market_buy", "market_cancel"}:
         slot = (
             re.search(r"\b(?:in|to)\s+(?:my\s+)?(left|right)\s+hand\b", fragment, re.I)

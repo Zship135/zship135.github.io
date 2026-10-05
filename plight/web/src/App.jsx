@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, liveUrl } from "./api.js";
+import { api, apiBlob, liveUrl } from "./api.js";
 import ContentStudio from "./ContentStudio.jsx";
+import { friendAction } from "./playerProfile.js";
+import {
+  EQUIPMENT_SLOT_GROUPS,
+  EQUIPMENT_SLOT_LABELS,
+  equipmentSlotsForView,
+  formatEquipmentItem,
+  itemCanEquip,
+} from "./inventory.js";
 
 const TOKEN_KEY = "plight.session";
 const ACCOUNT_KEY = "plight.account";
@@ -139,8 +147,20 @@ export default function App() {
   const [activeChannelId, setActiveChannelId] = useState("global");
   const [messagesByChannel, setMessagesByChannel] = useState({});
   const [profile, setProfile] = useState(null);
+  const [profileForm, setProfileForm] = useState({ pronouns: "", lore: "" });
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [peopleOpen, setPeopleOpen] = useState(false);
+  const [peopleBusy, setPeopleBusy] = useState(false);
+  const [peopleError, setPeopleError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [playerResults, setPlayerResults] = useState([]);
+  const [friendList, setFriendList] = useState([]);
+  const [incomingRequests, setIncomingRequests] = useState([]);
+  const [directoryPictureUrls, setDirectoryPictureUrls] = useState({});
   const [command, setCommand] = useState("");
   const [commandBusy, setCommandBusy] = useState(false);
+  const [inventoryView, setInventoryView] = useState(null);
   const [notice, setNotice] = useState("");
   const socketRef = useRef(null);
   const activityScrollRef = useRef(null);
@@ -150,6 +170,7 @@ export default function App() {
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const recoveringCommandsRef = useRef(false);
+  const profilePictureUrlRef = useRef(null);
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
   const activeChannelIdRef = useRef(activeChannelId);
@@ -170,6 +191,36 @@ export default function App() {
       .then((result) => setCanEditContent(result.can_edit))
       .catch(showError);
   }, [token]);
+
+  useEffect(() => () => {
+    if (profilePictureUrlRef.current) URL.revokeObjectURL(profilePictureUrlRef.current);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadedUrls = [];
+    async function loadDirectoryPictures() {
+      const pairs = await Promise.all(playerResults.map(async (player) => {
+        if (!player.profile_picture_url) return [player.account_id, null];
+        try {
+          const image = await apiBlob(player.profile_picture_url, { token });
+          const url = URL.createObjectURL(image);
+          loadedUrls.push(url);
+          return [player.account_id, url];
+        } catch {
+          return [player.account_id, null];
+        }
+      }));
+      if (!cancelled) setDirectoryPictureUrls(Object.fromEntries(pairs.filter(([, url]) => url)));
+      else loadedUrls.forEach((url) => URL.revokeObjectURL(url));
+    }
+    setDirectoryPictureUrls({});
+    if (token && playerResults.length) loadDirectoryPictures();
+    return () => {
+      cancelled = true;
+      loadedUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [playerResults, token]);
 
   useEffect(() => {
     if (!snapshot?.area?.id) return undefined;
@@ -273,7 +324,188 @@ export default function App() {
       : [...current, { id: channelId, label: name }]);
     setActiveChannelId(channelId);
     setProfile(null);
+    if (profilePictureUrlRef.current) {
+      URL.revokeObjectURL(profilePictureUrlRef.current);
+      profilePictureUrlRef.current = null;
+    }
   }, [snapshot]);
+
+  function closeProfile() {
+    setProfile(null);
+    if (profilePictureUrlRef.current) {
+      URL.revokeObjectURL(profilePictureUrlRef.current);
+      profilePictureUrlRef.current = null;
+    }
+  }
+
+  function closePeople() {
+    setPeopleOpen(false);
+    setPlayerResults([]);
+    setSearchQuery("");
+    setDirectoryPictureUrls({});
+  }
+
+  async function showProfile(profileData) {
+    let nextProfile = { ...profileData, picture_src: null };
+    if (profileData.profile_picture_url) {
+      const image = await apiBlob(profileData.profile_picture_url, { token });
+      const objectUrl = URL.createObjectURL(image);
+      if (profilePictureUrlRef.current) URL.revokeObjectURL(profilePictureUrlRef.current);
+      profilePictureUrlRef.current = objectUrl;
+      nextProfile.picture_src = objectUrl;
+    } else if (profilePictureUrlRef.current) {
+      URL.revokeObjectURL(profilePictureUrlRef.current);
+      profilePictureUrlRef.current = null;
+    }
+    setProfile(nextProfile);
+    setProfileError("");
+  }
+
+  async function openOwnProfile() {
+    try {
+      const result = await api("/api/v1/profile", { token });
+      setProfileForm({ pronouns: result.pronouns || "", lore: result.lore || "" });
+      await showProfile(result);
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function openPlayerProfile(playerAccountId, equippedGear = null) {
+    setPeopleOpen(false);
+    try {
+      const result = await api(`/api/v1/players/${encodeURIComponent(playerAccountId)}/profile`, { token });
+      await showProfile(equippedGear ? { ...result, equipped_gear: equippedGear } : result);
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function openPeople() {
+    setPeopleOpen(true);
+    setPeopleError("");
+    setPeopleBusy(true);
+    try {
+      const [friendsResult, requestsResult] = await Promise.all([
+        api("/api/v1/friends", { token }),
+        api("/api/v1/friend-requests", { token }),
+      ]);
+      setFriendList(friendsResult);
+      setIncomingRequests(requestsResult.incoming);
+    } catch (error) {
+      setPeopleError(error.message);
+    } finally {
+      setPeopleBusy(false);
+    }
+  }
+
+  async function searchPlayers(event) {
+    event.preventDefault();
+    if (!searchQuery.trim()) {
+      setPlayerResults([]);
+      return;
+    }
+    setPeopleBusy(true);
+    setPeopleError("");
+    try {
+      const results = await api(`/api/v1/players?q=${encodeURIComponent(searchQuery.trim())}`, { token });
+      setPlayerResults(results);
+    } catch (error) {
+      setPeopleError(error.message);
+    } finally {
+      setPeopleBusy(false);
+    }
+  }
+
+  async function requestFriend(player) {
+    setPeopleBusy(true);
+    setPeopleError("");
+    try {
+      if (player.friend_status === "incoming_pending") {
+        const requests = await api("/api/v1/friend-requests", { token });
+        const request = requests.incoming.find((item) => item.player?.account_id === player.account_id);
+        if (request) {
+          await api(`/api/v1/friend-requests/${request.request_id}`, {
+            token,
+            method: "PATCH",
+            body: JSON.stringify({ status: "accepted" }),
+          });
+        }
+      } else {
+        await api("/api/v1/friend-requests", {
+          token,
+          method: "POST",
+          body: JSON.stringify({ recipient_account_id: player.account_id }),
+        });
+      }
+      const [results, friendsResult, requestsResult] = await Promise.all([
+        api(`/api/v1/players?q=${encodeURIComponent(searchQuery.trim())}`, { token }),
+        api("/api/v1/friends", { token }),
+        api("/api/v1/friend-requests", { token }),
+      ]);
+      setPlayerResults(results);
+      setFriendList(friendsResult);
+      setIncomingRequests(requestsResult.incoming);
+    } catch (error) {
+      setPeopleError(error.message);
+    } finally {
+      setPeopleBusy(false);
+    }
+  }
+
+  async function saveProfile(event) {
+    event.preventDefault();
+    setProfileBusy(true);
+    setProfileError("");
+    try {
+      const updated = await api("/api/v1/profile", {
+        token,
+        method: "PUT",
+        body: JSON.stringify(profileForm),
+      });
+      await showProfile(updated);
+    } catch (error) {
+      setProfileError(error.message);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function uploadProfilePicture(file) {
+    if (!file) return;
+    setProfileBusy(true);
+    setProfileError("");
+    try {
+      if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 512 * 1024) {
+        throw new Error("Choose a PNG, JPEG, or WebP image no larger than 512 KiB.");
+      }
+      const uploaded = await api("/api/v1/profile/picture", {
+        token,
+        method: "PUT",
+        body: file,
+        headers: { "Content-Type": file.type },
+      });
+      await showProfile(uploaded);
+    } catch (error) {
+      setProfileError(error.message);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function removeProfilePicture() {
+    setProfileBusy(true);
+    setProfileError("");
+    try {
+      await api("/api/v1/profile/picture", { token, method: "DELETE" });
+      const updated = await api("/api/v1/profile", { token });
+      await showProfile(updated);
+    } catch (error) {
+      setProfileError(error.message);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
 
   function showError(error) {
     if (error.status === 401) {
@@ -430,9 +662,8 @@ export default function App() {
     }
   }
 
-  async function submitCommand(event) {
-    event.preventDefault();
-    const text = command.trim();
+  async function runCommand(text) {
+    text = text.trim();
     if (!text || commandBusy) return;
     setCommandBusy(true);
     setNotice("");
@@ -451,7 +682,15 @@ export default function App() {
         JSON.stringify(loadPendingCommands(accountId).filter((item) => item.request_id !== request.request_id)),
       );
       setActivity((current) => upsertActivity(current, result));
-      setCommand("");
+      if (result.result?.inventory_view) setInventoryView(result.result.inventory_view);
+      const observedAccountId = result.result?.profile_account_ids?.[0];
+      if (observedAccountId) {
+        await openPlayerProfile(
+          observedAccountId,
+          result.result?.observed_player_equipment?.[observedAccountId],
+        );
+      }
+      if (text === command.trim()) setCommand("");
       await refreshWorld(token);
     } catch (error) {
       showError(error);
@@ -459,6 +698,11 @@ export default function App() {
       setCommandBusy(false);
     }
 
+  }
+
+  async function submitCommand(event) {
+    event.preventDefault();
+    await runCommand(command);
   }
 
   function enterCommand(text) {
@@ -544,6 +788,7 @@ export default function App() {
       setActiveChannelId("global");
       setMessagesByChannel({});
       setActivity([]);
+      setInventoryView(null);
       previousAreaIdRef.current = null;
       setAmbienceEvents([]);
       setProfile(null);
@@ -631,6 +876,9 @@ export default function App() {
       <header className="topbar">
         <a className="wordmark" href="#world">PLIGHT</a>
         <div className="topbar-right">
+          <button className="text-button" onClick={() => setInventoryView("all")} type="button">Inventory</button>
+          <button className="text-button" onClick={openPeople} type="button">Friends</button>
+          <button className="text-button" onClick={openOwnProfile} type="button">My profile</button>
           {canEditContent && <button className="text-button studio-nav-trigger" onClick={() => setStudioMode(true)} type="button">Content studio</button>}
           <button className="text-button" onClick={signOut} type="button">Sign out</button>
         </div>
@@ -772,15 +1020,91 @@ export default function App() {
         </aside>
       </main>
 
+      {inventoryView && (
+        <InventoryDialog
+          busy={commandBusy}
+          onClose={() => setInventoryView(null)}
+          onEquip={(itemId, slot) => runCommand(`equip ${itemId.replaceAll("_", " ")} in my ${slot.replaceAll("_", " ")}`)}
+          onUnequip={(slot) => runCommand(`unequip from my ${slot.replaceAll("_", " ")}`)}
+          onSelectView={setInventoryView}
+          snapshot={snapshot}
+          view={inventoryView}
+        />
+      )}
+
       {profile && (
-        <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setProfile(null); }}>
+        <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeProfile(); }}>
           <section aria-labelledby="profile-title" aria-modal="true" className="profile-dialog" role="dialog">
-            <button aria-label="Close profile" className="dialog-close" onClick={() => setProfile(null)} type="button">×</button>
-            <p className="eyebrow">TRAVELER PROFILE</p>
-            <div className="profile-avatar">{profile.name.slice(0, 1).toUpperCase()}</div>
+            <button aria-label="Close profile" className="dialog-close" onClick={closeProfile} type="button">×</button>
+            <p className="eyebrow">{profile.account_id === snapshot?.account_id ? "YOUR CHARACTER PROFILE" : "TRAVELER PROFILE"}</p>
+            {profile.picture_src
+              ? <img alt={`${profile.name}'s profile`} className="profile-avatar-image" src={profile.picture_src} />
+              : <div className="profile-avatar">{profile.name.slice(0, 1).toUpperCase()}</div>}
             <h2 id="profile-title">{profile.name}</h2>
-            <p>{profile.species} · Last seen in {profile.area_name}</p>
-            <button className="primary-button" onClick={() => openPrivateChat(profile.account_id, profile.name)} type="button">Open private chat</button>
+            <p>{profile.species} · Last seen in {profile.area_name}{profile.pronouns ? ` · ${profile.pronouns}` : ""}</p>
+            {profile.account_id === snapshot?.account_id ? (
+              <form className="profile-edit-form" onSubmit={saveProfile}>
+                <label>Pronouns (optional)<input maxLength={64} onChange={(event) => setProfileForm((current) => ({ ...current, pronouns: event.target.value }))} value={profileForm.pronouns} /></label>
+                <label>Character lore<textarea maxLength={2000} onChange={(event) => setProfileForm((current) => ({ ...current, lore: event.target.value }))} rows={5} value={profileForm.lore} /></label>
+                <label>Profile picture<input accept="image/png,image/jpeg,image/webp" disabled={profileBusy} onChange={(event) => { uploadProfilePicture(event.target.files?.[0]); event.target.value = ""; }} type="file" /></label>
+                {profile.picture_src && <button className="text-button" disabled={profileBusy} onClick={removeProfilePicture} type="button">Remove profile picture</button>}
+                {profileError && <p className="error-message" role="alert">{profileError}</p>}
+                <button className="primary-button" disabled={profileBusy} type="submit">{profileBusy ? "Saving…" : "Save profile"}</button>
+              </form>
+            ) : (
+              <>
+                <p className="profile-lore">{profile.lore || "No lore has been shared yet."}</p>
+                {profile.equipped_gear && (
+                  <section className="profile-equipment" aria-label="Equipped gear">
+                    <h3>Equipped gear</h3>
+                    {Object.entries(profile.equipped_gear).map(([slot, item]) => item && (
+                      <p key={slot}><strong>{EQUIPMENT_SLOT_LABELS[slot] || slot.replaceAll("_", " ")}</strong>: {item}</p>
+                    ))}
+                  </section>
+                )}
+                <button className="primary-button" onClick={() => openPrivateChat(profile.account_id, profile.name)} type="button">Open private chat</button>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+      {peopleOpen && (
+        <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closePeople(); }}>
+          <section aria-labelledby="people-title" aria-modal="true" className="people-dialog" role="dialog">
+            <button aria-label="Close friends" className="dialog-close" onClick={closePeople} type="button">×</button>
+            <p className="eyebrow">PLAYERS</p>
+            <h2 id="people-title">Friends & character search</h2>
+            <form className="player-search-form" onSubmit={searchPlayers}>
+              <label htmlFor="player-search">Search character names</label>
+              <div><input id="player-search" maxLength={32} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Enter part of a name" value={searchQuery} /><button className="primary-button" disabled={peopleBusy || !searchQuery.trim()} type="submit">Search</button></div>
+            </form>
+            {peopleError && <p className="error-message" role="alert">{peopleError}</p>}
+            {peopleBusy && <p className="people-empty">Loading…</p>}
+            {incomingRequests.length > 0 && <section className="people-section"><h3>Friend requests</h3>
+              {incomingRequests.map((request) => <article className="player-card" key={request.request_id}>
+                <button className="player-name-link" onClick={() => openPlayerProfile(request.player.account_id)} type="button">{request.player.name}</button>
+                <p>{request.player.species} · {request.player.pronouns || "Pronouns not shared"}</p>
+                <p>{request.player.lore || "No lore has been shared yet."}</p>
+                <button className="dialogue-choice-button" disabled={peopleBusy} onClick={() => requestFriend({ ...request.player, friend_status: "incoming_pending" })} type="button">Accept request</button>
+              </article>)}
+            </section>}
+            <section className="people-section"><h3>Your friends</h3>
+              {friendList.length ? friendList.map((player) => <button className="player-name-link" key={player.account_id} onClick={() => openPlayerProfile(player.account_id)} type="button">{player.name} · {player.species}</button>) : <p className="people-empty">No friends yet.</p>}
+            </section>
+            {playerResults.length > 0 && <section className="people-section"><h3>Search results</h3>
+              {playerResults.map((player) => {
+                const action = friendAction(player.friend_status);
+                return <article className="player-card" key={player.account_id}>
+                  <div className="player-card-heading">
+                    <button className="player-name-link" onClick={() => openPlayerProfile(player.account_id)} type="button">{player.name}</button>
+                    {directoryPictureUrls[player.account_id] && <img alt="" className="player-thumb" src={directoryPictureUrls[player.account_id]} />}
+                  </div>
+                  <p>{player.species} · {player.pronouns || "Pronouns not shared"} · Last seen in {player.area_name}</p>
+                  <p>{player.lore || "No lore has been shared yet."}</p>
+                  <button className="dialogue-choice-button" disabled={peopleBusy || action.disabled} onClick={() => requestFriend(player)} type="button">{action.label}</button>
+                </article>;
+              })}
+            </section>}
           </section>
         </div>
       )}
@@ -789,10 +1113,76 @@ export default function App() {
 }
 
 function equipmentName(world, slot) {
-  const itemId = world?.character?.equipment?.[slot] || "fist";
-  if (itemId === "fist") return "Fist";
-  const inventory = world?.character?.inventory || {};
-  return itemId.replaceAll("_", " ") + (inventory[itemId] ? "" : " (unavailable)");
+ const itemId = world?.character?.equipment?.[slot] || "fist";
+ return formatEquipmentItem(itemId, world?.character?.inventory_items || []);
+}
+
+function InventoryDialog({ busy, onClose, onEquip, onUnequip, onSelectView, snapshot, view }) {
+  const [selectedSlots, setSelectedSlots] = useState({});
+  const items = snapshot?.character?.inventory_items || [];
+  const visibleSlots = equipmentSlotsForView(view);
+  const visibleItems = items.filter((item) => {
+    if (view === "armor") return item.equipable_slots.some((slot) => !EQUIPMENT_SLOT_GROUPS.hands.includes(slot));
+    if (view === "hands") return item.equipable_slots.some((slot) => EQUIPMENT_SLOT_GROUPS.hands.includes(slot));
+    if (view === "weapons") return item.type === "weapon";
+    return true;
+  });
+  const views = [["all", "All"], ["armor", "Armor"], ["hands", "Hands"], ["weapons", "Weapons"]];
+
+  useEffect(() => setSelectedSlots({}), [view]);
+
+  return (
+    <div className="dialog-backdrop inventory-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section aria-labelledby="inventory-title" aria-modal="true" className="inventory-dialog" role="dialog">
+        <button aria-label="Close inventory" className="dialog-close" onClick={onClose} type="button">×</button>
+        <p className="eyebrow">CHARACTER</p>
+        <h2 id="inventory-title">Inventory & equipment</h2>
+        <div className="inventory-tabs" aria-label="Inventory views">
+          {views.map(([id, label]) => (
+            <button aria-pressed={view === id} className={view === id ? "selected" : ""} key={id} onClick={() => onSelectView(id)} type="button">{label}</button>
+          ))}
+        </div>
+        <section className="inventory-equipment-section">
+          <h3>Equipment</h3>
+          <div className="equipment-grid">
+            {visibleSlots.map((slot) => {
+              const itemId = snapshot?.character?.equipment?.[slot] || "";
+              return (
+                <article className="equipment-slot" key={slot}>
+                  <span>{EQUIPMENT_SLOT_LABELS[slot]}</span>
+                  <strong>{formatEquipmentItem(itemId, items)}</strong>
+                  {itemId && itemId !== "fist" && <button disabled={busy} onClick={() => onUnequip(slot)} type="button">Unequip</button>}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+        <section className="inventory-items-section">
+          <h3>Carrying</h3>
+          {visibleItems.length ? visibleItems.map((item) => (
+            <article className="inventory-item" key={item.id}>
+              <div><strong>{item.name}</strong><span> × {item.quantity}</span></div>
+              {itemCanEquip(item) ? (
+                <div className="inventory-equip-controls">
+                  <label>
+                    <span className="sr-only">Equipment slot for {item.name}</span>
+                    <select
+                      disabled={busy}
+                      onChange={(event) => setSelectedSlots((current) => ({ ...current, [item.id]: event.target.value }))}
+                      value={selectedSlots[item.id] || item.equipable_slots[0]}
+                    >
+                      {item.equipable_slots.map((slot) => <option key={slot} value={slot}>{EQUIPMENT_SLOT_LABELS[slot]}</option>)}
+                    </select>
+                  </label>
+                  <button disabled={busy} onClick={() => onEquip(item.id, selectedSlots[item.id] || item.equipable_slots[0])} type="button">Equip</button>
+                </div>
+              ) : <p className="item-not-equipable">This item type has no equipment definition.</p>}
+            </article>
+          )) : <p className="inventory-empty">Nothing is carried in this view.</p>}
+        </section>
+      </section>
+    </div>
+  );
 }
 
 function WorldEntityList({ title, entities, renderItem }) {

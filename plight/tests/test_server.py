@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 import pytest
@@ -8,6 +9,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import event
+from PIL import Image
 
 import plight_server.app as api
 import plight_server.content as content_store
@@ -544,7 +546,7 @@ def test_player_can_travel_to_authored_enemy_and_npc_and_talk(client: TestClient
         "defense": 1,
         "speed": 10,
     }
-    assert initial["character"]["equipment"] == {"left_hand": "fist", "right_hand": "fist"}
+    assert initial["character"]["equipment"] == game.DEFAULT_EQUIPMENT
 
     path = client.post(
         "/api/v1/commands",
@@ -566,6 +568,167 @@ def test_player_can_travel_to_authored_enemy_and_npc_and_talk(client: TestClient
         json={"request_id": "adf0f265-edca-449a-8ce5-100000000025", "text": "Talk to the old man"},
     ).json()["result"]["dialogues"][0]
     assert dialogue["text"].startswith("Ah. Another one has been sent down")
+
+
+def test_observe_command_resolves_present_entity_target(client: TestClient) -> None:
+    registered = register(client, "intentmapping@example.com", "Mira", "goblin")
+    headers = auth(registered["token"])
+
+    observed = client.post(
+        "/api/v1/commands",
+        headers=headers,
+        json={"request_id": "adf0f265-edca-449a-8ce5-100000000027", "text": "look at the forest rat"},
+    ).json()["result"]
+
+    assert observed["interpretation"]["occurrences"][0]["arguments"]["subject"] == "forest rat"
+    assert observed["messages"] == [
+        "Forest rat: A wary rat, at home beneath the forest canopy."
+    ]
+
+
+def test_observe_without_target_describes_area_and_missing_target_fails(
+    client: TestClient,
+) -> None:
+    registered = register(client, "observearea@example.com", "Mira", "goblin")
+    headers = auth(registered["token"])
+
+    area_result = client.post(
+        "/api/v1/commands",
+        headers=headers,
+        json={"request_id": "adf0f265-edca-449a-8ce5-100000000029", "text": "look around"},
+    ).json()["result"]
+    missing_result = client.post(
+        "/api/v1/commands",
+        headers=headers,
+        json={"request_id": "adf0f265-edca-449a-8ce5-100000000030", "text": "look at the dragon"},
+    ).json()["result"]
+
+    assert area_result["interpretation"]["occurrences"][0]["arguments"] == {}
+    assert area_result["messages"] == [
+        "Moss-covered homes gather beneath the old forest canopy."
+    ]
+    assert missing_result["messages"] == ["There is no dragon here to observe."]
+
+
+def test_observe_inventory_phrases_open_canonical_menu_views(client: TestClient) -> None:
+    registered = register(client, "inventory-view@example.com", "Mira", "goblin")
+    headers = auth(registered["token"])
+    with api.SessionLocal() as db:
+        character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
+        character.inventory = {"iron_sword": 1, "wood": 2}
+        db.commit()
+
+    examples = [
+        ("observe my inventory", "all"),
+        ("look in my inventory", "all"),
+        ("what am I carrying?", "all"),
+        ("observe armor", "armor"),
+        ("observe hands", "hands"),
+        ("observe weapons", "weapons"),
+    ]
+    for index, (text, expected_view) in enumerate(examples, start=31):
+        result = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={"request_id": f"adf0f265-edca-449a-8ce5-1000000000{index:02}", "text": text},
+        ).json()["result"]
+        occurrence = result["interpretation"]["occurrences"][0]
+        assert occurrence["action_id"] == "observe"
+        assert result["inventory_view"] == expected_view
+        assert result["snapshot"]["character"]["inventory_items"] == [
+            {
+                "id": "iron_sword",
+                "name": "Iron sword",
+                "quantity": 1,
+                "type": "weapon",
+                "equipable_slots": ["left_hand", "right_hand"],
+            },
+            {
+                "id": "wood",
+                "name": "Wood",
+                "quantity": 2,
+                "type": "item",
+                "equipable_slots": [],
+            },
+        ]
+
+
+def test_equip_unequip_validate_ownership_slot_and_item_definition(client: TestClient) -> None:
+    registered = register(client, "equip-items@example.com", "Briar", "goblin")
+    headers = auth(registered["token"])
+    with api.SessionLocal() as db:
+        character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
+        character.inventory = {"iron_sword": 1, "wood": 1}
+        character.equipment = {"left_hand": "fist", "right_hand": "fist"}
+        db.commit()
+
+    def command(text: str, request_id: str):
+        response = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={"request_id": request_id, "text": text},
+        )
+        assert response.status_code == 202, response.text
+        return response.json()["result"]
+
+    equipped = command("equip the iron sword in my left hand", "adf0f265-edca-449a-8ce5-100000000041")
+    assert equipped["interpretation"]["occurrences"][0]["action_id"] == "equip_item"
+    assert equipped["messages"] == ["You equip Iron sword in your left hand."]
+    assert equipped["snapshot"]["character"]["equipment"]["left_hand"] == "iron_sword"
+    persisted_snapshot = client.get("/api/v1/world/snapshot", headers=headers).json()
+    assert persisted_snapshot["character"]["equipment"]["left_hand"] == "iron_sword"
+    with api.SessionLocal() as db:
+        character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
+        assert character.equipment["left_hand"] == "iron_sword"
+
+    non_owned = command("equip wooden club in my right hand", "adf0f265-edca-449a-8ce5-100000000042")
+    assert non_owned["messages"] == ["You are not carrying a Wooden club."]
+
+    unsupported = command("equip wood in my right hand", "adf0f265-edca-449a-8ce5-100000000043")
+    assert unsupported["messages"] == [
+        "Wood cannot be equipped; this item type has no equipment definition."
+    ]
+
+    invalid_slot = command("equip iron sword in my helm", "adf0f265-edca-449a-8ce5-100000000044")
+    assert invalid_slot["messages"] == ["Iron sword cannot be equipped in your helm."]
+
+    unknown_slot = command("equip iron sword in my backpack", "adf0f265-edca-449a-8ce5-100000000048")
+    assert "Choose an equipment slot:" in unknown_slot["messages"][0]
+
+    named_unequip = command("unequip the iron sword", "adf0f265-edca-449a-8ce5-100000000045")
+    assert named_unequip["interpretation"]["occurrences"][0]["action_id"] == "unequip_item"
+    assert named_unequip["messages"] == ["You unequip Iron sword from your left hand."]
+    command("equip iron sword in my right hand", "adf0f265-edca-449a-8ce5-100000000046")
+    unequipped = command("unequip from my right hand", "adf0f265-edca-449a-8ce5-100000000047")
+    assert unequipped["interpretation"]["occurrences"][0]["action_id"] == "unequip_item"
+    assert unequipped["messages"] == ["You unequip Iron sword from your right hand."]
+    assert unequipped["snapshot"]["character"]["equipment"]["right_hand"] == "fist"
+
+    with api.SessionLocal() as db:
+        character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
+        assert character.equipment["left_hand"] == "fist"
+        assert character.equipment["right_hand"] == "fist"
+        assert character.inventory == {"iron_sword": 1, "wood": 1}
+
+
+def test_existing_two_hand_equipment_is_completed_with_empty_slots() -> None:
+    class LegacyCharacter:
+        account_id = "legacy-account"
+        id = "legacy-character"
+        name = "Legacy"
+        species = "goblin"
+        area_id = "goblin_town"
+        appearance = {}
+        inventory = {}
+        combat_stats = {}
+        equipment = {"left_hand": "iron_sword", "right_hand": "fist"}
+        combat_state = {}
+
+    result = game.snapshot(LegacyCharacter())
+    assert result["character"]["equipment"] == {
+        **game.DEFAULT_EQUIPMENT,
+        "left_hand": "iron_sword",
+    }
 
 
 def test_combat_uses_only_right_hand_and_enemy_attack_die(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -606,6 +769,7 @@ def test_combat_uses_only_right_hand_and_enemy_attack_die(client: TestClient, mo
     assert not any("left hand" in message for message in result["messages"])
     assert any("rolls D2 (1) and hits you for 2 damage" in message for message in result["messages"])
     assert result["snapshot"]["character"]["equipment"] == {
+        **game.DEFAULT_EQUIPMENT,
         "left_hand": "iron_sword",
         "right_hand": "wooden_club",
     }
@@ -690,3 +854,160 @@ def test_content_editor_validates_enemy_attack_die(client: TestClient, tmp_path:
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_profile_edit_search_and_authenticated_picture_upload(client: TestClient) -> None:
+    owner = register(client, "profile-owner@example.com", "Fern")
+    viewer = register(client, "profile-viewer@example.com", "Mira", "goblin")
+    owner_headers = auth(owner["token"])
+    viewer_headers = auth(viewer["token"])
+
+    updated = client.put(
+        "/api/v1/profile",
+        headers=owner_headers,
+        json={"pronouns": "they/them", "lore": "A cartographer seeking lost roads."},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["pronouns"] == "they/them"
+    assert updated.json()["lore"] == "A cartographer seeking lost roads."
+    assert client.get("/api/v1/profile").status_code == 401
+
+    png = BytesIO()
+    Image.new("RGB", (8, 8), "purple").save(png, format="PNG")
+    upload = client.put(
+        "/api/v1/profile/picture",
+        headers={**owner_headers, "Content-Type": "image/png"},
+        content=png.getvalue(),
+    )
+    assert upload.status_code == 200, upload.text
+    picture_url = upload.json()["profile_picture_url"]
+    served = client.get(picture_url, headers=viewer_headers)
+    assert served.status_code == 200
+    assert served.headers["content-type"] == "image/png"
+    assert served.headers["x-content-type-options"] == "nosniff"
+    assert Image.open(BytesIO(served.content)).format == "PNG"
+    assert client.get(picture_url).status_code == 401
+    assert client.get("/api/v1/players?q=Fern").status_code == 401
+    assert client.get(f"/api/v1/players/{owner['account_id']}/profile").status_code == 401
+    mismatch = client.put(
+        "/api/v1/profile/picture",
+        headers={**owner_headers, "Content-Type": "image/jpeg"},
+        content=png.getvalue(),
+    )
+    assert mismatch.status_code == 415
+    executable = client.put(
+        "/api/v1/profile/picture",
+        headers={**owner_headers, "Content-Type": "image/png"},
+        content=b"MZ executable payload",
+    )
+    assert executable.status_code == 415
+    too_large = client.put(
+        "/api/v1/profile/picture",
+        headers={**owner_headers, "Content-Type": "image/png"},
+        content=b"x" * (512 * 1024 + 1),
+    )
+    assert too_large.status_code == 413
+    large_image = BytesIO()
+    Image.new("RGB", (2001, 2000), "black").save(large_image, format="PNG", optimize=True)
+    oversized_dimensions = client.put(
+        "/api/v1/profile/picture",
+        headers={**owner_headers, "Content-Type": "image/png"},
+        content=large_image.getvalue(),
+    )
+    assert oversized_dimensions.status_code == 413
+
+    results = client.get("/api/v1/players?q=er", headers=viewer_headers)
+    assert results.status_code == 200
+    assert results.json() == [
+        {
+            "account_id": owner["account_id"],
+            "name": "Fern",
+            "species": "human",
+            "area_name": "Dawnmere",
+            "pronouns": "they/them",
+            "lore": "A cartographer seeking lost roads.",
+            "profile_picture_url": picture_url,
+            "friend_status": None,
+        }
+    ]
+
+
+def test_friend_requests_require_recipient_acceptance(client: TestClient) -> None:
+    alice = register(client, "friend-alice@example.com", "Alice")
+    bob = register(client, "friend-bob@example.com", "Bobbins")
+    alice_headers = auth(alice["token"])
+    bob_headers = auth(bob["token"])
+
+    sent = client.post(
+        "/api/v1/friend-requests",
+        headers=alice_headers,
+        json={"recipient_account_id": bob["account_id"]},
+    )
+    assert sent.status_code == 201
+    assert sent.json()["status"] == "pending"
+    assert sent.json()["direction"] == "outgoing"
+    assert client.get("/api/v1/friends", headers=alice_headers).json() == []
+    assert client.get("/api/v1/friends", headers=bob_headers).json() == []
+    assert client.get("/api/v1/friend-requests", headers=bob_headers).json()["incoming"][0]["player"]["name"] == "Alice"
+
+    duplicate = client.post(
+        "/api/v1/friend-requests",
+        headers=alice_headers,
+        json={"recipient_account_id": bob["account_id"]},
+    )
+    assert duplicate.status_code == 409
+    sender_cannot_accept = client.patch(
+        f"/api/v1/friend-requests/{sent.json()['request_id']}",
+        headers=alice_headers,
+        json={"status": "accepted"},
+    )
+    assert sender_cannot_accept.status_code == 404
+    accepted = client.patch(
+        f"/api/v1/friend-requests/{sent.json()['request_id']}",
+        headers=bob_headers,
+        json={"status": "accepted"},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["status"] == "accepted"
+    assert [friend["name"] for friend in client.get("/api/v1/friends", headers=alice_headers).json()] == ["Bobbins"]
+    assert [friend["name"] for friend in client.get("/api/v1/friends", headers=bob_headers).json()] == ["Alice"]
+    self_request = client.post(
+        "/api/v1/friend-requests",
+        headers=alice_headers,
+        json={"recipient_account_id": alice["account_id"]},
+    )
+    assert self_request.status_code == 409
+
+
+def test_observe_player_opens_profile_only_for_same_area_player(client: TestClient) -> None:
+    watcher = register(client, "observe-watcher@example.com", "Mira")
+    observed = register(client, "observe-player@example.com", "Sable")
+    with api.SessionLocal() as db:
+        character = db.scalar(select(Character).where(Character.account_id == observed["account_id"]))
+        character.area_id = "human_city"
+        character.inventory = {"iron_sword": 1, "wood": 8}
+        character.equipment = {"left_hand": "iron_sword", "right_hand": "fist"}
+        db.commit()
+
+    result = client.post(
+        "/api/v1/commands",
+        headers=auth(watcher["token"]),
+        json={"request_id": "adf0f265-edca-449a-8ce5-100000000099", "text": "Observe Sable"},
+    ).json()["result"]
+    assert result["messages"] == ["You observe Sable."]
+    assert result["profile_account_ids"] == [observed["account_id"]]
+    assert result["observed_player_equipment"][observed["account_id"]]["left_hand"] == "Iron sword"
+    assert "inventory" not in result["observed_player_equipment"][observed["account_id"]]
+
+    with api.SessionLocal() as db:
+        character = db.scalar(select(Character).where(Character.account_id == observed["account_id"]))
+        character.area_id = "goblin_town"
+        db.commit()
+    absent_result = client.post(
+        "/api/v1/commands",
+        headers=auth(watcher["token"]),
+        json={"request_id": "adf0f265-edca-449a-8ce5-100000000098", "text": "Observe Sable"},
+    ).json()["result"]
+    assert absent_result["messages"] == ["There is no Sable here to observe."]
+    assert absent_result["profile_account_ids"] == []
+    assert absent_result["observed_player_equipment"] == {}

@@ -15,7 +15,25 @@ PLAYER_BASE_STATS = {
     "defense": 1,
     "speed": 10,
 }
-DEFAULT_EQUIPMENT = {"left_hand": "fist", "right_hand": "fist"}
+EQUIPMENT_SLOTS = (
+    "helm",
+    "tunic",
+    "pants",
+    "sleeves",
+    "gloves",
+    "boots",
+    *(f"ring_{index}" for index in range(1, 6)),
+    "necklace_1",
+    "necklace_2",
+    "left_hand",
+    "right_hand",
+)
+DEFAULT_EQUIPMENT = {
+    **{slot: "" for slot in EQUIPMENT_SLOTS if slot not in {"left_hand", "right_hand"}},
+    "left_hand": "fist",
+    "right_hand": "fist",
+}
+EQUIPMENT_TYPE_SLOTS = {"weapon": {"left_hand", "right_hand"}}
 combat_rng = random.SystemRandom()
 
 
@@ -35,6 +53,19 @@ def _snapshot(character: Any, content: dict[str, Any]) -> dict[str, Any]:
     equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
     combat_state = character.combat_state or {}
     enemy_health = combat_state.get("enemy_health", {})
+    inventory_items = []
+    for item_id, quantity in (character.inventory or {}).items():
+        item = entities.get(item_id)
+        item_type = item["type"] if item else None
+        inventory_items.append(
+            {
+                "id": item_id,
+                "name": item["name"] if item else item_id.replace("_", " ").title(),
+                "quantity": quantity,
+                "type": item_type,
+                "equipable_slots": sorted(EQUIPMENT_TYPE_SLOTS.get(item_type, set())),
+            }
+        )
 
     def visible_entities(entity_ids: list[str]) -> list[dict[str, Any]]:
         return [
@@ -105,6 +136,7 @@ def _snapshot(character: Any, content: dict[str, Any]) -> dict[str, Any]:
             "area_name": area["name"],
             "appearance": character.appearance,
             "inventory": character.inventory or {},
+            "inventory_items": inventory_items,
             "stats": stats,
             "equipment": equipment,
         },
@@ -131,7 +163,11 @@ def snapshot(character: Any) -> dict[str, Any]:
     return _snapshot(character, world_content_dict())
 
 
-def resolve_command(text: str, character: Any) -> dict[str, Any]:
+def resolve_command(
+    text: str,
+    character: Any,
+    available_players: list[Any] | None = None,
+) -> dict[str, Any]:
     content = world_content_dict()
     areas = _location_map(content)
     entities = {entity["id"]: entity for entity in content["entities"]}
@@ -176,13 +212,85 @@ def resolve_command(text: str, character: Any) -> dict[str, Any]:
     )
     messages: list[str] = []
     dialogues: list[dict[str, Any]] = []
+    profile_account_ids: list[str] = []
+    observed_player_equipment: dict[str, dict[str, str]] = {}
+    inventory_view: str | None = None
     for occurrence in occurrences:
         if occurrence["occurrence_id"] not in selected_ids:
             continue
         action_id = occurrence["action_id"]
         args = occurrence["arguments"]
         if action_id == "observe":
-            messages.append(areas[character.area_id]["description"])
+            subject = args.get("subject", "")
+            inventory_subjects = {
+                "inventory": "all",
+                "armor": "armor",
+                "armour": "armor",
+                "hands": "hands",
+                "weapons": "weapons",
+            }
+            normalized_subject = str(subject).casefold()
+            if normalized_subject in inventory_subjects:
+                inventory_view = inventory_subjects[normalized_subject]
+                messages.append("You check your inventory and equipment.")
+                continue
+            if not subject:
+                messages.append(areas[character.area_id]["description"])
+                continue
+            area = areas[character.area_id]
+            present_ids = [
+                *area["enemy_ids"],
+                *(
+                    entity_id
+                    for entity_id in area["npc_ids"]
+                    if character.species in entities[entity_id]["present_for"]
+                ),
+                *area["object_ids"],
+                *area["resource_ids"],
+            ]
+            present = [entities[entity_id] for entity_id in present_ids]
+            player_entities = [
+                {"id": player.id, "name": player.name, "account_id": player.account_id}
+                for player in (available_players or [])
+                if player.area_id == character.area_id and player.account_id != character.account_id
+            ]
+            matches = _matching_entities(str(subject), [*present, *player_entities])
+            if len(matches) == 1:
+                entity = matches[0]
+                if entity.get("account_id"):
+                    messages.append(f"You observe {entity['name']}.")
+                    profile_account_ids.append(entity["account_id"])
+                    other_player = next(
+                        (
+                            player
+                            for player in (available_players or [])
+                            if player.account_id == entity["account_id"]
+                        ),
+                        None,
+                    )
+                    if other_player is not None:
+                        player_equipment = {
+                            **DEFAULT_EQUIPMENT,
+                            **(other_player.equipment or {}),
+                        }
+                        observed_player_equipment[entity["account_id"]] = {
+                            slot: (
+                                entities.get(item_id, {}).get(
+                                    "name", item_id.replace("_", " ").title()
+                                )
+                                if item_id != "fist"
+                                else "Fist"
+                            )
+                            for slot, item_id in player_equipment.items()
+                        }
+                else:
+                    messages.append(f"{entity['name']}: {entity['description']}")
+            elif matches:
+                messages.append(
+                    f"Which one do you mean: {', '.join(entity['name'] for entity in matches)}?"
+                )
+            else:
+                messages.append(f"There is no {subject} here to observe.")
         elif action_id == "travel":
             direction = str(args.get("direction", "")).casefold()
             destination = areas[character.area_id]["exits"].get(direction)
@@ -251,8 +359,10 @@ def resolve_command(text: str, character: Any) -> dict[str, Any]:
             )
         elif action_id in {"attack", "light_attack", "heavy_attack"}:
             messages.extend(_attack(character, areas, entities, occurrence))
-        elif action_id == "use_item" and occurrence["phrase"].casefold() == "equip":
+        elif action_id == "equip_item":
             messages.append(_equip(character, entities, args))
+        elif action_id == "unequip_item":
+            messages.append(_unequip(character, entities, args))
         elif action_id == "inspect_inventory":
             contents = ", ".join(f"{count} {item}" for item, count in character.inventory.items())
             messages.append(f"You are carrying {contents}." if contents else "Your inventory is empty.")
@@ -272,6 +382,9 @@ def resolve_command(text: str, character: Any) -> dict[str, Any]:
         "interpretation": parsed,
         "messages": messages,
         "dialogues": dialogues,
+        "profile_account_ids": profile_account_ids,
+        "observed_player_equipment": observed_player_equipment,
+        "inventory_view": inventory_view,
         "snapshot": _snapshot(character, content),
     }
 
@@ -305,32 +418,92 @@ def _matching_entities(
     ]
 
 
+def _matching_items(reference: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = _normalize_npc_name(reference)
+    exact_matches = [
+        entity
+        for entity in candidates
+        if normalized == _normalize_npc_name(entity["name"])
+        or normalized == entity["id"].replace("_", " ")
+    ]
+    return exact_matches or _matching_entities(reference, candidates)
+
+
 def _equip(
     character: Any, entities: dict[str, dict[str, Any]], arguments: dict[str, Any]
 ) -> str:
     item = arguments.get("item", {})
     item_name = item.get("name", "") if isinstance(item, dict) else str(item)
     slot = arguments.get("slot")
-    if slot not in {"left_hand", "right_hand"}:
-        return "Choose either your left hand or right hand."
-    if _normalize_npc_name(item_name) == "fist":
+    item_key = _normalize_npc_name(item_name)
+    if item_key == "fist":
+        if slot not in {None, "left_hand", "right_hand"}:
+            return "Fists can only be readied in your left hand or right hand."
+        slot = slot or "right_hand"
         equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
         equipment[slot] = "fist"
         character.equipment = equipment
         return f"You ready your fist in your {slot.replace('_', ' ')}."
-    matches = _matching_entities(
-        item_name,
-        [entity for entity in entities.values() if entity["type"] == "weapon"],
-    )
+    if not item_name:
+        return "Name an item you are carrying to equip."
+    matches = _matching_items(item_name, list(entities.values()))
     if len(matches) != 1:
-        return f"There is no unique weapon named {item_name}."
-    weapon = matches[0]
-    if (character.inventory or {}).get(weapon["id"], 0) < 1:
-        return f"You are not carrying a {weapon['name']}."
+        return f"There is no unique item named {item_name}."
+    item = matches[0]
+    item_slots = EQUIPMENT_TYPE_SLOTS.get(item["type"])
+    if item_slots is None:
+        return f"{item['name']} cannot be equipped; this item type has no equipment definition."
+    if (character.inventory or {}).get(item["id"], 0) < 1:
+        return f"You are not carrying a {item['name']}."
+    slot = slot or ("right_hand" if item["type"] == "weapon" else None)
+    if slot not in EQUIPMENT_SLOTS:
+        return f"Choose an equipment slot: {', '.join(EQUIPMENT_SLOTS)}."
+    if slot not in item_slots:
+        return f"{item['name']} cannot be equipped in your {slot.replace('_', ' ')}."
     equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
-    equipment[slot] = weapon["id"]
+    equipment[slot] = item["id"]
     character.equipment = equipment
-    return f"You equip {weapon['name']} in your {slot.replace('_', ' ')}."
+    return f"You equip {item['name']} in your {slot.replace('_', ' ')}."
+
+
+def _unequip(
+    character: Any, entities: dict[str, dict[str, Any]], arguments: dict[str, Any]
+) -> str:
+    equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
+    item = arguments.get("item", {})
+    item_name = item.get("name", "") if isinstance(item, dict) else str(item)
+    slot = arguments.get("slot")
+    if slot not in {None, *EQUIPMENT_SLOTS}:
+        return f"Choose an equipment slot: {', '.join(EQUIPMENT_SLOTS)}."
+    if item_name:
+        matches = _matching_items(item_name, list(entities.values()))
+        if len(matches) != 1:
+            return f"There is no unique item named {item_name}."
+        equipped_slots = [
+            equipped_slot
+            for equipped_slot, item_id in equipment.items()
+            if item_id == matches[0]["id"]
+        ]
+        if slot:
+            equipped_slots = [equipped_slot for equipped_slot in equipped_slots if equipped_slot == slot]
+        if len(equipped_slots) != 1:
+            return (
+                f"{matches[0]['name']} is not equipped there."
+                if slot
+                else f"{matches[0]['name']} is not equipped."
+                if not equipped_slots
+                else f"{matches[0]['name']} is equipped in multiple slots; specify a slot."
+            )
+        slot = equipped_slots[0]
+    if slot is None:
+        return "Choose an equipment slot or name an equipped item to unequip."
+    previous = equipment[slot]
+    if not previous or (previous == "fist" and slot not in {"left_hand", "right_hand"}):
+        return f"Nothing is equipped in your {slot.replace('_', ' ')}."
+    equipment[slot] = "fist" if slot in {"left_hand", "right_hand"} else ""
+    character.equipment = equipment
+    previous_name = entities.get(previous, {}).get("name", "Fist" if previous == "fist" else previous)
+    return f"You unequip {previous_name} from your {slot.replace('_', ' ')}."
 
 
 def _attack(

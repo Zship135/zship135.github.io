@@ -4,10 +4,40 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from plight_server.database import Base
+
+
+DEFAULT_EQUIPMENT = {
+    "helm": "",
+    "tunic": "",
+    "pants": "",
+    "sleeves": "",
+    "gloves": "",
+    "boots": "",
+    "ring_1": "",
+    "ring_2": "",
+    "ring_3": "",
+    "ring_4": "",
+    "ring_5": "",
+    "necklace_1": "",
+    "necklace_2": "",
+    "left_hand": "fist",
+    "right_hand": "fist",
+}
 
 
 def utc_now() -> datetime:
@@ -48,8 +78,7 @@ class Character(Base):
         server_default=text("'{}'"),
     )
     equipment: Mapped[dict[str, str]] = mapped_column(
-        JSON,
-        default=lambda: {"left_hand": "fist", "right_hand": "fist"},
+        JSON, default=lambda: dict(DEFAULT_EQUIPMENT),
         server_default=text("'{}'"),
     )
     combat_state: Mapped[dict[str, Any]] = mapped_column(
@@ -57,7 +86,31 @@ class Character(Base):
         default=lambda: {"target_id": None, "enemy_health": {}},
         server_default=text("'{}'"),
     )
+    profile_pronouns: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    profile_lore: Mapped[str] = mapped_column(Text, default="", server_default="")
+    profile_picture_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    profile_picture_mime: Mapped[str | None] = mapped_column(String(32), nullable=True)
     account: Mapped[Account] = relationship(back_populates="character")
+
+
+class FriendRequest(Base):
+    __tablename__ = "friend_requests"
+    __table_args__ = (
+        UniqueConstraint("sender_account_id", "recipient_account_id", name="uq_friend_request_pair"),
+        CheckConstraint("sender_account_id != recipient_account_id", name="ck_friend_request_not_self"),
+        CheckConstraint("status IN ('pending', 'accepted', 'rejected')", name="ck_friend_request_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    sender_account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    recipient_account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class PlayerSession(Base):

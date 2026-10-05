@@ -75,15 +75,17 @@ python .\plight_nlp_inspector.py --engine rpgnlp "attack the goblin with a sword
 | 12 | Best-match fallback | `observ` | Selects canonical `observe` using the local alias fallback and reports fallback rank source. | PASS |
 | 13 | Boolean evaluator | Implication expression evaluated with both `false,false` and `true,false` | First assignment evaluates true; second evaluates false. | PASS |
 | 14 | RPGNLP adapter mapping | Fake RPGNLP engine returns `light_attack`, subject, instrument, and modifier fields | Adapter maps action to canonical `light_attack` and preserves subject and instrument fields. | PASS |
-| 15 | Hand equipment extraction | `Equip the iron sword in my right hand` | Canonical action `use_item`; item `iron sword`; hand slot `right_hand`. | PASS |
+| 15 | Hand equipment extraction | `Equip the iron sword in my right hand` | Canonical action `equip_item`; item `iron sword`; hand slot `right_hand`. | PASS |
+| 16 | Inventory menu mapping | `observe my inventory`, `look in my inventory`, `what am I carrying?`, and armor/hands/weapons subjects | Each phrase maps to canonical `observe` with the normalized inventory-view subject. | PASS |
+| 17 | Unequip extraction | `unequip my right hand`, `take off the iron sword` | Both map to canonical `unequip_item` with the equipment slot or item argument. | PASS |
 
 ## Execution evidence
 
-The test command completed successfully:
+The original 15-test command shown below records the earlier parser run. Current backend/parser validation after adding inventory/equipment mapping uses:
 
 ```text
-Ran 15 tests in 0.013s
-OK
+python -m pytest tests\test_server.py test_plight_nlp_inspector.py -q
+49 passed (including the new inventory/equipment coverage)
 ```
 
 The adapter test uses a stubbed `rpgnlp` module. It verifies mapping of the documented `NLPEngine.run`-style result shape; it does **not** execute the installed/published RPGNLP package.

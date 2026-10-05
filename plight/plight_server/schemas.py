@@ -50,6 +50,31 @@ class CharacterCreateRequest(BaseModel):
         return name
 
 
+class ProfileUpdateRequest(BaseModel):
+    pronouns: str | None = Field(default=None, max_length=64)
+    lore: str = Field(default="", max_length=2000)
+
+    @field_validator("pronouns")
+    @classmethod
+    def normalize_pronouns(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @field_validator("lore")
+    @classmethod
+    def normalize_lore(cls, value: str) -> str:
+        return value.strip()
+
+
+class FriendRequestCreate(BaseModel):
+    recipient_account_id: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
+
+
+class FriendRequestUpdate(BaseModel):
+    status: Literal["accepted", "rejected"]
+
+
 class SessionResponse(BaseModel):
     token: str
     expires_at: str

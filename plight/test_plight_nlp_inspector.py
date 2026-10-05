@@ -20,14 +20,50 @@ class LocalParserTests(unittest.TestCase):
     def test_equip_extracts_hand_and_item(self):
         result = parse_local("Equip the iron sword in my right hand")
         occurrence = result["occurrences"][0]
-        self.assertEqual(occurrence["action_id"], "use_item")
+        self.assertEqual(occurrence["action_id"], "equip_item")
         self.assertEqual(occurrence["arguments"]["item"]["name"], "iron sword")
         self.assertEqual(occurrence["arguments"]["slot"], "right_hand")
+
+    def test_inventory_phrases_are_observe_with_canonical_subjects(self):
+        examples = {
+            "observe my inventory": "inventory",
+            "look in my inventory": "inventory",
+            "what am I carrying?": "inventory",
+            "observe armor": "armor",
+            "observe hands": "hands",
+            "observe weapons": "weapons",
+        }
+        for text, subject in examples.items():
+            with self.subTest(text=text):
+                occurrence = parse_local(text)["occurrences"][0]
+                self.assertEqual(occurrence["action_id"], "observe")
+                self.assertEqual(occurrence["arguments"]["subject"], subject)
+
+    def test_unequip_extracts_slot_or_item(self):
+        slot_occurrence = parse_local("unequip my right hand")["occurrences"][0]
+        self.assertEqual(slot_occurrence["action_id"], "unequip_item")
+        self.assertEqual(slot_occurrence["arguments"]["slot"], "right_hand")
+        item_occurrence = parse_local("take off the iron sword")["occurrences"][0]
+        self.assertEqual(item_occurrence["action_id"], "unequip_item")
+        self.assertEqual(item_occurrence["arguments"]["item"]["name"], "iron sword")
 
     def test_travel_extracts_direction(self):
         result = parse_local("Run north east")
         self.assertEqual(result["occurrences"][0]["action_id"], "travel")
         self.assertEqual(result["occurrences"][0]["arguments"]["direction"], "north east")
+
+    def test_observe_extracts_entity_target(self):
+        result = parse_local("look at the forest rat")
+        occurrence = result["occurrences"][0]
+        self.assertEqual(occurrence["action_id"], "observe")
+        self.assertEqual(occurrence["arguments"]["subject"], "forest rat")
+
+    def test_observe_area_phrasing_does_not_create_entity_target(self):
+        for text in ("look", "look around", "look at the area", "examine my surroundings"):
+            with self.subTest(text=text):
+                result = parse_local(text)
+                self.assertEqual(result["occurrences"][0]["action_id"], "observe")
+                self.assertNotIn("subject", result["occurrences"][0]["arguments"])
 
     def test_talk_preserves_utterance_and_topic(self):
         result = parse_local('Tell the guard about the plan: "attack the troll or flee"')

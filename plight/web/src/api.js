@@ -25,3 +25,26 @@ export async function api(path, { token, ...options } = {}) {
   }
   return body;
 }
+
+export async function apiBlob(path, { token, ...options } = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      "ngrok-skip-browser-warning": "true",
+      ...(token ? { Authorization: "Bearer " + token } : {}),
+      ...options.headers,
+    },
+  });
+  if (!response.ok) {
+    let body;
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+    const error = new Error(body?.error?.message || "The server could not complete that request.");
+    error.status = response.status;
+    throw error;
+  }
+  return response.blob();
+}

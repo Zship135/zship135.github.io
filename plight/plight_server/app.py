@@ -5,6 +5,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 import hashlib
+from io import BytesIO
 import os
 import re
 import threading
@@ -16,6 +17,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from PIL import Image, UnidentifiedImageError
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -35,6 +37,7 @@ from plight_server.models import (
     Character,
     Command,
     EventCounter,
+    FriendRequest,
     PlayerSession,
     utc_now,
 )
@@ -43,7 +46,10 @@ from plight_server.schemas import (
     CharacterCreateRequest,
     CommandRequest,
     DialogueChoiceRequest,
+    FriendRequestCreate,
+    FriendRequestUpdate,
     LoginRequest,
+    ProfileUpdateRequest,
     RegisterRequest,
 )
 from plight_server.security import authenticate_token, create_session, hash_password, verify_password
@@ -53,6 +59,8 @@ PRODUCTION_ORIGIN = os.getenv("PLIGHT_UI_ORIGIN", "").strip()
 ALLOWED_ORIGINS = {PRODUCTION_ORIGIN} if PRODUCTION_ORIGIN else LOCAL_ORIGINS
 MAX_REQUEST_BYTES = 1_048_576
 MAX_WEBSOCKET_FRAME_CHARS = 4_096
+MAX_PROFILE_IMAGE_BYTES = 512 * 1024
+MAX_PROFILE_IMAGE_PIXELS = 4_000_000
 
 
 class RateLimiter:
@@ -445,6 +453,128 @@ def me(account: Account = Depends(require_account)) -> dict[str, Any]:
     return {"account_id": account.id, "email": account.email, **snapshot(character)["character"]}
 
 
+def _profile_dict(character: Character) -> dict[str, Any]:
+    world_character = snapshot(character)["character"]
+    return {
+        "account_id": character.account_id,
+        "name": character.name,
+        "species": character.species,
+        "area_name": world_character["area_name"],
+        "pronouns": character.profile_pronouns,
+        "lore": character.profile_lore or "",
+        "profile_picture_url": (
+            f"/api/v1/players/{character.account_id}/profile-picture"
+            if character.profile_picture_data
+            else None
+        ),
+    }
+
+
+def _require_character(account: Account) -> Character:
+    if account.character is None:
+        raise HTTPException(status_code=409, detail="Create a character before using player profiles.")
+    return account.character
+
+
+@app.get("/api/v1/profile")
+def get_own_profile(account: Account = Depends(require_account)) -> dict[str, Any]:
+    return _profile_dict(_require_character(account))
+
+
+@app.put("/api/v1/profile")
+def update_own_profile(
+    body: ProfileUpdateRequest,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    character = _require_character(account)
+    character.profile_pronouns = body.pronouns
+    character.profile_lore = body.lore
+    db.commit()
+    return _profile_dict(character)
+
+
+@app.put("/api/v1/profile/picture")
+async def upload_profile_picture(
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "profile_picture_upload", 10, 3600)
+    character = _require_character(account)
+    body = await request.body()
+    if not body or len(body) > MAX_PROFILE_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Profile images must be between 1 byte and 512 KiB.")
+    declared_mime = request.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+    expected_formats = {
+        "image/png": "PNG",
+        "image/jpeg": "JPEG",
+        "image/webp": "WEBP",
+    }
+    if declared_mime not in expected_formats:
+        raise HTTPException(status_code=415, detail="Upload a PNG, JPEG, or WebP image.")
+    try:
+        with Image.open(BytesIO(body)) as image:
+            if image.format != expected_formats[declared_mime]:
+                raise HTTPException(status_code=415, detail="The image content does not match its MIME type.")
+            if image.width * image.height > MAX_PROFILE_IMAGE_PIXELS:
+                raise HTTPException(status_code=413, detail="Profile images may not exceed four million pixels.")
+            image.load()
+            safe_image = image.convert(
+                "RGBA" if "A" in image.getbands() or "transparency" in image.info else "RGB"
+            )
+            clean = BytesIO()
+            safe_image.save(clean, format="PNG", optimize=True)
+    except Image.DecompressionBombError:
+        raise HTTPException(status_code=413, detail="Profile images may not exceed four million pixels.") from None
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(status_code=415, detail="The uploaded file is not a valid supported image.") from None
+    character.profile_picture_data = clean.getvalue()
+    character.profile_picture_mime = "image/png"
+    db.commit()
+    return _profile_dict(character)
+
+
+@app.delete("/api/v1/profile/picture", status_code=204)
+def delete_profile_picture(
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> Response:
+    character = _require_character(account)
+    character.profile_picture_data = None
+    character.profile_picture_mime = None
+    db.commit()
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/players/{account_id}/profile-picture")
+def profile_picture(
+    account_id: str,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> Response:
+    character = db.scalar(select(Character).where(Character.account_id == account_id))
+    if character is None or character.profile_picture_data is None:
+        raise HTTPException(status_code=404, detail="That player has no profile picture.")
+    return Response(
+        content=character.profile_picture_data,
+        media_type=character.profile_picture_mime or "image/png",
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.get("/api/v1/players/{account_id}/profile")
+def get_player_profile(
+    account_id: str,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    character = db.scalar(select(Character).where(Character.account_id == account_id))
+    if character is None:
+        raise HTTPException(status_code=404, detail="That player was not found.")
+    return _profile_dict(character)
+
+
 @app.get("/api/v1/world/snapshot")
 def world_snapshot(account: Account = Depends(require_account)) -> dict[str, Any]:
     if account.character is None:
@@ -544,19 +674,175 @@ def select_dialogue_choice(
 
 
 @app.get("/api/v1/players")
-def players(account: Account = Depends(require_account), db: Session = Depends(get_db)) -> list[dict[str, str]]:
-    rows = db.scalars(
-        select(Character).where(Character.account_id != account.id).order_by(Character.name)
+def players(
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+    q: str | None = Query(default=None, max_length=32),
+) -> list[dict[str, Any]]:
+    _require_character(account)
+    query = select(Character).where(Character.account_id != account.id)
+    if q and q.strip():
+        query = query.where(Character.name_key.contains(q.strip().casefold(), autoescape=True))
+    rows = db.scalars(query.order_by(Character.name).limit(50)).all()
+    counterpart_ids = {row.account_id for row in rows}
+    relationships = db.scalars(
+        select(FriendRequest).where(
+            or_(
+                (FriendRequest.sender_account_id == account.id)
+                & FriendRequest.recipient_account_id.in_(counterpart_ids),
+                (FriendRequest.recipient_account_id == account.id)
+                & FriendRequest.sender_account_id.in_(counterpart_ids),
+            )
+        )
+    ).all() if counterpart_ids else []
+    relation_by_account: dict[str, str] = {}
+    for relation in relationships:
+        other = (
+            relation.recipient_account_id
+            if relation.sender_account_id == account.id
+            else relation.sender_account_id
+        )
+        if relation.status == "accepted":
+            relation_by_account[other] = "friends"
+        elif relation.status == "pending":
+            relation_by_account[other] = (
+                "outgoing_pending" if relation.sender_account_id == account.id else "incoming_pending"
+            )
+    results = []
+    for character in rows:
+        result = _profile_dict(character)
+        result["friend_status"] = relation_by_account.get(character.account_id)
+        results.append(result)
+    return results
+
+
+def _friend_request_dict(request: FriendRequest, account_id: str, db: Session) -> dict[str, Any]:
+    is_sender = request.sender_account_id == account_id
+    other_id = request.recipient_account_id if is_sender else request.sender_account_id
+    character = db.scalar(select(Character).where(Character.account_id == other_id))
+    return {
+        "request_id": request.id,
+        "status": request.status,
+        "direction": "outgoing" if is_sender else "incoming",
+        "created_at": request.created_at.isoformat() + "Z",
+        "player": _profile_dict(character) if character else None,
+    }
+
+
+@app.get("/api/v1/friends")
+def friends(
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    _require_character(account)
+    accepted = db.scalars(
+        select(FriendRequest).where(
+            FriendRequest.status == "accepted",
+            or_(
+                FriendRequest.sender_account_id == account.id,
+                FriendRequest.recipient_account_id == account.id,
+            ),
+        )
     ).all()
-    return [
-        {
-            "account_id": character.account_id,
-            "name": character.name,
-            "species": character.species,
-            "area_name": snapshot(character)["character"]["area_name"],
-        }
-        for character in rows
-    ]
+    return [_friend_request_dict(item, account.id, db)["player"] for item in accepted]
+
+
+@app.get("/api/v1/friend-requests")
+def friend_requests(
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, list[dict[str, Any]]]:
+    _require_character(account)
+    rows = db.scalars(
+        select(FriendRequest).where(
+            FriendRequest.status == "pending",
+            or_(
+                FriendRequest.sender_account_id == account.id,
+                FriendRequest.recipient_account_id == account.id,
+            ),
+        ).order_by(FriendRequest.created_at.desc())
+    ).all()
+    return {
+        "incoming": [
+            _friend_request_dict(item, account.id, db)
+            for item in rows
+            if item.recipient_account_id == account.id
+        ],
+        "outgoing": [
+            _friend_request_dict(item, account.id, db)
+            for item in rows
+            if item.sender_account_id == account.id
+        ],
+    }
+
+
+@app.post("/api/v1/friend-requests", status_code=201)
+def send_friend_request(
+    body: FriendRequestCreate,
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "friend_requests", 20, 60)
+    _require_character(account)
+    recipient = db.scalar(select(Character).where(Character.account_id == body.recipient_account_id))
+    if recipient is None:
+        raise HTTPException(status_code=404, detail="That player was not found.")
+    if recipient.account_id == account.id:
+        raise HTTPException(status_code=409, detail="You cannot send a friend request to yourself.")
+    existing = db.scalar(
+        select(FriendRequest).where(
+            or_(
+                (FriendRequest.sender_account_id == account.id)
+                & (FriendRequest.recipient_account_id == recipient.account_id),
+                (FriendRequest.sender_account_id == recipient.account_id)
+                & (FriendRequest.recipient_account_id == account.id),
+            )
+        )
+    )
+    if existing and existing.status == "accepted":
+        raise HTTPException(status_code=409, detail="You are already friends.")
+    if existing and existing.status == "pending":
+        if existing.sender_account_id == account.id:
+            raise HTTPException(status_code=409, detail="A friend request is already pending.")
+        raise HTTPException(status_code=409, detail="Accept the friend request already waiting for you.")
+    if existing and existing.sender_account_id == account.id:
+        existing.status = "pending"
+        existing.created_at = utc_now()
+        existing.responded_at = None
+        request_row = existing
+    else:
+        request_row = FriendRequest(
+            sender_account_id=account.id,
+            recipient_account_id=recipient.account_id,
+        )
+        db.add(request_row)
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A friend request already exists for those players.") from error
+    return _friend_request_dict(request_row, account.id, db)
+
+
+@app.patch("/api/v1/friend-requests/{request_id}")
+def respond_to_friend_request(
+    request_id: str,
+    body: FriendRequestUpdate,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    request_row = db.get(FriendRequest, request_id)
+    if (
+        request_row is None
+        or request_row.recipient_account_id != account.id
+        or request_row.status != "pending"
+    ):
+        raise HTTPException(status_code=404, detail="That incoming friend request is not available.")
+    request_row.status = body.status
+    request_row.responded_at = utc_now()
+    db.commit()
+    return _friend_request_dict(request_row, account.id, db)
 
 
 @app.post("/api/v1/commands", status_code=202)
@@ -590,7 +876,13 @@ def submit_command(
         db.add(command)
         db.flush()
         command.status = "completed"
-        command.result = resolve_command(body.text, account.character)
+        nearby_players = db.scalars(
+            select(Character).where(
+                Character.area_id == account.character.area_id,
+                Character.account_id != account.id,
+            )
+        ).all()
+        command.result = resolve_command(body.text, account.character, nearby_players)
         db.commit()
     except IntegrityError:
         db.rollback()
