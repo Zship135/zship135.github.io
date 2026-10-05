@@ -65,6 +65,19 @@ class LocalParserTests(unittest.TestCase):
                 self.assertEqual(result["occurrences"][0]["action_id"], "observe")
                 self.assertNotIn("subject", result["occurrences"][0]["arguments"])
 
+    def test_observe_self_phrasing_uses_self_subject(self):
+        for text in (
+            "look at myself",
+            "look at me",
+            "observe my profile",
+            "view my profile",
+            "look at my character",
+        ):
+            with self.subTest(text=text):
+                occurrence = parse_local(text)["occurrences"][0]
+                self.assertEqual(occurrence["action_id"], "observe")
+                self.assertEqual(occurrence["arguments"]["subject"], "self")
+
     def test_talk_preserves_utterance_and_topic(self):
         result = parse_local('Tell the guard about the plan: "attack the troll or flee"')
         args = result["occurrences"][0]["arguments"]

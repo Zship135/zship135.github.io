@@ -373,6 +373,10 @@ export default function App() {
 
   async function openPlayerProfile(playerAccountId, equippedGear = null) {
     setPeopleOpen(false);
+    if (playerAccountId === snapshot?.account_id) {
+      await openOwnProfile();
+      return;
+    }
     try {
       const result = await api(`/api/v1/players/${encodeURIComponent(playerAccountId)}/profile`, { token });
       await showProfile(equippedGear ? { ...result, equipped_gear: equippedGear } : result);

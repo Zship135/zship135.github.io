@@ -633,6 +633,20 @@ def test_observe_without_target_describes_area_and_missing_target_fails(
     assert missing_result["messages"] == ["There is no dragon here to observe."]
 
 
+def test_observe_self_returns_own_profile_account(client: TestClient) -> None:
+    registered = register(client, "observeself@example.com", "Mira", "goblin")
+
+    result = client.post(
+        "/api/v1/commands",
+        headers=auth(registered["token"]),
+        json={"request_id": "adf0f265-edca-449a-8ce5-100000000031", "text": "look at myself"},
+    ).json()["result"]
+
+    assert result["interpretation"]["occurrences"][0]["arguments"]["subject"] == "self"
+    assert result["messages"] == ["You look over your character profile."]
+    assert result["profile_account_ids"] == [registered["account_id"]]
+
+
 def test_observe_inventory_phrases_open_canonical_menu_views(client: TestClient) -> None:
     registered = register(client, "inventory-view@example.com", "Mira", "goblin")
     headers = auth(registered["token"])

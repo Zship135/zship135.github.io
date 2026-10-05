@@ -234,6 +234,10 @@ def resolve_command(
                 inventory_view = inventory_subjects[normalized_subject]
                 messages.append("You check your inventory and equipment.")
                 continue
+            if normalized_subject == "self":
+                messages.append("You look over your character profile.")
+                profile_account_ids.append(character.account_id)
+                continue
             if not subject:
                 messages.append(areas[character.area_id]["description"])
                 continue

@@ -19,6 +19,7 @@ LOCAL_PARSER_VERSION = "plight-local-0.1"
 ACTION_ALIASES: dict[str, tuple[str, ...]] = {
     "observe": (
         "observe", "look", "look at", "inspect", "examine", "study", "check",
+        "view my profile", "view my character", "show my profile",
         "what am i carrying", "what do i carry", "show my inventory", "open my inventory",
     ),
     "talk": ("talk", "speak", "say", "tell", "ask", "whisper", "shout", "chat"),
@@ -232,6 +233,10 @@ def _extract_arguments(
 
     if mention.action_id == "observe":
         if mention.phrase.casefold() in {
+            "view my profile", "view my character", "show my profile",
+        }:
+            target = "self"
+        elif mention.phrase.casefold() in {
             "what am i carrying", "what do i carry", "show my inventory", "open my inventory",
         }:
             args["subject"] = "inventory"
@@ -258,7 +263,23 @@ def _extract_arguments(
         }
         target_key = target.casefold().removeprefix("my ").removeprefix("the ")
         if target and target.casefold() not in area_phrases:
-            args["subject"] = target_key if target_key in {"inventory", "armor", "armour", "hands", "weapons"} else target
+            self_subjects = {
+                "me",
+                "myself",
+                "my self",
+                "self",
+                "profile",
+                "own profile",
+                "character",
+                "own character",
+            }
+            args["subject"] = (
+                "self"
+                if target_key in self_subjects
+                else target_key
+                if target_key in {"inventory", "armor", "armour", "hands", "weapons"}
+                else target
+            )
     elif mention.action_id in {"travel"}:
         direction = _DIRECTION_PATTERN.search(fragment)
         if direction:
