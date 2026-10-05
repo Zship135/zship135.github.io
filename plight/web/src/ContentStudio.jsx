@@ -340,6 +340,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
           exit_requirements: {},
           ambience: [],
           enemy_ids: [],
+          enemy_spawn_limit: 1,
           npc_ids: [],
           object_ids: [],
           resource_ids: [],
@@ -417,7 +418,11 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         name: `New ${CATEGORY_NAMES[type].toLowerCase().replace(/s$/, "")}`,
         description: "",
         attributes: { ...defaultAttributes },
-        ...(type === "enemy" ? { attack_die_sides: 2 } : {}),
+        ...(type === "enemy" ? {
+          attack_die_sides: 2,
+          respawn_chance_percent: 0,
+          behavior: "neutral",
+        } : {}),
         ...(type === "npc" ? {
           race: "human",
           present_for: ["human", "goblin"],
@@ -726,9 +731,13 @@ function LocationEditor({ location, entitiesById, locations, quests, onChange })
 
   function toggleId(field, id, selected) {
     onChange((current) => {
-      current[field] = selected
+      const next = selected
         ? [...current[field], id]
         : current[field].filter((value) => value !== id);
+      current[field] = next;
+      if (field === "enemy_ids" && selected) {
+        current.enemy_spawn_limit = Math.max(current.enemy_spawn_limit || 1, next.length);
+      }
     });
   }
 
@@ -807,7 +816,15 @@ function LocationEditor({ location, entitiesById, locations, quests, onChange })
       </section>
       <section className="studio-subsection">
         <h3>Location population</h3>
-        <p>Choose which authored content appears here.</p>
+        <p>Choose this location’s enemy types and maximum number of living enemy instances.</p>
+        <Field
+          label="Maximum enemies alive"
+          min={Math.max(1, location.enemy_ids.length)}
+          max={1000}
+          onChange={(value) => change("enemy_spawn_limit", value)}
+          type="number"
+          value={location.enemy_spawn_limit ?? Math.max(1, location.enemy_ids.length)}
+        />
         <EntityPicker title="Enemies" options={[...entitiesById.values()].filter((entity) => entity.type === "enemy")} selected={location.enemy_ids} onToggle={(id, selected) => toggleId("enemy_ids", id, selected)} />
         <EntityPicker title="NPCs" options={[...entitiesById.values()].filter((entity) => entity.type === "npc")} selected={location.npc_ids} onToggle={(id, selected) => toggleId("npc_ids", id, selected)} />
         <EntityPicker title="Furniture and objects" options={[...entitiesById.values()].filter((entity) => ["furniture", "object"].includes(entity.type))} selected={location.object_ids} onToggle={(id, selected) => toggleId("object_ids", id, selected)} />
@@ -906,14 +923,35 @@ function EntityEditor({ entity, entities, locations, lootItems, onChange, onLoca
       <section className="studio-subsection">
         <div className="studio-subsection-heading"><div><h3>Attributes and stats</h3><p>Values are shared with the game as typed data.</p></div><button className="studio-small-button" onClick={addAttribute} type="button">Add stat</button></div>
         {entity.type === "enemy" && (
-          <Field
-            label="Attack die (number of sides)"
-            min={2}
-            max={100}
-            onChange={(value) => set("attack_die_sides", value)}
-            type="number"
-            value={entity.attack_die_sides ?? 2}
-          />
+          <>
+            <p className="studio-hint">Each assigned location rolls this chance every 15 seconds while below its population cap. Set to 0 to disable respawning.</p>
+            <Field
+              label="Respawn chance per 15 seconds (%)"
+              min={0}
+              max={100}
+              onChange={(value) => set("respawn_chance_percent", value)}
+              type="number"
+              value={entity.respawn_chance_percent ?? 0}
+            />
+            <SelectField
+              label="Combat behavior"
+              options={[
+                { id: "passive", name: "Passive — never fights back" },
+                { id: "neutral", name: "Neutral — retaliates when attacked" },
+                { id: "aggressive", name: "Aggressive — attacks players every 30 seconds" },
+              ]}
+              value={entity.behavior || "neutral"}
+              onChange={(value) => set("behavior", value)}
+            />
+            <Field
+              label="Attack die (number of sides)"
+              min={2}
+              max={100}
+              onChange={(value) => set("attack_die_sides", value)}
+              type="number"
+              value={entity.attack_die_sides ?? 2}
+            />
+          </>
         )}
         <div className="studio-attribute-list">
           {Object.entries(entity.attributes).map(([key, value]) => (

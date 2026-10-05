@@ -5,9 +5,11 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     LargeBinary,
@@ -86,11 +88,31 @@ class Character(Base):
         default=lambda: {"target_id": None, "enemy_health": {}},
         server_default=text("'{}'"),
     )
+    experience: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    quest_state: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
     profile_pronouns: Mapped[str | None] = mapped_column(String(64), nullable=True)
     profile_lore: Mapped[str] = mapped_column(Text, default="", server_default="")
     profile_picture_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     profile_picture_mime: Mapped[str | None] = mapped_column(String(32), nullable=True)
     account: Mapped[Account] = relationship(back_populates="character")
+
+
+class EnemySpawn(Base):
+    __tablename__ = "enemy_spawns"
+    __table_args__ = (
+        CheckConstraint("health >= 0", name="ck_enemy_spawns_nonnegative_health"),
+        Index("ix_enemy_spawns_location_alive", "location_id", "is_alive"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    location_id: Mapped[str] = mapped_column(String(64), index=True)
+    enemy_id: Mapped[str] = mapped_column(String(64), index=True)
+    health: Mapped[int] = mapped_column(Integer)
+    is_alive: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    is_initial: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    spawned_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class FriendRequest(Base):

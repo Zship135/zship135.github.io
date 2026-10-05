@@ -6,12 +6,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 import hashlib
 from io import BytesIO
+import logging
 import os
+import random
 import re
 import threading
 import time
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, WebSocket
 from fastapi.exceptions import RequestValidationError
@@ -30,13 +32,21 @@ from plight_server.content import (
     world_content_dict,
     write_world_content,
 )
-from plight_server.game import initial_area, resolve_command, snapshot
+from plight_server.game import (
+    award_experience,
+    enemy_strike,
+    initial_area,
+    initialize_quest_step,
+    resolve_command,
+    snapshot,
+)
 from plight_server.models import (
     Account,
     ChatMessage,
     Character,
     Command,
     EventCounter,
+    EnemySpawn,
     FriendRequest,
     PlayerSession,
     utc_now,
@@ -50,11 +60,13 @@ from plight_server.schemas import (
     FriendRequestUpdate,
     LoginRequest,
     ProfileUpdateRequest,
+    QuestChoiceRequest,
     RegisterRequest,
 )
 from plight_server.security import authenticate_token, create_session, hash_password, verify_password
 
 LOCAL_ORIGINS = {"http://localhost:5173", "http://127.0.0.1:5173"}
+LOGGER = logging.getLogger(__name__)
 PRODUCTION_ORIGIN = os.getenv("PLIGHT_UI_ORIGIN", "").strip()
 ALLOWED_ORIGINS = {PRODUCTION_ORIGIN} if PRODUCTION_ORIGIN else LOCAL_ORIGINS
 MAX_REQUEST_BYTES = 1_048_576
@@ -118,6 +130,10 @@ class LiveHub:
                 if channel_id in connection.channels
             }
 
+    def active_account_ids(self) -> set[str]:
+        with self._lock:
+            return {connection.account_id for connection in self._connections}
+
     def publish(self, account_id: str, channel_id: str, event: dict[str, Any]) -> None:
         with self._lock:
             targets = [
@@ -138,6 +154,175 @@ class LiveHub:
 
 limiter = RateLimiter()
 live_hub = LiveHub()
+_character_locks: dict[str, threading.RLock] = {}
+_character_locks_guard = threading.Lock()
+_enemy_world_lock = threading.RLock()
+_enemy_spawn_rng = random.SystemRandom()
+
+
+def _character_lock(account_id: str) -> threading.RLock:
+    with _character_locks_guard:
+        return _character_locks.setdefault(account_id, threading.RLock())
+
+
+def _initial_enemy_spawn_id(location_id: str, enemy_id: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"plight:initial-enemy:{location_id}:{enemy_id}"))
+
+
+def _enemy_spawn_state(
+    db: Session,
+    content: dict[str, Any],
+) -> tuple[dict[str, list[dict[str, Any]]], list[EnemySpawn]]:
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    allowed_by_location = {
+        location["id"]: set(location["enemy_ids"])
+        for location in content["locations"]
+    }
+    rows = db.scalars(
+        select(EnemySpawn).where(EnemySpawn.is_alive.is_(True))
+    ).all()
+    initial_spawn_ids = set(
+        db.scalars(
+            select(EnemySpawn.id).where(EnemySpawn.is_initial.is_(True))
+        ).all()
+    )
+    counts: dict[str, int] = defaultdict(int)
+    for row in rows:
+        if (
+            row.enemy_id not in allowed_by_location.get(row.location_id, set())
+            or row.enemy_id not in entities
+        ):
+            row.is_alive = False
+        else:
+            counts[row.location_id] += 1
+    for location in content["locations"]:
+        spawn_limit = location["enemy_spawn_limit"]
+        for enemy_id in dict.fromkeys(location["enemy_ids"]):
+            if counts[location["id"]] >= spawn_limit:
+                break
+            spawn_id = _initial_enemy_spawn_id(location["id"], enemy_id)
+            if spawn_id not in initial_spawn_ids:
+                enemy = entities[enemy_id]
+                db.add(
+                    EnemySpawn(
+                        id=spawn_id,
+                        location_id=location["id"],
+                        enemy_id=enemy_id,
+                        health=enemy["attributes"]["health"],
+                        is_initial=True,
+                    )
+                )
+                initial_spawn_ids.add(spawn_id)
+                counts[location["id"]] += 1
+    db.flush()
+    rows = db.scalars(
+        select(EnemySpawn).where(EnemySpawn.is_alive.is_(True))
+    ).all()
+    by_location: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_location[row.location_id].append(
+            {
+                "id": row.id,
+                "enemy_id": row.enemy_id,
+                "health": row.health,
+                "is_alive": row.is_alive,
+            }
+        )
+    for spawns in by_location.values():
+        spawns.sort(key=lambda spawn: spawn["id"])
+    return dict(by_location), rows
+
+
+def _active_enemy_spawns_for_location(
+    db: Session,
+    content: dict[str, Any],
+    location_id: str,
+) -> list[dict[str, Any]]:
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    location = next(
+        (item for item in content["locations"] if item["id"] == location_id),
+        None,
+    )
+    if location is None:
+        return []
+    allowed_enemy_ids = set(location["enemy_ids"])
+    rows = db.scalars(
+        select(EnemySpawn).where(
+            EnemySpawn.location_id == location_id,
+            EnemySpawn.is_alive.is_(True),
+        )
+    ).all()
+    spawns = []
+    for row in rows:
+        if (
+            row.enemy_id not in allowed_enemy_ids
+            or row.enemy_id not in entities
+            or entities[row.enemy_id]["type"] != "enemy"
+        ):
+            row.is_alive = False
+            continue
+        spawns.append(
+            {
+                "id": row.id,
+                "enemy_id": row.enemy_id,
+                "health": row.health,
+                "is_alive": True,
+            }
+        )
+    spawns.sort(key=lambda spawn: spawn["id"])
+    return spawns
+
+
+def _persist_enemy_spawn_state(
+    rows: list[EnemySpawn],
+    spawns_by_location: dict[str, list[dict[str, Any]]],
+) -> set[str]:
+    spawn_by_id = {
+        spawn["id"]: spawn
+        for spawns in spawns_by_location.values()
+        for spawn in spawns
+    }
+    changed_locations: set[str] = set()
+    for row in rows:
+        spawn = spawn_by_id.get(row.id)
+        if spawn is None:
+            continue
+        if row.health != spawn["health"] or row.is_alive != spawn["is_alive"]:
+            row.health = spawn["health"]
+            row.is_alive = spawn["is_alive"]
+            changed_locations.add(row.location_id)
+    return changed_locations
+
+
+def _publish_world_update(
+    db: Session,
+    location_id: str,
+    messages: list[str] | None = None,
+    exclude_account_ids: set[str] | None = None,
+) -> None:
+    active_accounts = live_hub.active_account_ids()
+    if not active_accounts:
+        return
+    players = db.scalars(
+        select(Character.account_id).where(
+            Character.area_id == location_id,
+            Character.account_id.in_(active_accounts),
+        )
+    ).all()
+    event = {
+        "type": "world.updated",
+        "payload": {"id": str(uuid4()), "messages": messages or []},
+    }
+    for account_id in set(players) - (exclude_account_ids or set()):
+        live_hub.publish(account_id, f"account:{account_id}", event)
+
+
+def _snapshot_for_character(character: Character, db: Session) -> dict[str, Any]:
+    with _character_lock(character.account_id), _enemy_world_lock:
+        content = world_content_dict()
+        spawns_by_location, _ = _enemy_spawn_state(db, content)
+        db.commit()
+        return snapshot(character, spawns_by_location)
 
 
 def _error_response(status_code: int, code: str, message: str, request_id: str | None = None) -> JSONResponse:
@@ -256,20 +441,160 @@ def _cleanup_expired_chat() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     cleanup_task = asyncio.create_task(_chat_retention_loop())
+    enemy_task = asyncio.create_task(_enemy_world_loop())
     try:
         yield
     finally:
-        cleanup_task.cancel()
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
+        for task in (cleanup_task, enemy_task):
+            task.cancel()
+        for task in (cleanup_task, enemy_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 async def _chat_retention_loop() -> None:
     while True:
         await asyncio.to_thread(_cleanup_expired_chat)
         await asyncio.sleep(24 * 60 * 60)
+
+
+async def _enemy_world_loop() -> None:
+    next_spawn = time.monotonic() + 15
+    next_aggression = time.monotonic() + 5
+    while True:
+        now = time.monotonic()
+        await asyncio.sleep(max(0, min(next_spawn, next_aggression) - now))
+        now = time.monotonic()
+        if now >= next_spawn:
+            try:
+                await asyncio.to_thread(_run_enemy_spawn_tick)
+            except Exception:
+                LOGGER.exception("Enemy spawn tick failed.")
+            next_spawn += 15 * (int((now - next_spawn) // 15) + 1)
+        if now >= next_aggression:
+            try:
+                await asyncio.to_thread(_run_enemy_aggression_tick)
+            except Exception:
+                LOGGER.exception("Enemy aggression tick failed.")
+            next_aggression += 5 * (int((now - next_aggression) // 5) + 1)
+
+
+def _run_enemy_spawn_tick() -> None:
+    content = world_content_dict()
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    with _enemy_world_lock, SessionLocal() as db:
+        spawns_by_location, rows = _enemy_spawn_state(db, content)
+        counts: dict[str, int] = defaultdict(int)
+        for row in rows:
+            if row.is_alive:
+                counts[row.location_id] += 1
+        messages_by_location: dict[str, list[str]] = defaultdict(list)
+        for location in content["locations"]:
+            spawn_limit = location["enemy_spawn_limit"]
+            if counts[location["id"]] >= spawn_limit:
+                continue
+            for enemy_id in dict.fromkeys(location["enemy_ids"]):
+                if counts[location["id"]] >= spawn_limit:
+                    break
+                enemy = entities[enemy_id]
+                chance = enemy["respawn_chance_percent"]
+                if chance <= 0 or _enemy_spawn_rng.random() * 100 >= chance:
+                    continue
+                spawn = EnemySpawn(
+                    location_id=location["id"],
+                    enemy_id=enemy_id,
+                    health=enemy["attributes"]["health"],
+                )
+                db.add(spawn)
+                db.flush()
+                spawns_by_location.setdefault(location["id"], []).append(
+                    {
+                        "id": spawn.id,
+                        "enemy_id": enemy_id,
+                        "health": spawn.health,
+                        "is_alive": True,
+                    }
+                )
+                counts[location["id"]] += 1
+                messages_by_location[location["id"]].append(
+                    f"{enemy['name']} appears."
+                )
+        db.commit()
+        for location_id, messages in messages_by_location.items():
+            _publish_world_update(db, location_id, messages)
+
+
+def _run_enemy_aggression_tick() -> None:
+    active_accounts = live_hub.active_account_ids()
+    if not active_accounts:
+        return
+    content = world_content_dict()
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    areas = {location["id"]: location for location in content["locations"]}
+    now = utc_now()
+    for account_id in sorted(active_accounts):
+        with _character_lock(account_id), _enemy_world_lock, SessionLocal() as db:
+            character = db.scalar(
+                select(Character).where(Character.account_id == account_id)
+            )
+            if character is None or character.area_id not in areas:
+                continue
+            location_id = character.area_id
+            location_spawns = _active_enemy_spawns_for_location(
+                db, content, location_id
+            )
+            attack_times = dict(
+                (character.combat_state or {}).get("enemy_attack_at", {})
+            )
+            aggressive_spawn_ids = {
+                spawn["id"]
+                for spawn in location_spawns
+                if entities.get(spawn["enemy_id"], {}).get("behavior", "neutral")
+                == "aggressive"
+            }
+            original_attack_times = dict(attack_times)
+            messages: list[str] = []
+            for spawn in location_spawns:
+                enemy = entities.get(spawn["enemy_id"])
+                if enemy is None or enemy.get("behavior", "neutral") != "aggressive":
+                    continue
+                last_attack = attack_times.get(spawn["id"])
+                if last_attack:
+                    try:
+                        if not isinstance(last_attack, str):
+                            raise ValueError
+                        elapsed = (now - datetime.fromisoformat(last_attack)).total_seconds()
+                    except (TypeError, ValueError):
+                        LOGGER.warning("Discarding invalid enemy attack timestamp for %s.", spawn["id"])
+                        elapsed = 30
+                    if elapsed < 30:
+                        continue
+                messages.extend(enemy_strike(character, enemy, areas))
+                attack_times[spawn["id"]] = now.isoformat()
+                if character.area_id != location_id:
+                    break
+            attack_times = {
+                spawn_id: attacked_at
+                for spawn_id, attacked_at in attack_times.items()
+                if spawn_id in aggressive_spawn_ids
+            }
+            if messages or attack_times != original_attack_times:
+                state = dict(character.combat_state or {})
+                state["enemy_attack_at"] = attack_times
+                character.combat_state = state
+            if db.new or db.dirty:
+                db.commit()
+            if messages:
+                live_hub.publish(
+                    account_id,
+                    f"account:{account_id}",
+                    {
+                        "type": "world.updated",
+                        "payload": {"id": str(uuid4()), "messages": messages},
+                    },
+                )
 
 
 app = FastAPI(title="Plight API", version="1.0.0", lifespan=lifespan)
@@ -428,7 +753,7 @@ def create_character(
         if db.scalar(select(Character.id).where(Character.name_key == name_key)):
             raise HTTPException(status_code=409, detail="That character name is already taken.") from error
         raise HTTPException(status_code=409, detail="A character already exists for this account.") from error
-    return snapshot(character)
+    return _snapshot_for_character(character, db)
 
 
 @app.post("/api/v1/auth/logout", status_code=204)
@@ -474,6 +799,248 @@ def _require_character(account: Account) -> Character:
     if account.character is None:
         raise HTTPException(status_code=409, detail="Create a character before using player profiles.")
     return account.character
+
+
+def _quest_by_id(content: dict[str, Any], quest_id: str) -> dict[str, Any]:
+    quest = next((item for item in content.get("quests", []) if item["id"] == quest_id), None)
+    if quest is None:
+        raise HTTPException(status_code=404, detail="That quest does not exist.")
+    return quest
+
+
+def _require_quest_giver_here(
+    character: Character,
+    quest: dict[str, Any],
+    content: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    areas = {location["id"]: location for location in content["locations"]}
+    giver = entities[quest["giver_npc_id"]]
+    area = areas.get(character.area_id)
+    if (
+        area is None
+        or giver["id"] not in area["npc_ids"]
+        or character.species not in giver["present_for"]
+    ):
+        raise HTTPException(status_code=409, detail=f"You must be with {giver['name']} to do that.")
+    return giver, entities
+
+
+@app.post("/api/v1/quests/{quest_id}/accept")
+def accept_quest(
+    quest_id: str,
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "quest_actions", 30, 60)
+    character = _require_character(account)
+    with _character_lock(account.id):
+        db.refresh(character)
+        content = world_content_dict()
+        quest = _quest_by_id(content, quest_id)
+        giver, _ = _require_quest_giver_here(character, quest, content)
+        state = dict(character.quest_state or {})
+        current = state.get(quest_id, {}).get("status")
+        if current == "completed":
+            raise HTTPException(status_code=409, detail="You have already completed this quest.")
+        if current == "active":
+            return {
+                "message": f"You have already accepted “{quest['title']}”.",
+                "snapshot": _snapshot_for_character(character, db),
+            }
+        state[quest_id] = initialize_quest_step(
+            quest,
+            {
+                "status": "active",
+                "current_step_id": quest["start_step_id"],
+                "progress": {},
+                "items_to_turn_in": {},
+            },
+            character.area_id,
+        )
+        character.quest_state = state
+        db.commit()
+        _publish(
+            db,
+            f"account:{account.id}",
+            "quest.updated",
+            {"quest_id": quest_id, "status": "active"},
+            {account.id},
+        )
+        return {
+            "message": f"You accept “{quest['title']}” from {giver['name']}.",
+            "snapshot": _snapshot_for_character(character, db),
+        }
+
+
+@app.post("/api/v1/quests/{quest_id}/choose")
+def choose_quest_step(
+    quest_id: str,
+    body: QuestChoiceRequest,
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "quest_actions", 30, 60)
+    character = _require_character(account)
+    with _character_lock(account.id):
+        db.refresh(character)
+        content = world_content_dict()
+        quest = _quest_by_id(content, quest_id)
+        state = dict(character.quest_state or {})
+        quest_state = dict(state.get(quest_id, {}))
+        if quest_state.get("status") != "active":
+            raise HTTPException(status_code=409, detail="Accept this quest before choosing a step.")
+        if quest_state.get("ready_to_turn_in"):
+            raise HTTPException(status_code=409, detail="This quest is ready to turn in.")
+        step_id = quest_state.get("current_step_id") or quest["start_step_id"]
+        if body.step_id != step_id:
+            raise HTTPException(status_code=409, detail="That quest step is no longer active.")
+        step = next((item for item in quest["steps"] if item["id"] == step_id), None)
+        if step is None:
+            raise HTTPException(status_code=409, detail="The active quest step no longer exists.")
+        choice = next((item for item in step["choices"] if item["id"] == body.choice_id), None)
+        if choice is None:
+            raise HTTPException(status_code=409, detail="That quest choice is no longer available.")
+
+        inventory = character.inventory or {}
+        progress = (quest_state.get("progress") or {}).get(step_id, {})
+        objectives_complete = all(
+            (
+                inventory.get(objective["target_id"], 0)
+                if objective["type"] == "collect"
+                else progress.get(objective["id"], 0)
+            )
+            >= objective["quantity"]
+            for objective in step["objectives"]
+        )
+        if not objectives_complete:
+            raise HTTPException(status_code=409, detail="Complete this step's objectives before choosing.")
+
+        items_to_turn_in = dict(quest_state.get("items_to_turn_in") or {})
+        for objective in step["objectives"]:
+            if objective["type"] == "collect":
+                item_id = objective["target_id"]
+                items_to_turn_in[item_id] = (
+                    items_to_turn_in.get(item_id, 0) + objective["quantity"]
+                )
+
+        next_step_id = choice["next_step_id"]
+        if next_step_id is None:
+            quest_state = {
+                **quest_state,
+                "current_step_id": None,
+                "ready_to_turn_in": True,
+                "items_to_turn_in": items_to_turn_in,
+            }
+        else:
+            quest_state = initialize_quest_step(
+                quest,
+                {
+                    **quest_state,
+                    "current_step_id": next_step_id,
+                    "ready_to_turn_in": False,
+                    "items_to_turn_in": items_to_turn_in,
+                },
+                character.area_id,
+            )
+        state[quest_id] = quest_state
+        character.quest_state = state
+        db.commit()
+        _publish(
+            db,
+            f"account:{account.id}",
+            "quest.updated",
+            {
+                "quest_id": quest_id,
+                "status": "active",
+                "step_id": quest_state.get("current_step_id"),
+            },
+            {account.id},
+        )
+        return {
+            "message": f"You choose: {choice['text']}",
+            "snapshot": _snapshot_for_character(character, db),
+        }
+
+
+@app.post("/api/v1/quests/{quest_id}/turn-in")
+def turn_in_quest(
+    quest_id: str,
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "quest_actions", 30, 60)
+    character = _require_character(account)
+    with _character_lock(account.id):
+        db.refresh(character)
+        content = world_content_dict()
+        quest = _quest_by_id(content, quest_id)
+        giver, entities = _require_quest_giver_here(character, quest, content)
+        state = dict(character.quest_state or {})
+        quest_state = dict(state.get(quest_id, {}))
+        if quest_state.get("status") == "completed":
+            raise HTTPException(status_code=409, detail="You have already completed this quest.")
+        if quest_state.get("status") != "active":
+            raise HTTPException(status_code=409, detail="Accept this quest before turning it in.")
+        if not quest_state.get("ready_to_turn_in"):
+            raise HTTPException(
+                status_code=409,
+                detail="Complete the active step and choose to return to the quest giver first.",
+            )
+
+        inventory = dict(character.inventory or {})
+        missing = [
+            (
+                entities[item_id]["name"],
+                quantity - inventory.get(item_id, 0),
+            )
+            for item_id, quantity in quest_state.get("items_to_turn_in", {}).items()
+            if inventory.get(item_id, 0) < quantity
+        ]
+        if missing:
+            details = ", ".join(f"{quantity} more {name}" for name, quantity in missing)
+            raise HTTPException(status_code=409, detail=f"You still need {details}.")
+
+        for item_id, quantity in quest_state.get("items_to_turn_in", {}).items():
+            remainder = inventory.get(item_id, 0) - quantity
+            if remainder:
+                inventory[item_id] = remainder
+            else:
+                inventory.pop(item_id, None)
+        for reward in quest.get("reward_items", []):
+            item_id = reward["item_id"]
+            inventory[item_id] = inventory.get(item_id, 0) + reward["quantity"]
+        character.inventory = inventory
+        state[quest_id] = {
+            **quest_state,
+            "status": "completed",
+            "ready_to_turn_in": False,
+            "completed_at": utc_now().isoformat() + "Z",
+        }
+        character.quest_state = state
+        messages = [
+            f"{giver['name']} accepts your completed quest. “{quest['title']}” is complete."
+        ]
+        messages.extend(
+            f"Reward: {reward['quantity']} {entities[reward['item_id']]['name']}."
+            for reward in quest.get("reward_items", [])
+        )
+        messages.extend(award_experience(character, quest["reward_experience"]))
+        db.commit()
+        _publish(
+            db,
+            f"account:{account.id}",
+            "quest.updated",
+            {"quest_id": quest_id, "status": "completed"},
+            {account.id},
+        )
+        return {
+            "messages": messages,
+            "snapshot": _snapshot_for_character(character, db),
+        }
 
 
 @app.get("/api/v1/profile")
@@ -576,10 +1143,13 @@ def get_player_profile(
 
 
 @app.get("/api/v1/world/snapshot")
-def world_snapshot(account: Account = Depends(require_account)) -> dict[str, Any]:
+def world_snapshot(
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     if account.character is None:
         raise HTTPException(status_code=409, detail="This account does not have a character.")
-    return snapshot(account.character)
+    return _snapshot_for_character(account.character, db)
 
 
 def _is_content_editor(account: Account) -> bool:
@@ -845,14 +1415,11 @@ def respond_to_friend_request(
     return _friend_request_dict(request_row, account.id, db)
 
 
-@app.post("/api/v1/commands", status_code=202)
-def submit_command(
+def _submit_command_locked(
     body: CommandRequest,
-    request: Request,
-    account: Account = Depends(require_account),
-    db: Session = Depends(get_db),
+    account: Account,
+    db: Session,
 ) -> dict[str, Any]:
-    _check_rate(request, "commands", 30, 60)
     prior = db.scalar(
         select(Command).where(Command.account_id == account.id, Command.request_id == str(body.request_id))
     )
@@ -872,17 +1439,25 @@ def submit_command(
         raw_text=body.text,
         status="queued",
     )
+    changed_locations: set[str] = set()
     try:
         db.add(command)
         db.flush()
         command.status = "completed"
+        spawns_by_location, spawn_rows = _enemy_spawn_state(db, world_content_dict())
         nearby_players = db.scalars(
             select(Character).where(
                 Character.area_id == account.character.area_id,
                 Character.account_id != account.id,
             )
         ).all()
-        command.result = resolve_command(body.text, account.character, nearby_players)
+        command.result = resolve_command(
+            body.text,
+            account.character,
+            nearby_players,
+            spawns_by_location,
+        )
+        changed_locations = _persist_enemy_spawn_state(spawn_rows, spawns_by_location)
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -908,7 +1483,24 @@ def submit_command(
         {"request_id": command.request_id, "status": command.status, "result": command.result},
         {account.id},
     )
+    for location_id in changed_locations:
+        _publish_world_update(db, location_id, exclude_account_ids={account.id})
     return {"request_id": command.request_id, "status": command.status, "result": command.result}
+
+
+@app.post("/api/v1/commands", status_code=202)
+def submit_command(
+    body: CommandRequest,
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "commands", 30, 60)
+    character = _require_character(account)
+    with _character_lock(account.id):
+        db.refresh(character)
+        with _enemy_world_lock:
+            return _submit_command_locked(body, account, db)
 
 
 @app.get("/api/v1/commands/{request_id}")

@@ -37,6 +37,7 @@ function upsertActivity(current, entry) {
 
 function activityMessageClass(message, entry) {
   if (entry.type === "location") return "world-text";
+  if (entry.type === "enemy") return "enemy-text";
   if (/^(You gain \d+ experience\.|Loot:|No items dropped\.)/i.test(message)) return "reward-text";
   if (/\brolls D\d+\b|\bhits you for\b|\bis defeated\b/i.test(message)) return "enemy-text";
   return "player-text";
@@ -621,6 +622,24 @@ export default function App() {
             return;
           }
         }
+        if (data.type === "world.updated") {
+          const update = data.payload || {};
+          if (update.messages?.length) {
+            setActivity((current) => [
+              ...current,
+              {
+                id: update.id || `world-update-${Date.now()}`,
+                type: "enemy",
+                result: { messages: update.messages },
+              },
+            ].slice(-30));
+          }
+          const world = await refreshWorld(token);
+          if (!world) {
+            socket.close();
+            return;
+          }
+        }
         if (data.type === "quest.updated") {
           await refreshWorld(token);
         }
@@ -1109,7 +1128,7 @@ export default function App() {
               <WorldEntityList title="Enemies" entities={snapshot?.area?.enemies || []} renderItem={(enemy) => (
                 <article className="world-entity enemy-entity" key={enemy.id}>
                   <strong>{enemy.name}</strong>
-                  <span>HP {enemy.health}/{enemy.max_health} · D{enemy.attack_die_sides}</span>
+                  <span>HP {enemy.health}/{enemy.max_health} · D{enemy.attack_die_sides} · {(enemy.behavior || "neutral").toUpperCase()}</span>
                   <p>{enemy.description}</p>
                   <button onClick={() => enterCommand(`attack ${enemy.name}`)} type="button">Attack</button>
                 </article>

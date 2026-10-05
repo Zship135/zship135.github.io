@@ -99,6 +99,11 @@ class DialogueChoiceRequest(BaseModel):
     choice_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
 
 
+class QuestChoiceRequest(BaseModel):
+    step_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    choice_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+
+
 class ChatSendRequest(BaseModel):
     channel_id: str = Field(min_length=1, max_length=128)
     text: str = Field(min_length=1, max_length=1000)

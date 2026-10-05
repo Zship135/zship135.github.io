@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
@@ -16,7 +18,7 @@ import plight_server.content as content_store
 import plight_server.game as game
 from plight_server.database import Base, get_db
 from plight_server.game import initial_area
-from plight_server.models import Account, Character, ChatMessage, Command, PlayerSession
+from plight_server.models import Account, Character, ChatMessage, Command, EnemySpawn, PlayerSession
 
 DEFAULT_APPEARANCE = {
     "build": "average",
@@ -463,7 +465,7 @@ def test_npc_race_visibility_and_branching_dialogue(
     guide = next(entity for entity in update["content"]["entities"] if entity["id"] == "old_guide")
     guide.update(
         {
-            "race": "goblin",
+            "race": "dryad",
             "present_for": ["human"],
             "dialogue": {
                 "start_node_id": "greeting",
@@ -496,7 +498,7 @@ def test_npc_race_visibility_and_branching_dialogue(
     human_world = client.get("/api/v1/world/snapshot", headers=auth(builder["token"])).json()
     goblin_world = client.get("/api/v1/world/snapshot", headers=auth(goblin["token"])).json()
     human_guide = next(npc for npc in human_world["area"]["npcs"] if npc["id"] == "old_guide")
-    assert human_guide["race"] == "goblin"
+    assert human_guide["race"] == "dryad"
     assert "old_guide" not in {npc["id"] for npc in goblin_world["area"]["npcs"]}
 
     started = client.post(
@@ -1048,3 +1050,539 @@ def test_observe_player_opens_profile_only_for_same_area_player(client: TestClie
     assert absent_result["messages"] == ["There is no Sable here to observe."]
     assert absent_result["profile_account_ids"] == []
     assert absent_result["observed_player_equipment"] == {}
+
+
+def test_legacy_fetch_quest_runs_in_builder_and_unlocks_exit_per_character(client: TestClient) -> None:
+    player = register(client, "gatekeeper-player@example.com", "Mira")
+    other_player = register(client, "gatekeeper-other@example.com", "Rook", "goblin")
+    player_headers = auth(player["token"])
+    other_headers = auth(other_player["token"])
+
+    for headers, is_goblin in ((player_headers, False), (other_headers, True)):
+        if is_goblin:
+            town = client.post(
+                "/api/v1/commands",
+                headers=headers,
+                json={"request_id": str(uuid4()), "text": "Travel west"},
+            )
+            assert town.status_code == 202
+        path = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={"request_id": str(uuid4()), "text": "Travel west"},
+        )
+        assert path.status_code == 202
+        assert path.json()["result"]["snapshot"]["area"]["id"] == "new_location_2"
+
+    player_world = client.get("/api/v1/world/snapshot", headers=player_headers).json()
+    gate = next(exit for exit in player_world["area"]["exit_details"] if exit["direction"] == "south")
+    assert gate["accessible"] is False
+    assert "Gatekeeper" in gate["reason"]
+    assert player_world["area"]["npcs"][0]["quests"][0]["status"] == "available"
+
+    accepted = client.post(
+        "/api/v1/quests/mucus_for_the_gatekeeper/accept",
+        headers=player_headers,
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["snapshot"]["quest_log"][0]["status"] == "active"
+    blocked = client.post(
+        "/api/v1/commands",
+        headers=player_headers,
+        json={"request_id": str(uuid4()), "text": "Travel south"},
+    ).json()["result"]
+    assert blocked["snapshot"]["character"]["area_id"] == "new_location_2"
+    assert "10 more Mucus membrane" in blocked["messages"][0]
+
+    with api.SessionLocal() as db:
+        character = db.scalar(select(Character).where(Character.account_id == player["account_id"]))
+        character.inventory = {"mucus_membrane": 12}
+        db.commit()
+
+    progressed = client.get("/api/v1/world/snapshot", headers=player_headers).json()
+    active_quest = progressed["quest_log"][0]
+    assert active_quest["can_choose"] is True
+    assert active_quest["choices"][0]["text"] == "Return to the quest giver"
+    chosen = client.post(
+        "/api/v1/quests/mucus_for_the_gatekeeper/choose",
+        headers=player_headers,
+        json={"step_id": "step_1", "choice_id": "finish"},
+    )
+    assert chosen.status_code == 200, chosen.text
+    assert chosen.json()["snapshot"]["quest_log"][0]["can_turn_in"] is True
+
+    turned_in = client.post(
+        "/api/v1/quests/mucus_for_the_gatekeeper/turn-in",
+        headers=player_headers,
+    )
+    assert turned_in.status_code == 200, turned_in.text
+    result = turned_in.json()
+    assert result["snapshot"]["character"]["inventory"] == {"mucus_membrane": 2}
+    assert result["snapshot"]["character"]["experience"] == 50
+    assert result["snapshot"]["quest_log"][0]["status"] == "completed"
+    assert next(
+        exit for exit in result["snapshot"]["area"]["exit_details"] if exit["direction"] == "south"
+    )["accessible"] is True
+    assert client.post(
+        "/api/v1/quests/mucus_for_the_gatekeeper/turn-in",
+        headers=player_headers,
+    ).status_code == 409
+
+    other_world = client.get("/api/v1/world/snapshot", headers=other_headers).json()
+    other_gate = next(exit for exit in other_world["area"]["exit_details"] if exit["direction"] == "south")
+    assert other_gate["accessible"] is False
+    assert other_world["quest_log"] == []
+
+
+def test_multi_step_quest_tracks_talk_visit_kill_choices_and_item_rewards(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NoLootRoll:
+        @staticmethod
+        def randint(_: int, __: int) -> int:
+            return 1
+
+        @staticmethod
+        def random() -> float:
+            return 1.0
+
+    monkeypatch.setattr(game, "combat_rng", NoLootRoll())
+    source = content_store.WORLD_CONTENT_PATH.read_bytes()
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", tmp_path / "world_content.json")
+    content_store.WORLD_CONTENT_PATH.write_bytes(source)
+    monkeypatch.setenv("PLIGHT_CONTENT_EDITOR_EMAIL", "quest-builder@example.com")
+    builder = register(client, "quest-builder@example.com", "Builder")
+    player = register(client, "branching-quest@example.com", "Mira")
+    builder_headers = auth(builder["token"])
+    player_headers = auth(player["token"])
+
+    update = client.get("/api/v1/content", headers=builder_headers).json()
+    update["content"]["quests"].append({
+        "id": "branching_trial",
+        "title": "The Path and the Slug",
+        "description": "Prove you can follow the trail.",
+        "giver_npc_id": "gatekeeper",
+        "start_step_id": "speak",
+        "steps": [
+            {
+                "id": "speak",
+                "title": "Speak with the keeper",
+                "description": "",
+                "objectives": [
+                    {"id": "talk_keeper", "type": "talk", "target_id": "gatekeeper", "quantity": 1}
+                ],
+                "choices": [
+                    {"id": "continue", "text": "Follow the trail", "next_step_id": "visit"}
+                ],
+            },
+            {
+                "id": "visit",
+                "title": "Follow the trail",
+                "description": "",
+                "objectives": [
+                    {"id": "visit_plain", "type": "visit", "target_id": "new_location", "quantity": 1}
+                ],
+                "choices": [
+                    {"id": "hunt", "text": "Return and hunt the slug", "next_step_id": "kill"}
+                ],
+            },
+            {
+                "id": "kill",
+                "title": "Hunt the slug",
+                "description": "",
+                "objectives": [
+                    {"id": "kill_slug", "type": "kill", "target_id": "new_enemy", "quantity": 1}
+                ],
+                "choices": [
+                    {"id": "finish", "text": "Return to the keeper", "next_step_id": None}
+                ],
+            },
+        ],
+        "reward_experience": 25,
+        "reward_items": [{"item_id": "mucus_membrane", "quantity": 1}],
+    })
+    enemy = next(entity for entity in update["content"]["entities"] if entity["id"] == "new_enemy")
+    enemy["attributes"]["health"] = 1
+    enemy["attributes"]["experience"] = 0
+    published = client.put("/api/v1/content", headers=builder_headers, json=update)
+    assert published.status_code == 200, published.text
+
+    with api.SessionLocal() as db:
+        character = db.scalar(select(Character).where(Character.account_id == player["account_id"]))
+        character.area_id = "new_location_2"
+        db.commit()
+    accepted = client.post(
+        "/api/v1/quests/branching_trial/accept",
+        headers=player_headers,
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    talked = client.post(
+        "/api/v1/commands",
+        headers=player_headers,
+        json={"request_id": str(uuid4()), "text": "Talk to Mathew"},
+    ).json()["result"]
+    assert talked["snapshot"]["quest_log"][0]["can_choose"] is True
+    assert talked["snapshot"]["quest_log"][0]["objectives"][0]["current"] == 1
+
+    chose_visit = client.post(
+        "/api/v1/quests/branching_trial/choose",
+        headers=player_headers,
+        json={"step_id": "speak", "choice_id": "continue"},
+    )
+    assert chose_visit.status_code == 200, chose_visit.text
+    traveled = client.post(
+        "/api/v1/commands",
+        headers=player_headers,
+        json={"request_id": str(uuid4()), "text": "Travel west"},
+    ).json()["result"]
+    assert traveled["snapshot"]["quest_log"][0]["objectives"][0]["current"] == 1
+    assert traveled["snapshot"]["quest_log"][0]["can_choose"] is True
+
+    chose_kill = client.post(
+        "/api/v1/quests/branching_trial/choose",
+        headers=player_headers,
+        json={"step_id": "visit", "choice_id": "hunt"},
+    )
+    assert chose_kill.status_code == 200, chose_kill.text
+    returned = client.post(
+        "/api/v1/commands",
+        headers=player_headers,
+        json={"request_id": str(uuid4()), "text": "Travel east"},
+    ).json()["result"]
+    assert returned["snapshot"]["character"]["area_id"] == "new_location_2"
+    defeated = client.post(
+        "/api/v1/commands",
+        headers=player_headers,
+        json={"request_id": str(uuid4()), "text": "Attack the slug"},
+    ).json()["result"]
+    assert defeated["snapshot"]["quest_log"][0]["objectives"][0]["current"] == 1
+    assert defeated["snapshot"]["quest_log"][0]["can_choose"] is True
+
+    finished = client.post(
+        "/api/v1/quests/branching_trial/choose",
+        headers=player_headers,
+        json={"step_id": "kill", "choice_id": "finish"},
+    )
+    assert finished.status_code == 200, finished.text
+    turned_in = client.post(
+        "/api/v1/quests/branching_trial/turn-in",
+        headers=player_headers,
+    )
+    assert turned_in.status_code == 200, turned_in.text
+    assert turned_in.json()["snapshot"]["character"]["experience"] == 25
+    assert turned_in.json()["snapshot"]["character"]["inventory"]["mucus_membrane"] == 1
+
+
+def test_slug_defeat_awards_configured_experience_and_loot(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    player = register(client, "slug-reward@example.com", "Mira")
+
+    class FixedRewardRoll:
+        @staticmethod
+        def randint(_: int, __: int) -> int:
+            return 1
+
+        @staticmethod
+        def random() -> float:
+            return 0.0
+
+    monkeypatch.setattr(game, "combat_rng", FixedRewardRoll())
+    with api.SessionLocal() as db:
+        character = db.scalar(select(Character).where(Character.account_id == player["account_id"]))
+        character.area_id = "new_location_2"
+        character.combat_state = {"target_id": None, "enemy_health": {}}
+        db.commit()
+
+    result = None
+    for _ in range(5):
+        response = client.post(
+            "/api/v1/commands",
+            headers=auth(player["token"]),
+            json={"request_id": str(uuid4()), "text": "Attack the slug"},
+        )
+        assert response.status_code == 202, response.text
+        result = response.json()["result"]
+
+    assert any("Slug is defeated." in message for message in result["messages"])
+    assert "You gain 15 experience." in result["messages"]
+    assert "Loot: 1 Mucus membrane." in result["messages"]
+    assert result["snapshot"]["character"]["experience"] == 15
+    assert result["snapshot"]["character"]["inventory"]["mucus_membrane"] == 1
+
+
+def test_enemy_rewards_report_zero_xp_no_drops_and_authored_quantity_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MaximumQuantityRoll:
+        @staticmethod
+        def randint(_: int, maximum: int) -> int:
+            return maximum
+
+        @staticmethod
+        def random() -> float:
+            return 0.0
+
+    monkeypatch.setattr(game, "combat_rng", MaximumQuantityRoll())
+    character = SimpleNamespace(experience=0, combat_stats={}, inventory={})
+    enemy = {
+        "attributes": {"experience": 0},
+        "loot_table": [
+            {
+                "item_id": "healing_potion",
+                "chance": 1.0,
+                "minimum_quantity": 2,
+                "maximum_quantity": 5,
+            }
+        ],
+    }
+    entities = {"healing_potion": {"name": "Healing potion"}}
+
+    messages = game._reward_enemy_defeat(character, enemy, entities)
+    assert messages == ["You gain 0 experience.", "Loot: 5 Healing potions."]
+    assert character.inventory == {"healing_potion": 5}
+
+    enemy["loot_table"] = []
+    assert game._reward_enemy_defeat(character, enemy, entities) == [
+        "You gain 0 experience.",
+        "No items dropped.",
+    ]
+
+
+def _write_enemy_world(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    behavior: str | None = "neutral",
+    respawn_chance: int | None = 0,
+    spawn_limit: int | None = 2,
+) -> content_store.WorldContent:
+    location: dict[str, Any] = {
+        "id": "spawn_room",
+        "name": "Spawn room",
+        "description": "A small testing room.",
+        "position": {"x": 50, "y": 50},
+        "starting_species": ["human", "goblin"],
+        "enemy_ids": ["test_rat"],
+    }
+    if spawn_limit is not None:
+        location["enemy_spawn_limit"] = spawn_limit
+    enemy: dict[str, Any] = {
+        "id": "test_rat",
+        "type": "enemy",
+        "name": "Test rat",
+        "description": "A test enemy.",
+        "attributes": {"health": 12, "attack": 1, "defense": 0, "experience": 0},
+    }
+    if behavior is not None:
+        enemy["behavior"] = behavior
+    if respawn_chance is not None:
+        enemy["respawn_chance_percent"] = respawn_chance
+    world = content_store.WorldContent.model_validate(
+        {"locations": [location], "entities": [enemy]}
+    )
+    world_path = tmp_path / "world_content.json"
+    world_path.write_text(world.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", world_path)
+    return world
+
+
+def test_enemy_spawn_settings_default_to_safe_values(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _write_enemy_world(
+        tmp_path,
+        monkeypatch,
+        behavior=None,
+        respawn_chance=None,
+        spawn_limit=None,
+    )
+
+    assert world.entities[0].behavior == "neutral"
+    assert world.entities[0].respawn_chance_percent == 0
+    assert world.locations[0].enemy_spawn_limit == 1
+
+
+def test_enemy_spawn_tick_obeys_shared_location_cap_and_allows_duplicates(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(tmp_path, monkeypatch, respawn_chance=100, spawn_limit=2)
+
+    class AlwaysSpawn:
+        @staticmethod
+        def random() -> float:
+            return 0.0
+
+    monkeypatch.setattr(api, "_enemy_spawn_rng", AlwaysSpawn())
+    api._run_enemy_spawn_tick()
+    api._run_enemy_spawn_tick()
+
+    with api.SessionLocal() as db:
+        rows = db.scalars(
+            select(EnemySpawn).where(
+                EnemySpawn.location_id == "spawn_room",
+                EnemySpawn.is_alive.is_(True),
+            )
+        ).all()
+        assert len(rows) == 2
+        assert len({row.id for row in rows}) == 2
+        assert sum(row.is_initial for row in rows) == 1
+        duplicate = next(row for row in rows if not row.is_initial)
+        duplicate.is_alive = False
+        db.commit()
+
+    api._run_enemy_spawn_tick()
+
+    with api.SessionLocal() as db:
+        living = db.scalars(
+            select(EnemySpawn).where(
+                EnemySpawn.location_id == "spawn_room",
+                EnemySpawn.is_alive.is_(True),
+            )
+        ).all()
+        assert len(living) == 2
+        assert len({row.enemy_id for row in living}) == 1
+
+
+def test_enemy_health_is_shared_between_players(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(tmp_path, monkeypatch, behavior="passive", respawn_chance=0)
+    first = register(client, "shared-first@example.com", "First")
+    second = register(client, "shared-second@example.com", "Second", "goblin")
+    first_headers = auth(first["token"])
+
+    initial = client.get("/api/v1/world/snapshot", headers=first_headers).json()
+    assert initial["area"]["enemies"][0]["health"] == 12
+    attacked = client.post(
+        "/api/v1/commands",
+        headers=first_headers,
+        json={"request_id": str(uuid4()), "text": "Attack the test rat"},
+    )
+    assert attacked.status_code == 202
+    assert "Test rat does not fight back." in attacked.json()["result"]["messages"]
+
+    second_snapshot = client.get(
+        "/api/v1/world/snapshot",
+        headers=auth(second["token"]),
+    ).json()
+    assert second_snapshot["area"]["enemies"][0]["health"] == 9
+
+
+@pytest.mark.parametrize(
+    ("behavior", "expected_health", "expected_message"),
+    [
+        ("passive", 100, "Test rat does not fight back."),
+        ("neutral", 99, "hits you for 1 damage"),
+    ],
+)
+def test_enemy_behavior_controls_retaliation(
+    behavior: str,
+    expected_health: int,
+    expected_message: str,
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(tmp_path, monkeypatch, behavior=behavior, respawn_chance=0)
+    player = register(client, f"{behavior}@example.com", behavior.title())
+
+    class MinimumRoll:
+        @staticmethod
+        def randint(minimum: int, _: int) -> int:
+            return minimum
+
+        @staticmethod
+        def random() -> float:
+            return 1.0
+
+    monkeypatch.setattr(game, "combat_rng", MinimumRoll())
+    result = client.post(
+        "/api/v1/commands",
+        headers=auth(player["token"]),
+        json={"request_id": str(uuid4()), "text": "Attack the test rat"},
+    ).json()["result"]
+
+    assert any(expected_message in message for message in result["messages"])
+    assert result["snapshot"]["character"]["stats"]["health"] == expected_health
+
+
+def test_aggressive_enemy_attacks_connected_players_every_30_seconds(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(tmp_path, monkeypatch, behavior="aggressive", respawn_chance=0)
+    player = register(client, "aggressive@example.com", "Rill")
+
+    class MinimumRoll:
+        @staticmethod
+        def randint(minimum: int, _: int) -> int:
+            return minimum
+
+    monkeypatch.setattr(game, "combat_rng", MinimumRoll())
+    headers = {"Origin": "http://localhost:5173"}
+    with client.websocket_connect("/api/v1/live", headers=headers) as websocket:
+        websocket.send_json({"type": "auth", "token": player["token"]})
+        assert websocket.receive_json() == {"type": "auth.ok"}
+        api._run_enemy_aggression_tick()
+        first_update = websocket.receive_json()
+        assert first_update["type"] == "world.updated"
+        assert any("hits you for 1 damage" in message for message in first_update["payload"]["messages"])
+
+        api._run_enemy_aggression_tick()
+        with api.SessionLocal() as db:
+            character = db.scalar(
+                select(Character).where(Character.account_id == player["account_id"])
+            )
+            assert character.combat_stats["health"] == 99
+            attack_times = dict(character.combat_state["enemy_attack_at"])
+            character.combat_state = {
+                **character.combat_state,
+                "enemy_attack_at": {
+                    spawn_id: "2000-01-01T00:00:00"
+                    for spawn_id in attack_times
+                },
+            }
+            db.commit()
+
+        api._run_enemy_aggression_tick()
+        second_update = websocket.receive_json()
+        assert second_update["type"] == "world.updated"
+
+    with api.SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == player["account_id"])
+        )
+        assert character.combat_stats["health"] == 98
+
+
+def test_level_thresholds_grant_health_and_attack_increases() -> None:
+    character = SimpleNamespace(
+        experience=0,
+        combat_stats={"health": 80, "max_health": 100, "attack": 3, "defense": 1, "speed": 10},
+    )
+
+    assert game.award_experience(character, 99) == ["You gain 99 experience."]
+    assert character.combat_stats["attack"] == 3
+    assert game.award_experience(character, 1)[1].startswith("You reached level 2!")
+    assert character.combat_stats["attack"] == 4
+    assert character.combat_stats["max_health"] == 110
+    assert character.combat_stats["health"] == 90
+
+    game.award_experience(character, 199)
+    assert character.experience == 299
+    assert character.combat_stats["attack"] == 4
+    game.award_experience(character, 1)
+    assert character.experience == 300
+    assert character.combat_stats["attack"] == 5
+    assert character.combat_stats["max_health"] == 120
