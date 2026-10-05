@@ -109,6 +109,29 @@ def test_cors_allows_ngrok_browser_warning_bypass_header(client: TestClient) -> 
     assert "ngrok-skip-browser-warning" in allowed_headers
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("PATCH", "/api/v1/friend-requests/ff3de713-8f38-4f8a-95a4-6e306e7bb568"),
+        ("DELETE", "/api/v1/profile/picture"),
+    ],
+)
+def test_cors_allows_friend_and_profile_mutation_preflights(
+    client: TestClient, method: str, path: str
+) -> None:
+    response = client.options(
+        path,
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": method,
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert method in response.headers["access-control-allow-methods"]
+
+
 def test_registration_creates_account_without_character_or_session(client: TestClient) -> None:
     response = client.post(
         "/api/v1/auth/register",
