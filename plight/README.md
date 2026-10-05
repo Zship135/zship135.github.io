@@ -53,13 +53,12 @@ The browser UI is published at `https://zship135.github.io/` from the `Zship135/
 4. Start the laptop API and tunnel:
 
    ```powershell
-   .\start-plight-public.ps1 `
-     -PagesOrigin "https://zship135.github.io"
+   .\start-plight-public.ps1
    ```
 
    The script uses the HTTPS hostname assigned by ngrok and prints the public API origin. If you have a specific assigned domain, optionally add `-NgrokDomain "your-assigned-name.ngrok-free.app"`. Add `-CreatorEmail "you@example.com"` if this account should edit world content.
 
-The startup script checks the local API, launches ngrok, verifies the public `/health` endpoint, configures the API to allow only the supplied Pages origin, and binds Uvicorn to `127.0.0.1` with one worker. Copy the printed public API origin into the repository variable `PLIGHT_API_BASE_URL` at **Settings → Secrets and variables → Actions → Variables**. Keep both windows running; do not expose port 8000 on the router or bind Uvicorn to a public interface. The default database remains `plight.db` in the project folder.
+The startup script checks the local API, launches ngrok, verifies the public `/health` endpoint, configures the API to allow only the supplied Pages origin, and binds Uvicorn to `127.0.0.1` with one worker. It uses this project's Pages origin and assigned ngrok hostname by default; if both services are already healthy, rerunning it verifies them without starting duplicates. Copy the printed public API origin into the repository variable `PLIGHT_API_BASE_URL` at **Settings → Secrets and variables → Actions → Variables**. Keep both windows running; do not expose port 8000 on the router or bind Uvicorn to a public interface. The default database remains `plight.db` in the project folder.
 
 The root `.github/workflows/pages.yml` workflow builds and deploys only the static Plight UI at the site root. It runs on pushes to `main` that change the Plight project or workflow, and can also be started manually from **Actions → Publish Plight browser UI → Run workflow**. The build validates that `PLIGHT_API_BASE_URL` is an HTTPS origin. After deployment, open `https://zship135.github.io/` and test account registration, sign-in, a game command, chat, and the live connection. The site is publicly reachable, but the laptop, network, ngrok service, and free-plan limits determine availability. Set up and test encrypted off-device database backups before inviting players.
 

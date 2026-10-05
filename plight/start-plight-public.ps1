@@ -1,8 +1,7 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$PagesOrigin,
+    [string]$PagesOrigin = "https://zship135.github.io",
 
-    [string]$NgrokDomain,
+    [string]$NgrokDomain = "interastral-precosmical-rayan.ngrok-free.dev",
 
     [string]$CreatorEmail
 )
@@ -17,6 +16,7 @@ if (-not [Uri]::TryCreate($PagesOrigin, [UriKind]::Absolute, [ref]$originUri) -o
     $originUri.Fragment) {
     throw "PagesOrigin must be the exact HTTPS origin, without a repository path, query, or fragment."
 }
+$pagesOrigin = $originUri.GetLeftPart([UriPartial]::Authority)
 
 if (-not [string]::IsNullOrWhiteSpace($NgrokDomain) -and
     [Uri]::CheckHostName($NgrokDomain) -ne [UriHostNameType]::Dns) {
@@ -46,16 +46,58 @@ $apiListeners = @(
     Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty OwningProcess -Unique
 )
-if ($apiListeners) {
-    throw "Port 8000 is already in use. Stop the existing listener before starting the public Plight API."
-}
-
 $ngrokListeners = @(
     Get-NetTCPConnection -LocalPort 4040 -State Listen -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty OwningProcess -Unique
 )
-if ($ngrokListeners) {
-    throw "Port 4040 is already in use. Stop the existing ngrok agent before starting the public Plight tunnel."
+if ($apiListeners -or $ngrokListeners) {
+    if ($apiListeners.Count -ne 1 -or $ngrokListeners.Count -ne 1) {
+        throw "A Plight service is already using port 8000 or 4040. Close the existing Plight API and ngrok windows, then run this script again."
+    }
+
+    $apiProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($apiListeners[0])"
+    $ngrokProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($ngrokListeners[0])"
+    if ($apiProcess.Name -ne "python.exe" -or $apiProcess.CommandLine -notmatch "plight_server\.app:app") {
+        throw "Port 8000 is occupied by a process that is not the Plight API; refusing to use or stop it."
+    }
+    if ($ngrokProcess.Name -notmatch "ngrok" -or $ngrokProcess.CommandLine -notmatch "ngrok\.exe.*http.*8000") {
+        throw "Port 4040 is occupied by an ngrok process that does not appear to tunnel Plight; refusing to use or stop it."
+    }
+
+    $publicApi = "https://$NgrokDomain"
+    $localHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8000/health" -TimeoutSec 5
+    $preflight = Invoke-WebRequest `
+        -Uri "http://127.0.0.1:8000/api/v1/auth/login" `
+        -Method Options `
+        -Headers @{
+            Origin = $pagesOrigin
+            "Access-Control-Request-Method" = "POST"
+            "Access-Control-Request-Headers" = "authorization,content-type,ngrok-skip-browser-warning"
+        } `
+        -UseBasicParsing `
+        -TimeoutSec 5
+    $tunnels = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -TimeoutSec 5
+    $tunnel = $tunnels.tunnels | Where-Object { $_.proto -eq "https" -and $_.public_url -eq $publicApi }
+    if ($localHealth.status -ne "ok" -or
+        $preflight.StatusCode -ne 200 -or
+        $preflight.Headers["Access-Control-Allow-Origin"] -ne $pagesOrigin -or
+        $preflight.Headers["Access-Control-Allow-Headers"] -notmatch "ngrok-skip-browser-warning" -or
+        -not $tunnel) {
+        throw "Existing services are running but are not correctly configured for the public Plight site."
+    }
+
+    $publicHealth = Invoke-RestMethod `
+        -Uri "$publicApi/health" `
+        -Headers @{ "ngrok-skip-browser-warning" = "true" } `
+        -TimeoutSec 5
+    if ($publicHealth.status -ne "ok") {
+        throw "The existing public Plight API health check failed."
+    }
+
+    Write-Host "Plight is already running and verified."
+    Write-Host "Game: https://zship135.github.io/"
+    Write-Host "Public API: $publicApi"
+    return
 }
 
 function ConvertTo-PowerShellLiteral([string]$Value) {
@@ -64,7 +106,6 @@ function ConvertTo-PowerShellLiteral([string]$Value) {
 
 $rootLiteral = ConvertTo-PowerShellLiteral $projectRoot
 $pythonLiteral = ConvertTo-PowerShellLiteral $pythonCommand.Source
-$pagesOrigin = $originUri.GetLeftPart([UriPartial]::Authority)
 $originLiteral = ConvertTo-PowerShellLiteral $pagesOrigin
 $creatorSetup = if ([string]::IsNullOrWhiteSpace($CreatorEmail)) {
     "`Remove-Item Env:PLIGHT_CONTENT_EDITOR_EMAIL -ErrorAction SilentlyContinue"
