@@ -28,6 +28,14 @@ function loadPendingCommands(accountId) {
   return value;
 }
 
+function removePendingCommand(accountId, requestId) {
+  if (!accountId) return;
+  const remaining = loadPendingCommands(accountId).filter(
+    (item) => item.request_id !== requestId,
+  );
+  sessionStorage.setItem(pendingCommandsKey(accountId), JSON.stringify(remaining));
+}
+
 function upsertActivity(current, entry) {
   if (!entry.request_id) return [...current, entry].slice(-30);
   const existingIndex = current.findIndex((item) => item.request_id === entry.request_id);
@@ -69,7 +77,7 @@ function ChatPanel({ activeChannel, channels, messages, onClose, onSelect, onSen
             >
               {displayName(channel)}
             </button>
-            {channel.id !== "global" && (
+            {channel.id.startsWith("private:") && (
               <button
                 aria-label={`Close ${channel.label} chat`}
                 className="close-tab"
@@ -149,6 +157,12 @@ export default function App() {
   const [channels, setChannels] = useState([{ id: "global", label: "World" }]);
   const [activeChannelId, setActiveChannelId] = useState("global");
   const [messagesByChannel, setMessagesByChannel] = useState({});
+  const [partyState, setPartyState] = useState({
+    party: null,
+    incoming_invitations: [],
+    outgoing_invitations: [],
+  });
+  const [partyBusy, setPartyBusy] = useState(false);
   const [profile, setProfile] = useState(null);
   const [profileForm, setProfileForm] = useState({ pronouns: "", lore: "" });
   const [profileBusy, setProfileBusy] = useState(false);
@@ -170,6 +184,7 @@ export default function App() {
   const followActivityRef = useRef(true);
   const previousAreaIdRef = useRef(null);
   const ambienceSequenceRef = useRef(0);
+  const seenPartyInvitationIdsRef = useRef(new Set());
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const recoveringCommandsRef = useRef(false);
@@ -183,6 +198,24 @@ export default function App() {
     [activeChannelId, channels],
   );
   const messages = messagesByChannel[activeChannel.id] || [];
+  const partyChannelId = partyState.party?.channel_id || null;
+
+  useEffect(() => {
+    setChannels((current) => {
+      const next = current.filter(
+        (channel) => !channel.id.startsWith("party:") || channel.id === partyChannelId,
+      );
+      if (partyChannelId && !next.some((channel) => channel.id === partyChannelId)) {
+        next.push({ id: partyChannelId, label: "Party" });
+      }
+      return next;
+    });
+    setActiveChannelId((current) => (
+      current.startsWith("party:") && current !== partyChannelId
+        ? partyChannelId || "global"
+        : current
+    ));
+  }, [partyChannelId]);
 
   useEffect(() => {
     if (!token) {
@@ -279,6 +312,22 @@ export default function App() {
     setAccountId(world.account_id);
     sessionStorage.setItem(ACCOUNT_KEY, world.account_id);
     return world;
+  }, []);
+
+  const refreshParty = useCallback(async (sessionToken) => {
+    const current = await api("/api/v1/party", { token: sessionToken });
+    const unseenInvitations = current.incoming_invitations.filter(
+      (invitation) => !seenPartyInvitationIdsRef.current.has(invitation.invite_id),
+    );
+    current.incoming_invitations.forEach((invitation) => {
+      seenPartyInvitationIdsRef.current.add(invitation.invite_id);
+    });
+    if (unseenInvitations.length) {
+      const inviter = unseenInvitations[0].player?.name || "A player";
+      setNotice(`${inviter} invited you to a party.`);
+    }
+    setPartyState(current);
+    return current;
   }, []);
 
   const refreshMessages = useCallback(async (sessionToken, channelId) => {
@@ -393,12 +442,14 @@ export default function App() {
     setPeopleError("");
     setPeopleBusy(true);
     try {
-      const [friendsResult, requestsResult] = await Promise.all([
+      const [friendsResult, requestsResult, currentParty] = await Promise.all([
         api("/api/v1/friends", { token }),
         api("/api/v1/friend-requests", { token }),
+        refreshParty(token),
       ]);
       setFriendList(friendsResult);
       setIncomingRequests(requestsResult.incoming);
+      setPartyState(currentParty);
     } catch (error) {
       setPeopleError(error.message);
     } finally {
@@ -457,6 +508,85 @@ export default function App() {
       setPeopleError(error.message);
     } finally {
       setPeopleBusy(false);
+    }
+  }
+
+  async function createParty() {
+    setPartyBusy(true);
+    setPeopleError("");
+    try {
+      const updated = await api("/api/v1/party", { token, method: "POST" });
+      setPartyState(updated);
+      if (updated.party) setActiveChannelId(updated.party.channel_id);
+      setNotice("Your party is ready. Open a player's profile to invite them.");
+    } catch (error) {
+      setPeopleError(error.message);
+    } finally {
+      setPartyBusy(false);
+    }
+  }
+
+  async function invitePlayerToParty(accountId, name) {
+    setPartyBusy(true);
+    setProfileError("");
+    try {
+      let current = await refreshParty(token);
+      if (!current.party) {
+        current = await api("/api/v1/party", { token, method: "POST" });
+        setPartyState(current);
+      }
+      if (current.party?.leader_account_id !== snapshot?.account_id) {
+        throw new Error("Only your party's leader can invite players.");
+      }
+      const updated = await api("/api/v1/party/invitations", {
+        token,
+        method: "POST",
+        body: JSON.stringify({ recipient_account_id: accountId }),
+      });
+      setPartyState(updated);
+      if (updated.party) setActiveChannelId(updated.party.channel_id);
+      closeProfile();
+      setNotice(`Party invitation sent to ${name}.`);
+    } catch (error) {
+      setProfileError(error.message);
+    } finally {
+      setPartyBusy(false);
+    }
+  }
+
+  async function respondToPartyInvite(invitation, status) {
+    setPartyBusy(true);
+    setPeopleError("");
+    try {
+      const updated = await api(`/api/v1/party/invitations/${encodeURIComponent(invitation.invite_id)}`, {
+        token,
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
+      setPartyState(updated);
+      if (status === "accepted" && updated.party) {
+        setActiveChannelId(updated.party.channel_id);
+      }
+    } catch (error) {
+      setPeopleError(error.message);
+    } finally {
+      setPartyBusy(false);
+    }
+  }
+
+  async function performPartyAction(path, method, confirmation, successMessage) {
+    if (confirmation && !window.confirm(confirmation)) return;
+    setPartyBusy(true);
+    setPeopleError("");
+    try {
+      const updated = await api(path, { token, method });
+      setPartyState(updated);
+      if (updated.party) setActiveChannelId(updated.party.channel_id);
+      if (successMessage) setNotice(successMessage);
+    } catch (error) {
+      setPeopleError(error.message);
+    } finally {
+      setPartyBusy(false);
     }
   }
 
@@ -520,6 +650,8 @@ export default function App() {
       setToken(null);
       sessionStorage.removeItem(ACCOUNT_KEY);
       setAccountId(null);
+      setPartyState({ party: null, incoming_invitations: [], outgoing_invitations: [] });
+      seenPartyInvitationIdsRef.current.clear();
     }
     setNotice(error.message);
   }
@@ -595,6 +727,11 @@ export default function App() {
             socket.send(JSON.stringify({ type: "subscribe", channel_id: channel.id }));
           }
           const world = await refreshWorld(token);
+          await refreshParty(token);
+          socket.send(JSON.stringify({
+            type: "subscribe",
+            channel_id: `account:${world.account_id}`,
+          }));
           await refreshMessages(token, "global");
           if (activeChannelIdRef.current !== "global") {
             await refreshMessages(token, activeChannelIdRef.current);
@@ -603,7 +740,14 @@ export default function App() {
           return;
         }
         if (data.type === "subscribed") {
+          if (data.channel_id.startsWith("account:")) return;
           await refreshMessages(token, data.channel_id);
+          return;
+        }
+        if (data.type === "party.updated") {
+          await refreshParty(token);
+          const world = await refreshWorld(token);
+          if (!world) socket.close();
           return;
         }
         if (data.type === "chat.message") {
@@ -614,8 +758,18 @@ export default function App() {
             return { ...current, [message.channel_id]: [...existing, message].slice(-50) };
           });
         }
+        if (data.type === "command.updated") {
+          setActivity((current) => upsertActivity(current, data.payload));
+          await refreshWorld(token);
+          return;
+        }
         if (data.type === "command.completed") {
           setActivity((current) => upsertActivity(current, data.payload));
+          try {
+            removePendingCommand(accountId, data.payload.request_id);
+          } catch (error) {
+            showError(error);
+          }
           const world = await refreshWorld(token);
           if (!world) {
             socket.close();
@@ -661,7 +815,7 @@ export default function App() {
       socketRef.current?.close();
       socketRef.current = null;
     };
-  }, [token, characterSetupPending, refreshWorld, refreshMessages, recoverCommands]);
+  }, [token, accountId, characterSetupPending, refreshWorld, refreshParty, refreshMessages, recoverCommands]);
 
   useEffect(() => {
     if (!token || characterSetupPending || !activeChannel) return;
@@ -705,10 +859,9 @@ export default function App() {
         method: "POST",
         body: JSON.stringify(request),
       });
-      sessionStorage.setItem(
-        pendingCommandsKey(accountId),
-        JSON.stringify(loadPendingCommands(accountId).filter((item) => item.request_id !== request.request_id)),
-      );
+      if (result.status !== "queued") {
+        removePendingCommand(accountId, request.request_id);
+      }
       setActivity((current) => upsertActivity(current, result));
       if (result.result?.inventory_view) setInventoryView(result.result.inventory_view);
       const observedAccountId = result.result?.profile_account_ids?.[0];
@@ -846,6 +999,8 @@ export default function App() {
       setChannels([{ id: "global", label: "World" }]);
       setActiveChannelId("global");
       setMessagesByChannel({});
+      setPartyState({ party: null, incoming_invitations: [], outgoing_invitations: [] });
+      seenPartyInvitationIdsRef.current.clear();
       setActivity([]);
       setInventoryView(null);
       previousAreaIdRef.current = null;
@@ -936,7 +1091,7 @@ export default function App() {
         <a className="wordmark" href="#world">PLIGHT</a>
         <div className="topbar-right">
           <button className="text-button" onClick={() => setInventoryView("all")} type="button">Inventory</button>
-          <button className="text-button" onClick={openPeople} type="button">Friends</button>
+          <button className="text-button" onClick={openPeople} type="button">Party & friends</button>
           <button className="text-button" onClick={openOwnProfile} type="button">My profile</button>
           {canEditContent && <button className="text-button studio-nav-trigger" onClick={() => setStudioMode(true)} type="button">Content studio</button>}
           <button className="text-button" onClick={signOut} type="button">Sign out</button>
@@ -1210,6 +1365,17 @@ export default function App() {
                     ))}
                   </section>
                 )}
+                {(!partyState.party || partyState.party.leader_account_id === snapshot?.account_id) && (
+                  <button
+                    className="dialogue-choice-button"
+                    disabled={partyBusy}
+                    onClick={() => invitePlayerToParty(profile.account_id, profile.name)}
+                    type="button"
+                  >
+                    {partyBusy ? "Sending…" : partyState.party ? "Invite to party" : "Create party & invite"}
+                  </button>
+                )}
+                {profileError && <p className="error-message" role="alert">{profileError}</p>}
                 <button className="primary-button" onClick={() => openPrivateChat(profile.account_id, profile.name)} type="button">Open private chat</button>
               </>
             )}
@@ -1221,13 +1387,86 @@ export default function App() {
           <section aria-labelledby="people-title" aria-modal="true" className="people-dialog" role="dialog">
             <button aria-label="Close friends" className="dialog-close" onClick={closePeople} type="button">×</button>
             <p className="eyebrow">PLAYERS</p>
-            <h2 id="people-title">Friends & character search</h2>
+            <h2 id="people-title">Players, friends & party</h2>
             <form className="player-search-form" onSubmit={searchPlayers}>
               <label htmlFor="player-search">Search character names</label>
               <div><input id="player-search" maxLength={32} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Enter part of a name" value={searchQuery} /><button className="primary-button" disabled={peopleBusy || !searchQuery.trim()} type="submit">Search</button></div>
             </form>
             {peopleError && <p className="error-message" role="alert">{peopleError}</p>}
             {peopleBusy && <p className="people-empty">Loading…</p>}
+            <section className="people-section">
+              <h3>{partyState.party ? "Your party" : "Party"}</h3>
+              {partyState.party ? (
+                <>
+                  <ul className="party-member-list">
+                    {partyState.party.members.map((member) => (
+                      <li key={member.account_id}>
+                        <span>
+                          <strong>{member.name}</strong>
+                          {member.is_leader ? " · Leader" : ""}
+                          <small>{member.online ? "Online" : "Offline"} · {member.area_name}</small>
+                        </span>
+                        {partyState.party.leader_account_id === snapshot?.account_id
+                          && member.account_id !== snapshot?.account_id
+                          && <button
+                            className="text-button"
+                            disabled={partyBusy}
+                            onClick={() => performPartyAction(
+                              `/api/v1/party/members/${encodeURIComponent(member.account_id)}`,
+                              "DELETE",
+                              `Remove ${member.name} from your party?`,
+                              `${member.name} left the party.`,
+                            )}
+                            type="button"
+                          >Remove</button>}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="party-actions">
+                    <button className="dialogue-choice-button" onClick={() => setActiveChannelId(partyState.party.channel_id)} type="button">Open party chat</button>
+                    {partyState.party.leader_account_id === snapshot?.account_id
+                      ? <>
+                        <button className="text-button" disabled={partyBusy} onClick={() => performPartyAction("/api/v1/party/membership", "DELETE", "Leave your party? Leadership may transfer to another online member.", "You left the party.")} type="button">Leave party</button>
+                        <button className="text-button" disabled={partyBusy} onClick={() => performPartyAction("/api/v1/party", "DELETE", "Disband the party for everyone?", "The party was disbanded.")} type="button">Disband party</button>
+                      </>
+                      : <button className="text-button" disabled={partyBusy} onClick={() => performPartyAction("/api/v1/party/membership", "DELETE", "Leave this party?", "You left the party.")} type="button">Leave party</button>}
+                  </div>
+                  {partyState.party.leader_account_id !== snapshot?.account_id && (
+                    <p className="people-empty">Only the party leader can invite or remove members.</p>
+                  )}
+                </>
+              ) : (
+                <button className="primary-button" disabled={partyBusy} onClick={createParty} type="button">
+                  {partyBusy ? "Creating…" : "Create party"}
+                </button>
+              )}
+              {partyState.incoming_invitations.length > 0 && (
+                <div className="party-invitations">
+                  <h4>Party invitations</h4>
+                  {partyState.incoming_invitations.map((invitation) => (
+                    <article className="player-card" key={invitation.invite_id}>
+                      <p>{invitation.player?.name || "A player"} invited you to their party.</p>
+                      {partyState.party
+                        ? <p className="people-empty">Leave your current party before accepting another invitation.</p>
+                        : <div className="party-actions">
+                          <button className="dialogue-choice-button" disabled={partyBusy} onClick={() => respondToPartyInvite(invitation, "accepted")} type="button">Accept</button>
+                          <button className="text-button" disabled={partyBusy} onClick={() => respondToPartyInvite(invitation, "declined")} type="button">Decline</button>
+                        </div>}
+                    </article>
+                  ))}
+                </div>
+              )}
+              {partyState.outgoing_invitations.length > 0 && (
+                <div className="party-invitations">
+                  <h4>Pending invitations</h4>
+                  {partyState.outgoing_invitations.map((invitation) => (
+                    <p className="people-empty" key={invitation.invite_id}>
+                      Waiting for {invitation.player?.name || "player"}.
+                    </p>
+                  ))}
+                </div>
+              )}
+            </section>
             {incomingRequests.length > 0 && <section className="people-section"><h3>Friend requests</h3>
               {incomingRequests.map((request) => <article className="player-card" key={request.request_id}>
                 <button className="player-name-link" onClick={() => openPlayerProfile(request.player.account_id)} type="button">{request.player.name}</button>

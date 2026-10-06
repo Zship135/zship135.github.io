@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from itertools import product
 import random
 import re
@@ -454,8 +455,12 @@ def snapshot(
 def resolve_command(
     text: str,
     character: Any,
-    available_players: list[Any] | None = None,
+    available_players: Sequence[Any] | None = None,
     enemy_spawns_by_location: dict[str, list[dict[str, Any]]] | None = None,
+    deferred_action_ids: set[str] | None = None,
+    defer_all_actions: bool = False,
+    selected_occurrence_ids: set[str] | None = None,
+    combat_context: bool = False,
 ) -> dict[str, Any]:
     content = world_content_dict()
     areas = _location_map(content)
@@ -493,8 +498,19 @@ def resolve_command(
             "snapshot": _snapshot(character, content, enemy_spawns_by_location),
         }
 
-    selected = random.SystemRandom().choice(assignments)
-    selected_ids = {key for key, value in selected.items() if value}
+    if selected_occurrence_ids is None:
+        selected = random.SystemRandom().choice(assignments)
+        selected_ids = {key for key, value in selected.items() if value}
+    else:
+        selected_ids = set(selected_occurrence_ids)
+        if not selected_ids.issubset(occurrence_ids):
+            return {
+                "interpretation": parsed,
+                "messages": ["That selected action is no longer available."],
+                "dialogues": [],
+                "queued_actions": [],
+                "snapshot": _snapshot(character, content, enemy_spawns_by_location),
+            }
     parsed["selection_resolved"] = True
     parsed["selected_occurrences"] = sorted(
         selected_ids, key=lambda item: occurrence_ids.index(item)
@@ -504,11 +520,15 @@ def resolve_command(
     profile_account_ids: list[str] = []
     observed_player_equipment: dict[str, dict[str, str]] = {}
     inventory_view: str | None = None
+    queued_actions: list[dict[str, Any]] = []
     for occurrence in occurrences:
         if occurrence["occurrence_id"] not in selected_ids:
             continue
         action_id = occurrence["action_id"]
         args = occurrence["arguments"]
+        if defer_all_actions or action_id in (deferred_action_ids or set()):
+            queued_actions.append(dict(occurrence))
+            continue
         if action_id == "observe":
             subject = args.get("subject", "")
             inventory_subjects = {
@@ -675,6 +695,8 @@ def resolve_command(
                     occurrence,
                     content,
                     enemy_spawns_by_location,
+                    resolve_retaliation=not combat_context,
+                    award_rewards=not combat_context,
                 )
             )
         elif action_id == "equip_item":
@@ -694,7 +716,7 @@ def resolve_command(
         else:
             messages.append(f"You cannot {action_id.replace('_', ' ')} here yet.")
 
-    if not messages:
+    if not messages and not queued_actions:
         messages.append("You do nothing.")
     return {
         "interpretation": parsed,
@@ -703,6 +725,7 @@ def resolve_command(
         "profile_account_ids": profile_account_ids,
         "observed_player_equipment": observed_player_equipment,
         "inventory_view": inventory_view,
+        "queued_actions": queued_actions,
         "snapshot": _snapshot(character, content, enemy_spawns_by_location),
     }
 
@@ -775,6 +798,155 @@ def _reward_enemy_defeat(
         messages.append("No items dropped.")
     character.inventory = inventory
     return messages
+
+
+def award_enemy_defeat(
+    character: Any,
+    enemy_id: str,
+    content: dict[str, Any] | None = None,
+) -> list[str]:
+    current_content = content or world_content_dict()
+    entities = {entity["id"]: entity for entity in current_content["entities"]}
+    enemy = entities.get(enemy_id)
+    if enemy is None:
+        return []
+    messages = _reward_enemy_defeat(character, enemy, entities)
+    _record_quest_event(character, current_content, "kill", enemy_id)
+    return messages
+
+
+def resolve_attack_target_id(
+    character: Any,
+    occurrence: dict[str, Any],
+    enemy_spawns_by_location: dict[str, list[dict[str, Any]]],
+) -> tuple[str | None, str | None]:
+    content = world_content_dict()
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    area = _location_map(content).get(character.area_id)
+    if area is None:
+        return None, "You are not in a valid area."
+    enemies = []
+    for spawn in enemy_spawns_by_location.get(character.area_id, []):
+        enemy = entities.get(spawn["enemy_id"])
+        if not spawn["is_alive"] or enemy is None or enemy["type"] != "enemy":
+            continue
+        enemies.append({
+            **enemy,
+            "id": spawn["id"],
+            "entity_id": spawn["enemy_id"],
+            "health": spawn["health"],
+        })
+    enemies = [enemy for enemy in enemies if enemy["health"] > 0]
+    arguments = occurrence["arguments"]
+    subject = str(arguments.get("subject", ""))
+    if subject:
+        matches = _matching_entities(subject, enemies)
+        if len(matches) > 1 and len({enemy["entity_id"] for enemy in matches}) == 1:
+            return matches[0]["id"], None
+        if len(matches) == 1:
+            return matches[0]["id"], None
+        if matches:
+            return None, f"Which enemy do you mean: {', '.join(enemy['name'] for enemy in matches)}?"
+        return None, f"There is no {subject} here to attack."
+    target_id = (character.combat_state or {}).get("target_id")
+    target = next((enemy for enemy in enemies if enemy["id"] == target_id), None)
+    if target is None:
+        return None, "Name an enemy here to attack."
+    return target["id"], None
+
+
+def resolve_combat_occurrence(
+    character: Any,
+    occurrence: dict[str, Any],
+    enemy_spawns_by_location: dict[str, list[dict[str, Any]]],
+    command_text: str | None = None,
+) -> dict[str, Any]:
+    content = world_content_dict()
+    areas = _location_map(content)
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    action_id = occurrence["action_id"]
+    if action_id == "defend":
+        state = dict(character.combat_state or {})
+        state["defending"] = True
+        character.combat_state = state
+        return {
+            "messages": ["You take a guarded stance; damage from the enemy phase is halved."],
+            "defeated_enemy_id": None,
+        }
+    if action_id == "wait":
+        return {
+            "messages": ["You wait and listen to the sounds of the area."],
+            "defeated_enemy_id": None,
+        }
+    if action_id not in {"attack", "light_attack", "heavy_attack"}:
+        if command_text is None:
+            return {
+                "messages": ["That action cannot be used in combat."],
+                "defeated_enemy_id": None,
+            }
+        result = resolve_command(
+            command_text,
+            character,
+            enemy_spawns_by_location=enemy_spawns_by_location,
+            selected_occurrence_ids={occurrence["occurrence_id"]},
+            combat_context=True,
+        )
+        return {
+            **{
+                key: result[key]
+                for key in (
+                    "dialogues",
+                    "profile_account_ids",
+                    "observed_player_equipment",
+                    "inventory_view",
+                )
+                if key in result
+            },
+            "messages": result["messages"],
+            "defeated_enemy_id": None,
+        }
+
+    target_spawn_id = occurrence.get("target_spawn_id")
+    was_alive = any(
+        spawn["id"] == target_spawn_id and spawn["is_alive"]
+        for spawn in enemy_spawns_by_location.get(character.area_id, [])
+    )
+    messages = _attack(
+        character,
+        areas,
+        entities,
+        occurrence,
+        content,
+        enemy_spawns_by_location,
+        resolve_retaliation=False,
+        award_rewards=False,
+    )
+    defeated_enemy_id = None
+    if was_alive:
+        spawn = next(
+            (
+                candidate
+                for candidate in enemy_spawns_by_location.get(character.area_id, [])
+                if candidate["id"] == target_spawn_id
+            ),
+            None,
+        )
+        if spawn is not None and not spawn["is_alive"]:
+            defeated_enemy_id = spawn["enemy_id"]
+    if defeated_enemy_id is None:
+        target_enemy = entities.get(
+            next(
+                (
+                    spawn["enemy_id"]
+                    for spawn in enemy_spawns_by_location.get(character.area_id, [])
+                    if spawn["id"] == target_spawn_id
+                ),
+                "",
+            )
+        )
+        if target_enemy is not None and target_enemy.get("behavior", "neutral") == "passive":
+            messages.append(f"{target_enemy['name']} does not fight back.")
+    return {"messages": messages, "defeated_enemy_id": defeated_enemy_id}
 
 
 def _equip(
@@ -861,6 +1033,9 @@ def _attack(
     occurrence: dict[str, Any],
     content: dict[str, Any],
     enemy_spawns_by_location: dict[str, list[dict[str, Any]]] | None = None,
+    *,
+    resolve_retaliation: bool = True,
+    award_rewards: bool = True,
 ) -> list[str]:
     area = areas[character.area_id]
     spawn_instances: dict[str, dict[str, Any]] = {}
@@ -894,7 +1069,15 @@ def _attack(
     arguments = occurrence["arguments"]
     target_id = (character.combat_state or {}).get("target_id")
     subject = arguments.get("subject", "")
-    if subject:
+    planned_spawn_id = occurrence.get("target_spawn_id")
+    if planned_spawn_id:
+        target = next(
+            (enemy for enemy in available_enemies if enemy["id"] == planned_spawn_id),
+            None,
+        )
+        if target is None:
+            return ["That enemy is no longer alive here."]
+    elif subject:
         matches = _matching_entities(subject, available_enemies)
         if len(matches) > 1 and len({enemy.get("entity_id", enemy["id"]) for enemy in matches}) == 1:
             target = matches[0]
@@ -970,11 +1153,14 @@ def _attack(
             spawn["is_alive"] = False
         character.combat_state = state
         messages.append(f"{target['name']} is defeated.")
-        messages.extend(_reward_enemy_defeat(character, enemy, entities))
-        _record_quest_event(character, content, "kill", enemy["id"])
+        if award_rewards:
+            messages.extend(_reward_enemy_defeat(character, enemy, entities))
+            _record_quest_event(character, content, "kill", enemy["id"])
         return messages
 
     character.combat_state = state
+    if not resolve_retaliation:
+        return messages
     if enemy.get("behavior", "neutral") == "passive":
         messages.append(f"{target['name']} does not fight back.")
         return messages
@@ -991,6 +1177,8 @@ def enemy_strike(
     character: Any,
     enemy: dict[str, Any],
     areas: dict[str, dict[str, Any]],
+    *,
+    consume_defending: bool = True,
 ) -> list[str]:
     stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
     die_sides = enemy["attack_die_sides"]
@@ -1000,8 +1188,10 @@ def enemy_strike(
         _positive_stat(enemy, "attack", 0) + roll - stats["defense"],
     )
     state = dict(character.combat_state or {})
-    if state.pop("defending", False):
+    if state.get("defending", False):
         incoming_damage //= 2
+    if consume_defending:
+        state.pop("defending", None)
     stats["health"] = max(0, stats["health"] - incoming_damage)
     messages = [
         f"{enemy['name']} rolls D{die_sides} ({roll}) and hits you for "

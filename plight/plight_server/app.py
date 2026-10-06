@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict, deque
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from datetime import datetime, timedelta
 import hashlib
 from io import BytesIO
@@ -20,7 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.websockets import WebSocketDisconnect
@@ -33,21 +33,30 @@ from plight_server.content import (
     write_world_content,
 )
 from plight_server.game import (
+    award_enemy_defeat,
     award_experience,
     enemy_strike,
     initial_area,
     initialize_quest_step,
+    resolve_attack_target_id,
+    resolve_combat_occurrence,
     resolve_command,
     snapshot,
 )
 from plight_server.models import (
     Account,
+    CombatAction,
+    CombatEncounter,
+    CombatEncounterEnemy,
     ChatMessage,
     Character,
     Command,
     EventCounter,
     EnemySpawn,
     FriendRequest,
+    Party,
+    PartyInvite,
+    PartyMember,
     PlayerSession,
     utc_now,
 )
@@ -59,6 +68,8 @@ from plight_server.schemas import (
     FriendRequestCreate,
     FriendRequestUpdate,
     LoginRequest,
+    PartyInviteCreate,
+    PartyInviteUpdate,
     ProfileUpdateRequest,
     QuestChoiceRequest,
     RegisterRequest,
@@ -165,25 +176,63 @@ def _character_lock(account_id: str) -> threading.RLock:
         return _character_locks.setdefault(account_id, threading.RLock())
 
 
-def _initial_enemy_spawn_id(location_id: str, enemy_id: str) -> str:
-    return str(uuid5(NAMESPACE_URL, f"plight:initial-enemy:{location_id}:{enemy_id}"))
+def _initial_enemy_spawn_id(
+    location_id: str,
+    enemy_id: str,
+    scope_type: str | None = None,
+    scope_id: str | None = None,
+) -> str:
+    if scope_type is None or scope_id is None:
+        return str(uuid5(NAMESPACE_URL, f"plight:initial-enemy:{location_id}:{enemy_id}"))
+    return str(
+        uuid5(
+            NAMESPACE_URL,
+            f"plight:initial-enemy:{scope_type}:{scope_id}:{location_id}:{enemy_id}",
+        )
+    )
 
 
 def _enemy_spawn_state(
     db: Session,
     content: dict[str, Any],
+    scope_type: str | None = None,
+    scope_id: str | None = None,
+    location_ids: set[str] | None = None,
 ) -> tuple[dict[str, list[dict[str, Any]]], list[EnemySpawn]]:
     entities = {entity["id"]: entity for entity in content["entities"]}
     allowed_by_location = {
         location["id"]: set(location["enemy_ids"])
         for location in content["locations"]
     }
+    if (scope_type is None) != (scope_id is None):
+        raise ValueError("Enemy scope type and ID must be provided together.")
+    scope_filters = (
+        (EnemySpawn.scope_type.is_(None), EnemySpawn.scope_id.is_(None))
+        if scope_type is None
+        else (
+            EnemySpawn.scope_type == scope_type,
+            EnemySpawn.scope_id == scope_id,
+        )
+    )
+    location_filters = (
+        (EnemySpawn.location_id.in_(location_ids),)
+        if location_ids is not None
+        else ()
+    )
     rows = db.scalars(
-        select(EnemySpawn).where(EnemySpawn.is_alive.is_(True))
+        select(EnemySpawn).where(
+            *scope_filters,
+            *location_filters,
+            EnemySpawn.is_alive.is_(True),
+        )
     ).all()
     initial_spawn_ids = set(
         db.scalars(
-            select(EnemySpawn.id).where(EnemySpawn.is_initial.is_(True))
+            select(EnemySpawn.id).where(
+                *scope_filters,
+                *location_filters,
+                EnemySpawn.is_initial.is_(True),
+            )
         ).all()
     )
     counts: dict[str, int] = defaultdict(int)
@@ -196,11 +245,18 @@ def _enemy_spawn_state(
         else:
             counts[row.location_id] += 1
     for location in content["locations"]:
+        if location_ids is not None and location["id"] not in location_ids:
+            continue
         spawn_limit = location["enemy_spawn_limit"]
         for enemy_id in dict.fromkeys(location["enemy_ids"]):
             if counts[location["id"]] >= spawn_limit:
                 break
-            spawn_id = _initial_enemy_spawn_id(location["id"], enemy_id)
+            spawn_id = _initial_enemy_spawn_id(
+                location["id"],
+                enemy_id,
+                scope_type,
+                scope_id,
+            )
             if spawn_id not in initial_spawn_ids:
                 enemy = entities[enemy_id]
                 db.add(
@@ -208,6 +264,8 @@ def _enemy_spawn_state(
                         id=spawn_id,
                         location_id=location["id"],
                         enemy_id=enemy_id,
+                        scope_type=scope_type,
+                        scope_id=scope_id,
                         health=enemy["attributes"]["health"],
                         is_initial=True,
                     )
@@ -216,7 +274,11 @@ def _enemy_spawn_state(
                 counts[location["id"]] += 1
     db.flush()
     rows = db.scalars(
-        select(EnemySpawn).where(EnemySpawn.is_alive.is_(True))
+        select(EnemySpawn).where(
+            *scope_filters,
+            *location_filters,
+            EnemySpawn.is_alive.is_(True),
+        )
     ).all()
     by_location: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -237,6 +299,8 @@ def _active_enemy_spawns_for_location(
     db: Session,
     content: dict[str, Any],
     location_id: str,
+    scope_type: str | None = None,
+    scope_id: str | None = None,
 ) -> list[dict[str, Any]]:
     entities = {entity["id"]: entity for entity in content["entities"]}
     location = next(
@@ -246,8 +310,19 @@ def _active_enemy_spawns_for_location(
     if location is None:
         return []
     allowed_enemy_ids = set(location["enemy_ids"])
+    if (scope_type is None) != (scope_id is None):
+        raise ValueError("Enemy scope type and ID must be provided together.")
+    scope_filters = (
+        (EnemySpawn.scope_type.is_(None), EnemySpawn.scope_id.is_(None))
+        if scope_type is None
+        else (
+            EnemySpawn.scope_type == scope_type,
+            EnemySpawn.scope_id == scope_id,
+        )
+    )
     rows = db.scalars(
         select(EnemySpawn).where(
+            *scope_filters,
             EnemySpawn.location_id == location_id,
             EnemySpawn.is_alive.is_(True),
         )
@@ -320,7 +395,16 @@ def _publish_world_update(
 def _snapshot_for_character(character: Character, db: Session) -> dict[str, Any]:
     with _character_lock(character.account_id), _enemy_world_lock:
         content = world_content_dict()
-        spawns_by_location, _ = _enemy_spawn_state(db, content)
+        party = _party_for_account(db, character.account_id)
+        scope_type = "party" if party is not None else "solo"
+        scope_id = party.id if party is not None else character.account_id
+        spawns_by_location, _ = _enemy_spawn_state(
+            db,
+            content,
+            scope_type,
+            scope_id,
+            {character.area_id},
+        )
         db.commit()
         return snapshot(character, spawns_by_location)
 
@@ -411,6 +495,17 @@ def _can_access_channel(db: Session, account_id: str, channel_id: str) -> bool:
         return True
     if channel_id == f"account:{account_id}":
         return True
+    if channel_id.startswith("party:"):
+        match = re.fullmatch(r"party:([0-9a-fA-F-]{36})", channel_id)
+        return bool(
+            match
+            and db.scalar(
+                select(PartyMember.party_id).where(
+                    PartyMember.party_id == match.group(1),
+                    PartyMember.account_id == account_id,
+                )
+            )
+        )
     if channel_id.startswith("private:"):
         members = _private_channel_members(channel_id)
         return (
@@ -440,6 +535,7 @@ def _cleanup_expired_chat() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await asyncio.to_thread(_clear_ephemeral_parties)
     cleanup_task = asyncio.create_task(_chat_retention_loop())
     enemy_task = asyncio.create_task(_enemy_world_loop())
     try:
@@ -463,9 +559,10 @@ async def _chat_retention_loop() -> None:
 async def _enemy_world_loop() -> None:
     next_spawn = time.monotonic() + 15
     next_aggression = time.monotonic() + 5
+    next_combat = time.monotonic() + 10
     while True:
         now = time.monotonic()
-        await asyncio.sleep(max(0, min(next_spawn, next_aggression) - now))
+        await asyncio.sleep(max(0, min(next_spawn, next_aggression, next_combat) - now))
         now = time.monotonic()
         if now >= next_spawn:
             try:
@@ -479,51 +576,161 @@ async def _enemy_world_loop() -> None:
             except Exception:
                 LOGGER.exception("Enemy aggression tick failed.")
             next_aggression += 5 * (int((now - next_aggression) // 5) + 1)
+        if now >= next_combat:
+            try:
+                await asyncio.to_thread(_run_combat_round_tick)
+            except Exception:
+                LOGGER.exception("Combat round tick failed.")
+            next_combat += 10 * (int((now - next_combat) // 10) + 1)
 
 
-def _run_enemy_spawn_tick() -> None:
+def _active_enemy_scopes(db: Session) -> list[tuple[str, str]]:
+    online_accounts = live_hub.active_account_ids()
+    if not online_accounts:
+        return []
+    party_ids = set(
+        db.scalars(
+            select(PartyMember.party_id).where(
+                PartyMember.account_id.in_(online_accounts)
+            )
+        ).all()
+    )
+    party_member_accounts = set()
+    if party_ids:
+        party_member_accounts = set(
+            db.scalars(
+                select(PartyMember.account_id).where(
+                    PartyMember.party_id.in_(party_ids)
+                )
+            ).all()
+        )
+    solo_ids = online_accounts - party_member_accounts
+    return [
+        *(("solo", account_id) for account_id in sorted(solo_ids)),
+        *(("party", party_id) for party_id in sorted(party_ids)),
+    ]
+
+
+def _publish_scoped_world_update(
+    db: Session,
+    scope_type: str,
+    scope_id: str,
+    location_id: str,
+    messages: list[str],
+) -> None:
+    active_accounts = live_hub.active_account_ids()
+    if not active_accounts:
+        return
+    if scope_type == "solo":
+        recipients = {scope_id} & active_accounts
+    else:
+        recipients = set(
+            db.scalars(
+                select(PartyMember.account_id).where(
+                    PartyMember.party_id == scope_id,
+                    PartyMember.account_id.in_(active_accounts),
+                )
+            ).all()
+        )
+    recipients &= set(
+        db.scalars(
+            select(Character.account_id).where(
+                Character.account_id.in_(recipients),
+                Character.area_id == location_id,
+            )
+        ).all()
+    )
+    event = {
+        "type": "world.updated",
+        "payload": {"id": str(uuid4()), "messages": messages},
+    }
+    for account_id in recipients:
+        live_hub.publish(account_id, f"account:{account_id}", event)
+
+
+def _run_enemy_spawn_tick(
+    active_scopes: list[tuple[str, str]] | None = None,
+) -> None:
     content = world_content_dict()
     entities = {entity["id"]: entity for entity in content["entities"]}
     with _enemy_world_lock, SessionLocal() as db:
-        spawns_by_location, rows = _enemy_spawn_state(db, content)
-        counts: dict[str, int] = defaultdict(int)
-        for row in rows:
-            if row.is_alive:
-                counts[row.location_id] += 1
-        messages_by_location: dict[str, list[str]] = defaultdict(list)
-        for location in content["locations"]:
-            spawn_limit = location["enemy_spawn_limit"]
-            if counts[location["id"]] >= spawn_limit:
+        scopes = active_scopes if active_scopes is not None else _active_enemy_scopes(db)
+        messages_by_scope: dict[tuple[str, str, str], list[str]] = defaultdict(list)
+        for scope_type, scope_id in scopes:
+            if scope_type == "solo":
+                character = db.scalar(
+                    select(Character).where(Character.account_id == scope_id)
+                )
+                active_locations = (
+                    {character.area_id} if character is not None else set()
+                )
+            else:
+                active_locations = set(
+                    db.scalars(
+                        select(Character.area_id)
+                        .join(PartyMember, PartyMember.account_id == Character.account_id)
+                        .where(
+                            PartyMember.party_id == scope_id,
+                            PartyMember.account_id.in_(live_hub.active_account_ids()),
+                        )
+                    ).all()
+                )
+            if not active_locations:
                 continue
-            for enemy_id in dict.fromkeys(location["enemy_ids"]):
-                if counts[location["id"]] >= spawn_limit:
-                    break
-                enemy = entities[enemy_id]
-                chance = enemy["respawn_chance_percent"]
-                if chance <= 0 or _enemy_spawn_rng.random() * 100 >= chance:
+            spawns_by_location, rows = _enemy_spawn_state(
+                db,
+                content,
+                scope_type,
+                scope_id,
+                active_locations,
+            )
+            counts: dict[str, int] = defaultdict(int)
+            for row in rows:
+                if row.is_alive:
+                    counts[row.location_id] += 1
+            for location in content["locations"]:
+                if location["id"] not in active_locations:
                     continue
-                spawn = EnemySpawn(
-                    location_id=location["id"],
-                    enemy_id=enemy_id,
-                    health=enemy["attributes"]["health"],
-                )
-                db.add(spawn)
-                db.flush()
-                spawns_by_location.setdefault(location["id"], []).append(
-                    {
-                        "id": spawn.id,
-                        "enemy_id": enemy_id,
-                        "health": spawn.health,
-                        "is_alive": True,
-                    }
-                )
-                counts[location["id"]] += 1
-                messages_by_location[location["id"]].append(
-                    f"{enemy['name']} appears."
-                )
+                spawn_limit = location["enemy_spawn_limit"]
+                if counts[location["id"]] >= spawn_limit:
+                    continue
+                for enemy_id in dict.fromkeys(location["enemy_ids"]):
+                    if counts[location["id"]] >= spawn_limit:
+                        break
+                    enemy = entities[enemy_id]
+                    chance = enemy["respawn_chance_percent"]
+                    if chance <= 0 or _enemy_spawn_rng.random() * 100 >= chance:
+                        continue
+                    spawn = EnemySpawn(
+                        location_id=location["id"],
+                        enemy_id=enemy_id,
+                        scope_type=scope_type,
+                        scope_id=scope_id,
+                        health=enemy["attributes"]["health"],
+                    )
+                    db.add(spawn)
+                    db.flush()
+                    spawns_by_location.setdefault(location["id"], []).append(
+                        {
+                            "id": spawn.id,
+                            "enemy_id": enemy_id,
+                            "health": spawn.health,
+                            "is_alive": True,
+                        }
+                    )
+                    counts[location["id"]] += 1
+                    messages_by_scope[(scope_type, scope_id, location["id"])].append(
+                        f"{enemy['name']} appears."
+                    )
         db.commit()
-        for location_id, messages in messages_by_location.items():
-            _publish_world_update(db, location_id, messages)
+        for (scope_type, scope_id, location_id), messages in messages_by_scope.items():
+            _publish_scoped_world_update(
+                db,
+                scope_type,
+                scope_id,
+                location_id,
+                messages,
+            )
 
 
 def _run_enemy_aggression_tick() -> None:
@@ -542,8 +749,27 @@ def _run_enemy_aggression_tick() -> None:
             if character is None or character.area_id not in areas:
                 continue
             location_id = character.area_id
+            party = _party_for_account(db, account_id)
+            scope_type = "party" if party is not None else "solo"
+            scope_id = party.id if party is not None else account_id
+            encounter_filter = (
+                CombatEncounter.party_id == scope_id
+                if scope_type == "party"
+                else CombatEncounter.solo_account_id == scope_id
+            )
+            if db.scalar(
+                select(CombatEncounter.id).where(
+                    encounter_filter,
+                    CombatEncounter.location_id == location_id,
+                )
+            ):
+                continue
             location_spawns = _active_enemy_spawns_for_location(
-                db, content, location_id
+                db,
+                content,
+                location_id,
+                scope_type,
+                scope_id,
             )
             attack_times = dict(
                 (character.combat_state or {}).get("enemy_attack_at", {})
@@ -595,6 +821,406 @@ def _run_enemy_aggression_tick() -> None:
                         "payload": {"id": str(uuid4()), "messages": messages},
                     },
                 )
+
+
+def _active_combat_fighters(
+    db: Session,
+    encounter: CombatEncounter,
+    online_accounts: set[str],
+) -> list[Character]:
+    if encounter.party_id is not None:
+        return db.scalars(
+            select(Character)
+            .join(PartyMember, PartyMember.account_id == Character.account_id)
+            .where(
+                PartyMember.party_id == encounter.party_id,
+                Character.area_id == encounter.location_id,
+                Character.account_id.in_(online_accounts),
+            )
+            .order_by(PartyMember.joined_at, PartyMember.account_id)
+        ).all()
+    if encounter.solo_account_id is None:
+        return []
+    character = db.scalar(
+        select(Character).where(
+            Character.account_id == encounter.solo_account_id,
+            Character.area_id == encounter.location_id,
+        )
+    )
+    return (
+        [character]
+        if character is not None and character.account_id in online_accounts
+        else []
+    )
+
+
+def _emit_combat_command_updates(
+    notifications: list[tuple[str, str, dict[str, Any]]],
+) -> None:
+    for account_id, event_type, payload in notifications:
+        live_hub.publish(
+            account_id,
+            f"account:{account_id}",
+            {"type": event_type, "payload": payload},
+        )
+
+
+def _run_combat_round_tick(now: datetime | None = None) -> None:
+    tick_time = now or utc_now()
+    with SessionLocal() as lookup_db:
+        encounter_ids = lookup_db.scalars(select(CombatEncounter.id)).all()
+
+    for encounter_id in encounter_ids:
+        online_accounts = live_hub.active_account_ids()
+        with SessionLocal() as lookup_db:
+            encounter = lookup_db.get(CombatEncounter, encounter_id)
+            if encounter is None:
+                continue
+            candidate_fighters = _active_combat_fighters(
+                lookup_db,
+                encounter,
+                online_accounts,
+            )
+            account_ids = sorted(character.account_id for character in candidate_fighters)
+        if not account_ids:
+            with _enemy_world_lock, SessionLocal() as db:
+                encounter = db.get(CombatEncounter, encounter_id)
+                if encounter is not None:
+                    encounter.round_started_at = tick_time
+                    db.commit()
+            continue
+
+        with ExitStack() as locks:
+            for account_id in account_ids:
+                locks.enter_context(_character_lock(account_id))
+            with _enemy_world_lock, SessionLocal() as db:
+                encounter = db.get(CombatEncounter, encounter_id)
+                if (
+                    encounter is None
+                    or (tick_time - encounter.round_started_at).total_seconds() < 10
+                ):
+                    continue
+                online_accounts = live_hub.active_account_ids()
+                fighters = [
+                    character
+                    for character in _active_combat_fighters(
+                        db,
+                        encounter,
+                        online_accounts,
+                    )
+                    if character.account_id in account_ids
+                ]
+                if not fighters:
+                    encounter.round_started_at = tick_time
+                    db.commit()
+                    continue
+
+                fighter_by_id = {fighter.account_id: fighter for fighter in fighters}
+                round_messages: dict[str, list[str]] = {
+                    account_id: [] for account_id in fighter_by_id
+                }
+                command_action_by_account: dict[str, CombatAction] = {}
+                updated_commands: set[str] = set()
+                new_enemy_ids: set[str] = set()
+                encounter.round_number += 1
+                encounter.round_started_at = tick_time
+
+                scope_type = "party" if encounter.party_id is not None else "solo"
+                scope_id = encounter.party_id or encounter.solo_account_id
+                if scope_id is None:
+                    db.delete(encounter)
+                    db.commit()
+                    continue
+                content = world_content_dict()
+                spawns_by_location, spawn_rows = _enemy_spawn_state(
+                    db,
+                    content,
+                    scope_type,
+                    scope_id,
+                    {encounter.location_id},
+                )
+                location_spawns = spawns_by_location.get(encounter.location_id, [])
+                spawn_by_id = {spawn["id"]: spawn for spawn in location_spawns}
+                entities = {entity["id"]: entity for entity in content["entities"]}
+                areas = {location["id"]: location for location in content["locations"]}
+                engagement_rows = db.scalars(
+                    select(CombatEncounterEnemy).where(
+                        CombatEncounterEnemy.encounter_id == encounter.id
+                    )
+                ).all()
+                engaged_ids = {row.enemy_spawn_id for row in engagement_rows}
+                for engagement in engagement_rows:
+                    spawn = spawn_by_id.get(engagement.enemy_spawn_id)
+                    if spawn is None or not spawn["is_alive"]:
+                        db.delete(engagement)
+                        engaged_ids.discard(engagement.enemy_spawn_id)
+
+                queued_actions = db.scalars(
+                    select(CombatAction)
+                    .where(
+                        CombatAction.encounter_id == encounter.id,
+                        CombatAction.status == "queued",
+                        CombatAction.account_id.in_(fighter_by_id),
+                    )
+                    .order_by(
+                        CombatAction.submitted_at,
+                        CombatAction.occurrence_index,
+                        CombatAction.id,
+                    )
+                ).all()
+                for action in queued_actions:
+                    if action.account_id in command_action_by_account:
+                        continue
+                    character = fighter_by_id[action.account_id]
+                    occurrence = dict(action.occurrence)
+                    queued_command = db.get(Command, action.command_id)
+                    if queued_command is None:
+                        action.status = "cancelled"
+                        action.result = {"messages": ["The original command no longer exists."]}
+                        continue
+                    outcome = resolve_combat_occurrence(
+                        character,
+                        occurrence,
+                        spawns_by_location,
+                        queued_command.raw_text,
+                    )
+                    action.status = "resolved"
+                    action.result = outcome
+                    command_action_by_account[action.account_id] = action
+                    updated_commands.add(action.command_id)
+                    round_messages[action.account_id].extend(outcome["messages"])
+                    if character.area_id not in spawns_by_location:
+                        destination_spawns, destination_rows = _enemy_spawn_state(
+                            db,
+                            content,
+                            scope_type,
+                            scope_id,
+                            {character.area_id},
+                        )
+                        spawns_by_location.update(destination_spawns)
+                        spawn_rows.extend(destination_rows)
+
+                    defeated_enemy_id = outcome["defeated_enemy_id"]
+                    if defeated_enemy_id is None:
+                        continue
+                    enemy = entities.get(defeated_enemy_id)
+                    if enemy is None:
+                        continue
+                    for fighter in fighters:
+                        rewards = award_enemy_defeat(
+                            fighter,
+                            defeated_enemy_id,
+                            content,
+                        )
+                        if fighter.account_id != action.account_id:
+                            round_messages[fighter.account_id].append(
+                                f"{enemy['name']} is defeated."
+                            )
+                        round_messages[fighter.account_id].extend(rewards)
+                    engagement = db.get(
+                        CombatEncounterEnemy,
+                        (encounter.id, occurrence.get("target_spawn_id", "")),
+                    )
+                    if engagement is not None:
+                        db.delete(engagement)
+                    engaged_ids.discard(occurrence.get("target_spawn_id", ""))
+
+                reinforcements_allowed = bool(engaged_ids or command_action_by_account)
+                if reinforcements_allowed and len(fighters):
+                    additional_fighter_bonus = 5 * max(0, len(fighters) - 1)
+                    for spawn in location_spawns:
+                        spawn_id = spawn["id"]
+                        if not spawn["is_alive"] or spawn_id in engaged_ids:
+                            continue
+                        enemy = entities.get(spawn["enemy_id"])
+                        if enemy is None:
+                            continue
+                        behavior = enemy.get("behavior", "neutral")
+                        base_chance = {"neutral": 10, "aggressive": 20}.get(behavior)
+                        if base_chance is None:
+                            continue
+                        chance = min(60, base_chance + additional_fighter_bonus)
+                        if _enemy_spawn_rng.random() * 100 >= chance:
+                            continue
+                        db.add(
+                            CombatEncounterEnemy(
+                                encounter_id=encounter.id,
+                                enemy_spawn_id=spawn_id,
+                            )
+                        )
+                        engaged_ids.add(spawn_id)
+                        new_enemy_ids.add(spawn_id)
+                        message = f"{enemy['name']} joins the fight."
+                        for account_id in round_messages:
+                            round_messages[account_id].append(message)
+
+                current_engagements = db.scalars(
+                    select(CombatEncounterEnemy).where(
+                        CombatEncounterEnemy.encounter_id == encounter.id
+                    )
+                ).all()
+                for engagement in current_engagements:
+                    spawn = spawn_by_id.get(engagement.enemy_spawn_id)
+                    if (
+                        spawn is None
+                        or not spawn["is_alive"]
+                        or engagement.enemy_spawn_id in new_enemy_ids
+                    ):
+                        continue
+                    enemy = entities.get(spawn["enemy_id"])
+                    if enemy is None or enemy.get("behavior", "neutral") == "passive":
+                        continue
+                    for fighter in fighters:
+                        if fighter.area_id != encounter.location_id:
+                            continue
+                        messages = enemy_strike(
+                            fighter,
+                            enemy,
+                            areas,
+                            consume_defending=False,
+                        )
+                        round_messages[fighter.account_id].extend(messages)
+                        if fighter.area_id != encounter.location_id:
+                            break
+
+                for fighter in fighters:
+                    state = dict(fighter.combat_state or {})
+                    state.pop("defending", None)
+                    fighter.combat_state = state
+
+                for command_id in updated_commands:
+                    command = db.get(Command, command_id)
+                    if command is None or command.status != "queued":
+                        continue
+                    character = fighter_by_id.get(command.account_id)
+                    result = dict(command.result or {})
+                    messages = list(result.get("messages", []))
+                    messages.extend(round_messages.get(command.account_id, []))
+                    result["messages"] = messages
+                    action = command_action_by_account.get(command.account_id)
+                    if action is not None and action.command_id == command_id:
+                        action_result = action.result or {}
+                        for key in (
+                            "dialogues",
+                            "profile_account_ids",
+                        ):
+                            if key in action_result:
+                                result[key] = [
+                                    *result.get(key, []),
+                                    *action_result[key],
+                                ]
+                        if "observed_player_equipment" in action_result:
+                            result["observed_player_equipment"] = {
+                                **result.get("observed_player_equipment", {}),
+                                **action_result["observed_player_equipment"],
+                            }
+                        if "inventory_view" in action_result:
+                            result["inventory_view"] = action_result["inventory_view"]
+                    if character is not None:
+                        result["snapshot"] = snapshot(character, spawns_by_location)
+                    command.result = result
+
+                cancellation_notifications: list[tuple[str, dict[str, Any]]] = []
+                for fighter in fighters:
+                    if fighter.area_id == encounter.location_id:
+                        continue
+                    cancellation_notifications.extend(
+                        _cancel_encounter_actions(
+                            db,
+                            {encounter.id},
+                            "Your queued actions were cancelled because you left the encounter area.",
+                            {fighter.account_id},
+                        )
+                    )
+
+                changed_locations = _persist_enemy_spawn_state(
+                    spawn_rows,
+                    spawns_by_location,
+                )
+                remaining_enemies = db.scalar(
+                    select(CombatEncounterEnemy.enemy_spawn_id)
+                    .join(
+                        EnemySpawn,
+                        EnemySpawn.id == CombatEncounterEnemy.enemy_spawn_id,
+                    )
+                    .where(
+                        CombatEncounterEnemy.encounter_id == encounter.id,
+                        EnemySpawn.is_alive.is_(True),
+                    )
+                    .limit(1)
+                )
+                fighters_remain = any(
+                    fighter.area_id == encounter.location_id
+                    for fighter in fighters
+                )
+                if not fighters_remain or remaining_enemies is None:
+                    end_reason = (
+                        "The encounter ended because no fighters remained in the area."
+                        if not fighters_remain
+                        else "The encounter ended before your queued action could be taken."
+                    )
+                    cancellation_notifications.extend(
+                        _cancel_encounter_actions(
+                            db,
+                            {encounter.id},
+                            end_reason,
+                        )
+                    )
+                    db.delete(encounter)
+
+                command_notifications: list[tuple[str, str, dict[str, Any]]] = []
+                for command_id in updated_commands:
+                    command = db.get(Command, command_id)
+                    if command is None or command.status != "queued":
+                        continue
+                    character = fighter_by_id.get(command.account_id)
+                    has_pending = db.scalar(
+                        select(CombatAction.id).where(
+                            CombatAction.command_id == command_id,
+                            CombatAction.status == "queued",
+                        )
+                    )
+                    if has_pending is None:
+                        command.status = "completed"
+                    command_notifications.append(
+                        (
+                            command.account_id,
+                            "command.updated" if command.status == "queued" else "command.completed",
+                            {
+                                "request_id": command.request_id,
+                                "status": command.status,
+                                "result": command.result,
+                            },
+                        )
+                    )
+
+                for account_id, payload in cancellation_notifications:
+                    command_notifications.append(
+                        (account_id, "command.completed", payload)
+                    )
+                db.commit()
+                _emit_combat_command_updates(command_notifications)
+                for account_id, messages in round_messages.items():
+                    if messages and account_id not in command_action_by_account:
+                        live_hub.publish(
+                            account_id,
+                            f"account:{account_id}",
+                            {
+                                "type": "world.updated",
+                                "payload": {
+                                    "id": str(uuid4()),
+                                    "messages": messages,
+                                },
+                            },
+                        )
+                for location_id in changed_locations:
+                    _publish_scoped_world_update(
+                        db,
+                        scope_type,
+                        scope_id,
+                        location_id,
+                        [],
+                    )
 
 
 app = FastAPI(title="Plight API", version="1.0.0", lifespan=lifespan)
@@ -799,6 +1425,596 @@ def _require_character(account: Account) -> Character:
     if account.character is None:
         raise HTTPException(status_code=409, detail="Create a character before using player profiles.")
     return account.character
+
+
+def _party_for_account(db: Session, account_id: str) -> Party | None:
+    return db.scalar(
+        select(Party)
+        .join(PartyMember, PartyMember.party_id == Party.id)
+        .where(PartyMember.account_id == account_id)
+    )
+
+
+def _party_state(db: Session, account_id: str) -> dict[str, Any]:
+    party = _party_for_account(db, account_id)
+    active_accounts = live_hub.active_account_ids()
+    location_names = {
+        location["id"]: location["name"]
+        for location in world_content_dict()["locations"]
+    }
+    party_data = None
+    if party is not None:
+        members = db.execute(
+            select(PartyMember, Character)
+            .join(Character, Character.account_id == PartyMember.account_id)
+            .where(PartyMember.party_id == party.id)
+            .order_by(PartyMember.joined_at, PartyMember.account_id)
+        ).all()
+        party_data = {
+            "party_id": party.id,
+            "channel_id": f"party:{party.id}",
+            "leader_account_id": party.leader_account_id,
+            "members": [
+                {
+                    "account_id": member.account_id,
+                    "name": character.name,
+                    "species": character.species,
+                    "area_name": location_names.get(character.area_id, character.area_id),
+                    "online": member.account_id in active_accounts,
+                    "is_leader": member.account_id == party.leader_account_id,
+                    "joined_at": member.joined_at.isoformat() + "Z",
+                }
+                for member, character in members
+            ],
+        }
+
+    incoming_rows = db.scalars(
+        select(PartyInvite)
+        .where(
+            PartyInvite.recipient_account_id == account_id,
+            PartyInvite.status == "pending",
+        )
+        .order_by(PartyInvite.created_at.desc())
+        .limit(50)
+    ).all()
+    outgoing_rows = db.scalars(
+        select(PartyInvite)
+        .where(
+            PartyInvite.sender_account_id == account_id,
+            PartyInvite.status == "pending",
+        )
+        .order_by(PartyInvite.created_at.desc())
+        .limit(50)
+    ).all()
+
+    def invite_data(invite: PartyInvite, other_account_id: str) -> dict[str, Any]:
+        character = db.scalar(
+            select(Character).where(Character.account_id == other_account_id)
+        )
+        return {
+            "invite_id": invite.id,
+            "party_id": invite.party_id,
+            "player": (
+                {
+                    "account_id": character.account_id,
+                    "name": character.name,
+                    "species": character.species,
+                }
+                if character is not None
+                else None
+            ),
+            "created_at": invite.created_at.isoformat() + "Z",
+        }
+
+    return {
+        "party": party_data,
+        "incoming_invitations": [
+            invite_data(invite, invite.sender_account_id) for invite in incoming_rows
+        ],
+        "outgoing_invitations": [
+            invite_data(invite, invite.recipient_account_id) for invite in outgoing_rows
+        ],
+    }
+
+
+def _notify_party_update(party_id: str, account_ids: set[str]) -> None:
+    for member_id in account_ids:
+        live_hub.publish(
+            member_id,
+            f"account:{member_id}",
+            {
+                "type": "party.updated",
+                "payload": {"party_id": party_id},
+            },
+        )
+
+
+def _delete_party(db: Session, party: Party) -> set[str]:
+    member_ids = set(
+        db.scalars(
+            select(PartyMember.account_id).where(PartyMember.party_id == party.id)
+        ).all()
+    )
+    db.query(EnemySpawn).filter(
+        EnemySpawn.scope_type == "party",
+        EnemySpawn.scope_id == party.id,
+    ).delete(synchronize_session=False)
+    db.delete(party)
+    return member_ids
+
+
+def _cancel_encounter_actions(
+    db: Session,
+    encounter_ids: set[str],
+    reason: str,
+    account_ids: set[str] | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    if not encounter_ids:
+        return []
+    statement = select(CombatAction).where(
+        CombatAction.encounter_id.in_(encounter_ids),
+        CombatAction.status == "queued",
+    )
+    if account_ids is not None:
+        if not account_ids:
+            return []
+        statement = statement.where(CombatAction.account_id.in_(account_ids))
+    actions = db.scalars(statement).all()
+    if not actions:
+        return []
+    commands: dict[str, set[str]] = defaultdict(set)
+    for action in actions:
+        action.status = "cancelled"
+        action.result = {"messages": [reason]}
+        commands[action.command_id].add(action.account_id)
+    notifications: list[tuple[str, dict[str, Any]]] = []
+    for command_id, command_accounts in commands.items():
+        command = db.get(Command, command_id)
+        if command is None or command.status != "queued":
+            continue
+        result = dict(command.result or {})
+        messages = list(result.get("messages", []))
+        messages.append(reason)
+        result["messages"] = messages
+        command.status = "completed"
+        command.result = result
+        for command_account_id in command_accounts:
+            notifications.append(
+                (
+                    command_account_id,
+                    {
+                        "request_id": command.request_id,
+                        "status": command.status,
+                        "result": result,
+                    },
+                )
+            )
+    return notifications
+
+
+def _emit_command_completions(
+    notifications: list[tuple[str, dict[str, Any]]],
+) -> None:
+    for account_id, payload in notifications:
+        live_hub.publish(
+            account_id,
+            f"account:{account_id}",
+            {"type": "command.completed", "payload": payload},
+        )
+
+
+def _clear_ephemeral_parties() -> None:
+    notifications: list[tuple[str, dict[str, Any]]] = []
+    with _enemy_world_lock, SessionLocal() as db:
+        for party in db.scalars(select(Party)).all():
+            encounters = db.scalars(
+                select(CombatEncounter).where(CombatEncounter.party_id == party.id)
+            ).all()
+            notifications.extend(
+                _cancel_encounter_actions(
+                    db,
+                    {encounter.id for encounter in encounters},
+                    "Your queued action was cancelled because the server restarted.",
+                )
+            )
+            _delete_party(db, party)
+        solo_encounters = db.scalars(
+            select(CombatEncounter).where(CombatEncounter.solo_account_id.is_not(None))
+        ).all()
+        solo_ids = {encounter.id for encounter in solo_encounters}
+        notifications.extend(
+            _cancel_encounter_actions(
+                db,
+                solo_ids,
+                "Your queued action was cancelled because the server restarted.",
+            )
+        )
+        for encounter in solo_encounters:
+            db.delete(encounter)
+        db.commit()
+    _emit_command_completions(notifications)
+
+
+def _notify_party_presence(account_id: str) -> None:
+    with SessionLocal() as db:
+        party = _party_for_account(db, account_id)
+        if party is None:
+            return
+        member_ids = set(
+            db.scalars(
+                select(PartyMember.account_id).where(PartyMember.party_id == party.id)
+            ).all()
+        )
+    _notify_party_update(party.id, member_ids)
+
+
+def _cleanup_party_after_disconnect(account_id: str) -> None:
+    active_accounts = live_hub.active_account_ids()
+    if account_id in active_accounts:
+        _notify_party_presence(account_id)
+        return
+    party_notifications: list[tuple[str, set[str]]] = []
+    command_notifications: list[tuple[str, dict[str, Any]]] = []
+    with _enemy_world_lock, SessionLocal() as db:
+        solo_encounters = db.scalars(
+            select(CombatEncounter).where(
+                CombatEncounter.solo_account_id == account_id
+            )
+        ).all()
+        solo_ids = {encounter.id for encounter in solo_encounters}
+        command_notifications.extend(
+            _cancel_encounter_actions(
+                db,
+                solo_ids,
+                "Your queued actions were cancelled when you disconnected.",
+            )
+        )
+        for encounter in solo_encounters:
+            db.delete(encounter)
+
+        member_rows = db.scalars(
+            select(PartyMember).where(PartyMember.account_id == account_id)
+        ).all()
+        for membership in member_rows:
+            party = db.get(Party, membership.party_id)
+            if party is None:
+                continue
+            member_ids = set(
+                db.scalars(
+                    select(PartyMember.account_id).where(
+                        PartyMember.party_id == party.id
+                    )
+                ).all()
+            )
+            encounters = db.scalars(
+                select(CombatEncounter).where(
+                    CombatEncounter.party_id == party.id
+                )
+            ).all()
+            encounter_ids = {encounter.id for encounter in encounters}
+            command_notifications.extend(
+                _cancel_encounter_actions(
+                    db,
+                    encounter_ids,
+                    "Your queued actions were cancelled when you disconnected.",
+                    {account_id},
+                )
+            )
+            online_members = member_ids & active_accounts
+            if not online_members:
+                command_notifications.extend(
+                    _cancel_encounter_actions(
+                        db,
+                        encounter_ids,
+                        "The party went offline; the encounter ended.",
+                    )
+                )
+                member_ids |= _delete_party(db, party)
+                party_notifications.append((party.id, member_ids))
+                continue
+            if party.leader_account_id == account_id:
+                next_leader = db.scalar(
+                    select(PartyMember)
+                    .where(
+                        PartyMember.party_id == party.id,
+                        PartyMember.account_id.in_(online_members),
+                    )
+                    .order_by(PartyMember.joined_at, PartyMember.account_id)
+                )
+                if next_leader is not None:
+                    party.leader_account_id = next_leader.account_id
+            party_notifications.append((party.id, member_ids))
+        db.commit()
+    _emit_command_completions(command_notifications)
+    for party_id, member_ids in party_notifications:
+        _notify_party_update(party_id, member_ids)
+
+
+def _transfer_party_leader(
+    db: Session,
+    party: Party,
+    online_account_ids: set[str],
+) -> set[str]:
+    members = db.scalars(
+        select(PartyMember)
+        .where(PartyMember.party_id == party.id)
+        .order_by(PartyMember.joined_at, PartyMember.account_id)
+    ).all()
+    next_leader = next(
+        (member for member in members if member.account_id in online_account_ids),
+        None,
+    )
+    if next_leader is None:
+        return _delete_party(db, party)
+    party.leader_account_id = next_leader.account_id
+    return {member.account_id for member in members}
+
+
+def _require_party_leader(db: Session, account_id: str) -> Party:
+    party = _party_for_account(db, account_id)
+    if party is None:
+        raise HTTPException(status_code=409, detail="Create or join a party first.")
+    if party.leader_account_id != account_id:
+        raise HTTPException(status_code=403, detail="Only the party leader can do that.")
+    return party
+
+
+@app.get("/api/v1/party")
+def get_party(
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _require_character(account)
+    return _party_state(db, account.id)
+
+
+@app.post("/api/v1/party", status_code=201)
+def create_party(
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "party_create", 5, 60)
+    _require_character(account)
+    if db.scalar(
+        select(PartyMember.party_id).where(PartyMember.account_id == account.id)
+    ):
+        raise HTTPException(status_code=409, detail="You are already in a party.")
+    party = Party(leader_account_id=account.id)
+    db.add(party)
+    db.flush()
+    db.add(PartyMember(party_id=party.id, account_id=account.id, joined_at=utc_now()))
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="You are already in a party.") from error
+    _notify_party_update(party.id, {account.id})
+    return _party_state(db, account.id)
+
+
+@app.post("/api/v1/party/invitations", status_code=201)
+def invite_to_party(
+    body: PartyInviteCreate,
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "party_invites", 10, 60)
+    _require_character(account)
+    party = _require_party_leader(db, account.id)
+    recipient_id = body.recipient_account_id
+    recipient = db.scalar(
+        select(Character).where(Character.account_id == recipient_id)
+    )
+    if recipient is None:
+        raise HTTPException(status_code=404, detail="That player was not found.")
+    if recipient_id == account.id:
+        raise HTTPException(status_code=409, detail="You cannot invite yourself.")
+    if db.scalar(
+        select(PartyMember.party_id).where(PartyMember.account_id == recipient_id)
+    ):
+        raise HTTPException(status_code=409, detail="That player is already in a party.")
+    pending = db.scalar(
+        select(PartyInvite).where(
+            PartyInvite.party_id == party.id,
+            PartyInvite.recipient_account_id == recipient_id,
+            PartyInvite.status == "pending",
+        )
+    )
+    if pending is not None:
+        raise HTTPException(status_code=409, detail="That player already has a pending invite.")
+    if db.scalar(
+        select(PartyInvite.id).where(
+            PartyInvite.recipient_account_id == recipient_id,
+            PartyInvite.status == "pending",
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="That player already has a pending party invitation.",
+        )
+    invitation = PartyInvite(
+        party_id=party.id,
+        sender_account_id=account.id,
+        recipient_account_id=recipient_id,
+    )
+    db.add(invitation)
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="That player already has a pending party invitation.",
+        ) from error
+    _notify_party_update(party.id, {account.id})
+    _notify_party_update(party.id, {recipient_id})
+    return _party_state(db, account.id)
+
+
+@app.patch("/api/v1/party/invitations/{invitation_id}")
+def respond_to_party_invitation(
+    invitation_id: str,
+    body: PartyInviteUpdate,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _require_character(account)
+    invitation = db.get(PartyInvite, invitation_id)
+    if (
+        invitation is None
+        or invitation.recipient_account_id != account.id
+        or invitation.status != "pending"
+    ):
+        raise HTTPException(status_code=404, detail="That party invitation is unavailable.")
+    party = db.get(Party, invitation.party_id)
+    if party is None:
+        raise HTTPException(status_code=404, detail="That party no longer exists.")
+    if body.status == "accepted":
+        if db.scalar(
+            select(PartyMember.party_id).where(PartyMember.account_id == account.id)
+        ):
+            raise HTTPException(status_code=409, detail="Leave your current party before joining another.")
+        db.add(
+            PartyMember(
+                party_id=party.id,
+                account_id=account.id,
+                joined_at=utc_now(),
+            )
+        )
+    invitation.status = body.status
+    invitation.responded_at = utc_now()
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="You are already in a party.") from error
+    member_ids = set(
+        db.scalars(
+            select(PartyMember.account_id).where(PartyMember.party_id == party.id)
+        ).all()
+    )
+    member_ids.add(invitation.sender_account_id)
+    _notify_party_update(party.id, member_ids)
+    return _party_state(db, account.id)
+
+
+@app.delete("/api/v1/party/members/{member_account_id}")
+def remove_party_member(
+    member_account_id: str,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    party = _require_party_leader(db, account.id)
+    if member_account_id == account.id:
+        raise HTTPException(status_code=409, detail="Use leave party to remove yourself.")
+    member = db.get(PartyMember, (party.id, member_account_id))
+    if member is None:
+        raise HTTPException(status_code=404, detail="That character is not in your party.")
+    encounters = db.scalars(
+        select(CombatEncounter).where(CombatEncounter.party_id == party.id)
+    ).all()
+    command_notifications = _cancel_encounter_actions(
+        db,
+        {encounter.id for encounter in encounters},
+        "Your queued actions were cancelled because you were removed from the party.",
+        {member_account_id},
+    )
+    member_ids = set(
+        db.scalars(
+            select(PartyMember.account_id).where(PartyMember.party_id == party.id)
+        ).all()
+    )
+    db.delete(member)
+    member_ids.discard(member_account_id)
+    db.commit()
+    _emit_command_completions(command_notifications)
+    _notify_party_update(party.id, member_ids | {member_account_id})
+    return _party_state(db, account.id)
+
+
+@app.delete("/api/v1/party/membership")
+def leave_party(
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    member = db.scalar(
+        select(PartyMember).where(PartyMember.account_id == account.id)
+    )
+    if member is None:
+        raise HTTPException(status_code=409, detail="You are not in a party.")
+    party = db.get(Party, member.party_id)
+    if party is None:
+        db.delete(member)
+        db.commit()
+        return _party_state(db, account.id)
+    encounters = db.scalars(
+        select(CombatEncounter).where(CombatEncounter.party_id == party.id)
+    ).all()
+    encounter_ids = {encounter.id for encounter in encounters}
+    command_notifications = _cancel_encounter_actions(
+        db,
+        encounter_ids,
+        "Your queued actions were cancelled when you left the party.",
+        {account.id},
+    )
+    member_ids = set(
+        db.scalars(
+            select(PartyMember.account_id).where(PartyMember.party_id == party.id)
+        ).all()
+    )
+    db.delete(member)
+    member_ids.discard(account.id)
+    party_id = party.id
+    if party.leader_account_id == account.id:
+        survivors = db.scalars(
+            select(PartyMember)
+            .where(PartyMember.party_id == party.id)
+            .order_by(PartyMember.joined_at, PartyMember.account_id)
+        ).all()
+        online_ids = live_hub.active_account_ids() - {account.id}
+        new_leader = next(
+            (candidate for candidate in survivors if candidate.account_id in online_ids),
+            None,
+        )
+        if new_leader is None:
+            command_notifications.extend(
+                _cancel_encounter_actions(
+                    db,
+                    encounter_ids,
+                    "The party ended before your queued action could be taken.",
+                )
+            )
+            member_ids |= _delete_party(db, party)
+        else:
+            party.leader_account_id = new_leader.account_id
+    db.commit()
+    _emit_command_completions(command_notifications)
+    _notify_party_update(party_id, member_ids | {account.id})
+    return _party_state(db, account.id)
+
+
+@app.delete("/api/v1/party")
+def disband_party(
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    party = _require_party_leader(db, account.id)
+    party_id = party.id
+    encounters = db.scalars(
+        select(CombatEncounter).where(CombatEncounter.party_id == party.id)
+    ).all()
+    command_notifications = _cancel_encounter_actions(
+        db,
+        {encounter.id for encounter in encounters},
+        "The party was disbanded before your queued action could be taken.",
+    )
+    member_ids = _delete_party(db, party)
+    db.commit()
+    _emit_command_completions(command_notifications)
+    _notify_party_update(party_id, member_ids)
+    return _party_state(db, account.id)
 
 
 def _quest_by_id(content: dict[str, Any], quest_id: str) -> dict[str, Any]:
@@ -1433,6 +2649,24 @@ def _submit_command_locked(
         }
     if account.character is None:
         raise HTTPException(status_code=409, detail="Create a character before submitting commands.")
+    character = account.character
+    party = _party_for_account(db, account.id)
+    scope_type = "party" if party is not None else "solo"
+    scope_id = party.id if party is not None else account.id
+    encounter_filter = (
+        CombatEncounter.party_id == scope_id
+        if party is not None
+        else CombatEncounter.solo_account_id == scope_id
+    )
+    encounter = db.scalar(
+        select(CombatEncounter).where(
+            encounter_filter,
+            CombatEncounter.location_id == character.area_id,
+        )
+    )
+    deferred_action_ids = {"attack", "light_attack", "heavy_attack"}
+    if encounter is not None:
+        deferred_action_ids.update({"defend", "wait"})
     command = Command(
         account_id=account.id,
         request_id=str(body.request_id),
@@ -1440,23 +2674,140 @@ def _submit_command_locked(
         status="queued",
     )
     changed_locations: set[str] = set()
+    cancellation_notifications: list[tuple[str, dict[str, Any]]] = []
     try:
         db.add(command)
         db.flush()
-        command.status = "completed"
-        spawns_by_location, spawn_rows = _enemy_spawn_state(db, world_content_dict())
+        content = world_content_dict()
+        spawns_by_location, spawn_rows = _enemy_spawn_state(
+            db,
+            content,
+            scope_type,
+            scope_id,
+            {character.area_id},
+        )
         nearby_players = db.scalars(
             select(Character).where(
-                Character.area_id == account.character.area_id,
+                Character.area_id == character.area_id,
                 Character.account_id != account.id,
             )
         ).all()
-        command.result = resolve_command(
+        result = resolve_command(
             body.text,
-            account.character,
-            nearby_players,
-            spawns_by_location,
+            character,
+            available_players=nearby_players,
+            enemy_spawns_by_location=spawns_by_location,
+            deferred_action_ids=deferred_action_ids,
+            defer_all_actions=encounter is not None,
         )
+        queued_actions = result.pop("queued_actions", [])
+        if character.area_id not in spawns_by_location:
+            destination_spawns, destination_rows = _enemy_spawn_state(
+                db,
+                content,
+                scope_type,
+                scope_id,
+                {character.area_id},
+            )
+            spawns_by_location.update(destination_spawns)
+            spawn_rows.extend(destination_rows)
+        result["snapshot"] = snapshot(character, spawns_by_location)
+        if encounter is not None and character.area_id != encounter.location_id:
+            result["messages"].append(
+                "Leaving the encounter cancels your queued combat actions."
+            )
+            cancellation_notifications.extend(
+                _cancel_encounter_actions(
+                    db,
+                    {encounter.id},
+                    "Your queued actions were cancelled because you left the encounter area.",
+                    {account.id},
+                )
+            )
+            if party is None:
+                db.delete(encounter)
+            encounter = None
+            queued_actions = []
+        valid_actions: list[tuple[int, dict[str, Any]]] = []
+        occurrence_order = {
+            occurrence["occurrence_id"]: index
+            for index, occurrence in enumerate(
+                result.get("interpretation", {}).get("occurrences", [])
+            )
+        }
+        for occurrence in queued_actions:
+            if occurrence["action_id"] in {"attack", "light_attack", "heavy_attack"}:
+                target_spawn_id, error_message = resolve_attack_target_id(
+                    character,
+                    occurrence,
+                    spawns_by_location,
+                )
+                if error_message:
+                    result["messages"].append(error_message)
+                    continue
+                if target_spawn_id is not None:
+                    occurrence["target_spawn_id"] = target_spawn_id
+            valid_actions.append(
+                (occurrence_order.get(occurrence["occurrence_id"], 0), occurrence)
+            )
+
+        pending_count = db.scalar(
+            select(func.count()).select_from(CombatAction).where(
+                CombatAction.account_id == account.id,
+                CombatAction.status == "queued",
+            )
+        ) or 0
+        available_slots = max(0, 8 - pending_count)
+        accepted_actions = valid_actions[:available_slots]
+        if len(accepted_actions) < len(valid_actions):
+            result["messages"].append(
+                "You can have at most eight pending combat actions. Some actions were not queued."
+            )
+
+        if accepted_actions:
+            if encounter is None:
+                encounter = CombatEncounter(
+                    party_id=party.id if party is not None else None,
+                    solo_account_id=None if party is not None else account.id,
+                    location_id=character.area_id,
+                )
+                db.add(encounter)
+                db.flush()
+            linked_spawn_ids = set(
+                db.scalars(
+                    select(CombatEncounterEnemy.enemy_spawn_id).where(
+                        CombatEncounterEnemy.encounter_id == encounter.id
+                    )
+                ).all()
+            )
+            for occurrence_index, occurrence in accepted_actions:
+                db.add(
+                    CombatAction(
+                        encounter_id=encounter.id,
+                        account_id=account.id,
+                        command_id=command.id,
+                        occurrence_index=occurrence_index,
+                        occurrence=occurrence,
+                        submitted_at=utc_now(),
+                    )
+                )
+                target_spawn_id = occurrence.get("target_spawn_id")
+                if target_spawn_id and target_spawn_id not in linked_spawn_ids:
+                    db.add(
+                        CombatEncounterEnemy(
+                            encounter_id=encounter.id,
+                            enemy_spawn_id=target_spawn_id,
+                        )
+                    )
+                    linked_spawn_ids.add(target_spawn_id)
+            result["messages"].append(
+                f"{len(accepted_actions)} combat action"
+                f"{'' if len(accepted_actions) == 1 else 's'} queued for the next round."
+            )
+            command.status = "queued"
+        else:
+            command.status = "completed"
+        command.result = result
         changed_locations = _persist_enemy_spawn_state(spawn_rows, spawns_by_location)
         db.commit()
     except IntegrityError:
@@ -1476,15 +2827,21 @@ def _submit_command_locked(
             "status": prior.status,
             "result": prior.result,
         }
-    _publish(
-        db,
-        f"account:{account.id}",
-        "command.completed",
-        {"request_id": command.request_id, "status": command.status, "result": command.result},
-        {account.id},
-    )
+    _emit_command_completions(cancellation_notifications)
+    if command.status == "completed":
+        _publish(
+            db,
+            f"account:{account.id}",
+            "command.completed",
+            {
+                "request_id": command.request_id,
+                "status": command.status,
+                "result": command.result,
+            },
+            {account.id},
+        )
     for location_id in changed_locations:
-        _publish_world_update(db, location_id, exclude_account_ids={account.id})
+        _publish_scoped_world_update(db, scope_type, scope_id, location_id, [])
     return {"request_id": command.request_id, "status": command.status, "result": command.result}
 
 
@@ -1560,7 +2917,7 @@ def send_chat_message(
     _check_rate(request, "chat_send", 20, 60)
     if body.channel_id.startswith("account:") or not _can_access_channel(db, account.id, body.channel_id):
         raise HTTPException(status_code=403, detail="You are not a member of that chat channel.")
-    if body.channel_id != "global":
+    if body.channel_id != "global" and not body.channel_id.startswith("party:"):
         members = _private_channel_members(body.channel_id)
         if members is None or not all(
             db.scalar(select(Character.id).where(Character.account_id == member)) is not None
@@ -1640,6 +2997,7 @@ async def live(websocket: WebSocket) -> None:
     connection = LiveConnection(account_id, websocket)
     connection.channels.add(f"account:{account_id}")
     live_hub.add(connection)
+    await asyncio.to_thread(_notify_party_presence, account_id)
     await websocket.send_json({"type": "auth.ok"})
 
     async def send_events() -> None:
@@ -1688,3 +3046,4 @@ async def live(websocket: WebSocket) -> None:
         pass
     finally:
         live_hub.remove(connection)
+        await asyncio.to_thread(_cleanup_party_after_disconnect, account_id)

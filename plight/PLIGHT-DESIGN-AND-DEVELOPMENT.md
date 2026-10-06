@@ -9,7 +9,7 @@ This document records the decisions made during the initial design interview and
 
 Plight is a **purely text-based, persistent, shared-world high-fantasy sandbox**. Players use natural-language text to act in the world, communicate with each other, and shape the conditions that future players encounter. There is no graphical game world: places, characters, combat, weather, and activity are conveyed through text and text-based interface panels.
 
-The central experience is the freedom to decide what kind of life to pursue. A player might explore dangerous places with friends, fight, gather resources, craft, trade, or specialize in an economic role. There is no required central storyline or traditional quest chain. The world supplies situations and events; players make their own adventures.
+The central experience is the freedom to decide what kind of life to pursue. A player might explore dangerous places with friends, fight, gather resources, craft, trade, or specialize in an economic role. There is no required central storyline; optional, authored NPC quests can offer personal goals and unlock content without funneling everyone through a single plot. The world supplies situations and events; players make their own adventures.
 
 ### Design principles
 
@@ -104,24 +104,37 @@ There is no central narrative. Dynamic events and authored events can both give 
 
 ## 5. Combat, queues, and parties
 
-Combat is turn-based in its effects but should feel responsive in the live shared world. Actions are submitted and resolved through queues; players can continue to enter actions while combat is underway. A passive creature such as a rat need not attack first, but may retaliate after the player attacks.
+The live combat implementation uses the timed queues and party rules below.
 
-### Queue model established so far
+### Party formation and lifetime
 
-- A player who is not in a party uses a personal attack queue.
-- A party uses an area-specific queue for its members fighting in that area.
-- Multiple enemies may participate in the same area fight.
-- Enemies and helpful NPCs may join based on a weighted metric and probability. Area spawn limits constrain how many enemies can be present.
-- Non-party players are not pulled into other players' fights.
-- If a party member enters an area fight, the relevant queue is copied or recreated to include that member. If a member leaves the fight, the queue is copied or recreated without that member and their pending actions; obsolete queue context is removed.
-- Leaving an area during combat is a queued action.
-- The initial browser combat slice persists health, attack, defense, speed, and left/right hand equipment; speed/stamina action scheduling and party combat queues remain undecided.
+- A player can create a party and invite any character from that character's profile. An invitee must accept; friendship is not required. There is no fixed party-size cap.
+- A character can belong to one party at a time. The creator is its leader. The leader can invite or remove members and disband the party; any member can leave.
+- If the leader leaves, is removed, or disconnects while others remain online, leadership passes to the longest-serving online member. A former leader who reconnects returns as a regular member.
+- The party and its outstanding invitations remain available while at least one member is online. They are removed when every member is offline; a party is not restored after a server restart.
+- Party members share a real-time party-chat channel. The server checks membership when reading history, sending messages, and subscribing to live updates.
 
-Parties are formed by inviting a player through their profile. For the initial design, party benefits are party chat, the shared area combat queue, and rewards from monsters defeated while members are online in the same area. A party does not persist once all members log off.
+### Timed combat queues
 
-For a defeated monster, each present party member receives a reward roll as if they had personally killed it; rewards are not simply duplicated from one identical drop. The exact definition of a reward roll and presence during a queued fight should be covered by tests.
+- Solo fighters use a personal queue. A party has a separate combat queue for each area in which its members are fighting. Players outside that party are not pulled into its encounter.
+- Enemy populations are encounter-scoped rather than global: each solo character has its own living enemy instances and health, while members of one party share that party's instances and health. One solo player or party defeating an enemy does not remove it for another solo player or party. Each context has its own location population cap. A character's solo enemy state is preserved while they are in a party and resumes when they leave it; solo respawn rolls pause while that character is offline. Party enemy state is discarded when the party ends.
+- A fight begins when a fighter queues an attack. The opening attack resolves at the end of the first round, up to 10 seconds later. Each round lasts 10 seconds and has two phases: queued player actions first, then enemy actions. The round timer is server-side; the interface does not show a countdown.
+- Each fighter may resolve at most one queued action per round. If a submitted sentence selects multiple action occurrences, those occurrences stay in sentence order and consume one turn each across successive rounds. Actions from different fighters resolve in submission order, subject to the one-action-per-fighter limit.
+- A round's enemy phase still runs when no fighter submitted an action. Fighters must queue defend, attack, or travel rather than relying on combat to pause. Chat and UI navigation are not combat actions.
+- All online party members already in the area automatically participate in the party fight; a member who enters during combat joins at the next round. A queued travel action is resolved as that fighter's turn. A member who leaves the fight loses their pending combat actions and is excluded from later enemy attacks in that phase. Other characters in the area remain outside the party fight.
+- Combat participation requires a live connection and presence in the fight's area. A disconnect removes that fighter and cancels their pending actions; they take no offline combat damage or rewards. A returning party member in the area rejoins at the next round. The solo encounter also ends if its only fighter disconnects.
+- The encounter ends when its engaged enemies are defeated or no fighters remain in that area. If a party splits across areas, each area resolves its own queue.
 
-Player-versus-player combat is not part of the initial scope. If added later, it should be confined to a separate area.
+### Enemy turns and reinforcements
+
+- After the queued player actions, each living, engaged non-passive enemy attacks every active fighter in its encounter. Each enemy rolls separately against each fighter; that fighter's defense reduces their own hit. A defend action halves every hit received during that enemy phase.
+- Passive enemies never attack or join a fight. Neutral enemies retaliate when attacked and may join an already-active fight. Aggressive enemies attack every round while engaged; outside combat, the existing 30-second aggressive-enemy behavior remains in effect.
+- At each round boundary, every living, unengaged neutral or aggressive enemy assigned to the same area makes an independent join roll. Its chance is 10% for neutral or 20% for aggressive, plus 5 percentage points for each active fighter after the first, capped at 60%. A bystander retries each round until it joins or the encounter ends. A successful join is announced immediately, but that enemy first attacks in the following round. Location spawn limits still cap the total living population. Helpful NPC combatants are deferred until their combat stats and behavior are separately designed.
+
+### Rewards and scope
+
+- When an enemy is defeated, each party member who is online and in that area at the moment of defeat receives an independent XP and loot roll as if they had defeated it. The party does not copy one member's identical drop to everyone.
+- The current player-versus-player exclusion remains: PvP is not part of this design. If added later, it should be confined to a separate area.
 
 ## 6. Gathering, crafting, and trade
 
@@ -171,13 +184,14 @@ The first major release should prioritize what players directly interact with an
 - Character creation with human/goblin choice and initial structured character details.
 - A human city and goblin town, species-based starting locations, and their initial hostile relationship.
 - A guided introduction with the wise old NPC.
+- Optional multi-step NPC quests with collect, kill, talk, and visit objectives, explicit branching choices, per-character progress, item/experience rewards, and quest-gated exits.
 - A useful, tested set of canonical natural-language actions and sequential action chains.
 - NPC and enemy interaction, including basic queued combat and travel between areas.
 - Global chat, party chat, profile-initiated private chats, and player blocking.
 - Basic resource gathering, crafting, direct trading, and marketplace access consistent with the rules above.
 - A responsive text-only browser UI with real-time updates.
 
-The developer specifically wants to prioritize fleshing out and testing actions over building a broad world. Advanced economic simulation, extensive world simulation, additional species, and larger content sets can be developed after the core interaction loop is dependable. The MVP can contain simple initial relations and basic market features without attempting the full long-term simulation.
+The developer specifically wants to prioritize fleshing out and testing actions over building a broad world. Quests are optional content authored in the Content Studio; fetch-quest acceptance, progress, turn-in, loot, experience, character level, and quest-gated exits are character-specific and server-authoritative. Advanced economic simulation, extensive world simulation, additional species, and larger content sets can be developed after the core interaction loop is dependable. The MVP can contain simple initial relations and basic market features without attempting the full long-term simulation.
 
 ## 9. Recommended development process
 
@@ -236,8 +250,8 @@ For parser tests, assert both the structured interpretation and the resulting ga
 
 These were deliberately left for focused design and implementation work:
 
-1. What exact combat balance values should populate the speed/stamina action-budget table, and how do queues behave under latency or disconnects?
-2. What are the exact area boundaries and queue rules when there are multiple simultaneous fights in one area?
+1. How should character speed, stamina, and other combat stats affect action budgets and initiative beyond the initial 10-second, one-action-per-round rule? How should queued actions be reconciled across latency and reconnects?
+2. What combat behaviors and weighted join rules should helpful NPCs use if they later participate in fights?
 3. Which skills, character backgrounds, appearance options, and religions are available at launch, and how do they affect mechanics?
 4. What resource respawn rules, NPC stock/prices, and shop inventories should populate the MVP world?
 5. What moderation/reporting tools are needed beyond initial word blocking and player blocking? Chat retention is set to 90 days in [NETWORKING-AND-UI-ARCHITECTURE.md](./NETWORKING-AND-UI-ARCHITECTURE.md).

@@ -104,11 +104,20 @@ class EnemySpawn(Base):
     __table_args__ = (
         CheckConstraint("health >= 0", name="ck_enemy_spawns_nonnegative_health"),
         Index("ix_enemy_spawns_location_alive", "location_id", "is_alive"),
+        Index(
+            "ix_enemy_spawns_scope_location_alive",
+            "scope_type",
+            "scope_id",
+            "location_id",
+            "is_alive",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     location_id: Mapped[str] = mapped_column(String(64), index=True)
     enemy_id: Mapped[str] = mapped_column(String(64), index=True)
+    scope_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    scope_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     health: Mapped[int] = mapped_column(Integer)
     is_alive: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     is_initial: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
@@ -177,3 +186,143 @@ class EventCounter(Base):
         ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True
     )
     value: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Party(Base):
+    __tablename__ = "parties"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    leader_account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class PartyMember(Base):
+    __tablename__ = "party_members"
+    __table_args__ = (
+        UniqueConstraint("account_id", name="uq_party_members_account"),
+        Index("ix_party_members_party_joined", "party_id", "joined_at"),
+    )
+
+    party_id: Mapped[str] = mapped_column(
+        ForeignKey("parties.id", ondelete="CASCADE"), primary_key=True
+    )
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class PartyInvite(Base):
+    __tablename__ = "party_invites"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'declined', 'cancelled')",
+            name="ck_party_invites_status",
+        ),
+        Index("ix_party_invites_recipient_status", "recipient_account_id", "status"),
+        Index(
+            "uq_party_invites_pending_pair",
+            "party_id",
+            "recipient_account_id",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "uq_party_invites_pending_recipient",
+            "recipient_account_id",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    party_id: Mapped[str] = mapped_column(
+        ForeignKey("parties.id", ondelete="CASCADE"), index=True
+    )
+    sender_account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    recipient_account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CombatEncounter(Base):
+    __tablename__ = "combat_encounters"
+    __table_args__ = (
+        CheckConstraint(
+            "(party_id IS NOT NULL AND solo_account_id IS NULL) OR "
+            "(party_id IS NULL AND solo_account_id IS NOT NULL)",
+            name="ck_combat_encounters_single_scope",
+        ),
+        CheckConstraint("round_number >= 1", name="ck_combat_encounters_round_number"),
+        UniqueConstraint("party_id", "location_id", name="uq_combat_encounters_party_area"),
+        UniqueConstraint("solo_account_id", "location_id", name="uq_combat_encounters_solo_area"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    party_id: Mapped[str | None] = mapped_column(
+        ForeignKey("parties.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    solo_account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    location_id: Mapped[str] = mapped_column(String(64), index=True)
+    round_number: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    round_started_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class CombatEncounterEnemy(Base):
+    __tablename__ = "combat_encounter_enemies"
+    __table_args__ = (
+        UniqueConstraint("enemy_spawn_id", name="uq_combat_encounter_enemy_spawn"),
+        Index("ix_combat_encounter_enemies_encounter", "encounter_id"),
+    )
+
+    encounter_id: Mapped[str] = mapped_column(
+        ForeignKey("combat_encounters.id", ondelete="CASCADE"), primary_key=True
+    )
+    enemy_spawn_id: Mapped[str] = mapped_column(
+        ForeignKey("enemy_spawns.id", ondelete="CASCADE"), primary_key=True
+    )
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class CombatAction(Base):
+    __tablename__ = "combat_actions"
+    __table_args__ = (
+        UniqueConstraint(
+            "command_id",
+            "occurrence_index",
+            name="uq_combat_actions_command_occurrence",
+        ),
+        CheckConstraint("occurrence_index >= 0", name="ck_combat_actions_occurrence_index"),
+        CheckConstraint(
+            "status IN ('queued', 'resolved', 'cancelled')",
+            name="ck_combat_actions_status",
+        ),
+        Index("ix_combat_actions_queue", "encounter_id", "status", "submitted_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    encounter_id: Mapped[str] = mapped_column(
+        ForeignKey("combat_encounters.id", ondelete="CASCADE"), index=True
+    )
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    command_id: Mapped[str] = mapped_column(
+        ForeignKey("commands.id", ondelete="CASCADE"), index=True
+    )
+    occurrence_index: Mapped[int] = mapped_column(Integer)
+    occurrence: Mapped[dict[str, Any]] = mapped_column(JSON)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued", server_default="queued")
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

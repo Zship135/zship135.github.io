@@ -208,6 +208,13 @@ a { color: inherit; text-decoration: none; }
 .player-name-link:hover { color: #fff; }
 .player-thumb { width: 42px; height: 42px; border: 1px solid #725238; border-radius: 50%; object-fit: cover; }
 .people-empty { margin: 0; color: var(--muted); font-size: 11px; }
+.party-member-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.party-member-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); background: #15120f; padding: 10px; font-size: 12px; }
+.party-member-list li span { display: grid; gap: 4px; }
+.party-member-list small { color: var(--muted); font: 10px var(--mono); }
+.party-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.party-invitations { display: grid; gap: 8px; margin-top: 8px; }
+.party-invitations h4 { margin: 0; color: var(--accent); font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 .studio-nav-trigger { margin-right: 22px; color: var(--accent); }
 .studio-shell { min-height: 100vh; max-width: 1680px; margin: 0 auto; padding: 0 30px 34px; color: #e5ddd5; }
 .studio-topbar { min-height: 72px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); }

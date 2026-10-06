@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
+from time import monotonic, sleep
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -18,7 +21,16 @@ import plight_server.content as content_store
 import plight_server.game as game
 from plight_server.database import Base, get_db
 from plight_server.game import initial_area
-from plight_server.models import Account, Character, ChatMessage, Command, EnemySpawn, PlayerSession
+from plight_server.models import (
+    Account,
+    Character,
+    ChatMessage,
+    CombatAction,
+    CombatEncounter,
+    Command,
+    EnemySpawn,
+    PlayerSession,
+)
 
 DEFAULT_APPEARANCE = {
     "build": "average",
@@ -89,6 +101,26 @@ def register(client: TestClient, email: str, name: str, species: str = "human") 
     )
     assert login.status_code == 200, login.text
     return {"account_id": account_id, "token": login.json()["token"]}
+
+
+@contextmanager
+def live_as(client: TestClient, player: dict[str, str]):
+    with client.websocket_connect(
+        "/api/v1/live",
+        headers={"Origin": "http://localhost:5173"},
+    ) as websocket:
+        websocket.send_json({"type": "auth", "token": player["token"]})
+        assert websocket.receive_json() == {"type": "auth.ok"}
+        channel_id = f"account:{player['account_id']}"
+        websocket.send_json({"type": "subscribe", "channel_id": channel_id})
+        subscribed = websocket.receive_json()
+        while subscribed.get("type") == "party.updated":
+            subscribed = websocket.receive_json()
+        assert subscribed == {
+            "type": "subscribed",
+            "channel_id": channel_id,
+        }
+        yield websocket
 
 
 def auth(token: str) -> dict[str, str]:
@@ -785,21 +817,28 @@ def test_combat_uses_only_right_hand_and_enemy_attack_die(client: TestClient, mo
         db.commit()
 
     headers = auth(registered["token"])
-    left_equipped = client.post(
-        "/api/v1/commands",
-        headers=headers,
-        json={"request_id": "adf0f265-edca-449a-8ce5-100000000020", "text": "Equip the iron sword in my left hand"},
-    )
-    equipped = client.post(
-        "/api/v1/commands",
-        headers=headers,
-        json={"request_id": "adf0f265-edca-449a-8ce5-100000000021", "text": "Equip the wooden club in my right hand"},
-    )
-    attacked = client.post(
-        "/api/v1/commands",
-        headers=headers,
-        json={"request_id": "adf0f265-edca-449a-8ce5-100000000022", "text": "Attack the forest rat"},
-    )
+    with live_as(client, registered):
+        left_equipped = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={"request_id": "adf0f265-edca-449a-8ce5-100000000020", "text": "Equip the iron sword in my left hand"},
+        )
+        equipped = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={"request_id": "adf0f265-edca-449a-8ce5-100000000021", "text": "Equip the wooden club in my right hand"},
+        )
+        attacked = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={"request_id": "adf0f265-edca-449a-8ce5-100000000022", "text": "Attack the forest rat"},
+        )
+        assert attacked.json()["status"] == "queued"
+        api._run_combat_round_tick(api.utc_now() + timedelta(seconds=11))
+        attacked = client.get(
+            "/api/v1/commands/adf0f265-edca-449a-8ce5-100000000022",
+            headers=headers,
+        )
 
     assert "equip Iron sword in your left hand" in left_equipped.json()["result"]["messages"][0]
     assert "equip Wooden club in your right hand" in equipped.json()["result"]["messages"][0]
@@ -833,11 +872,17 @@ def test_defend_reduces_the_next_enemy_strike(client: TestClient, monkeypatch: p
         character.combat_state = {"target_id": None, "enemy_health": {}, "defending": True}
         db.commit()
 
-    result = client.post(
-        "/api/v1/commands",
-        headers=auth(registered["token"]),
-        json={"request_id": "adf0f265-edca-449a-8ce5-100000000026", "text": "Attack the slug"},
-    ).json()["result"]
+    with live_as(client, registered):
+        client.post(
+            "/api/v1/commands",
+            headers=auth(registered["token"]),
+            json={"request_id": "adf0f265-edca-449a-8ce5-100000000026", "text": "Attack the slug"},
+        )
+        api._run_combat_round_tick(api.utc_now() + timedelta(seconds=11))
+        result = client.get(
+            "/api/v1/commands/adf0f265-edca-449a-8ce5-100000000026",
+            headers=auth(registered["token"]),
+        ).json()["result"]
     assert any("hits you for 1 damage (99/100 health)" in message for message in result["messages"])
 
 
@@ -862,19 +907,31 @@ def test_defeat_restores_player_and_enemy_at_species_start(client: TestClient, m
         }
         db.commit()
 
-    response = client.post(
-        "/api/v1/commands",
-        headers=auth(registered["token"]),
-        json={"request_id": "adf0f265-edca-449a-8ce5-100000000022", "text": "Attack the forest rat"},
-    )
-
-    result = response.json()["result"]
+    with live_as(client, registered):
+        client.post(
+            "/api/v1/commands",
+            headers=auth(registered["token"]),
+            json={"request_id": "adf0f265-edca-449a-8ce5-100000000022", "text": "Attack the forest rat"},
+        )
+        api._run_combat_round_tick(api.utc_now() + timedelta(seconds=11))
+        result = client.get(
+            "/api/v1/commands/adf0f265-edca-449a-8ce5-100000000022",
+            headers=auth(registered["token"]),
+        ).json()["result"]
     assert any("You are defeated" in message for message in result["messages"])
     assert result["snapshot"]["character"]["area_id"] == "human_city"
     assert result["snapshot"]["character"]["stats"]["health"] == 100
     with api.SessionLocal() as db:
         character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
-        assert character.combat_state["enemy_health"]["forest_rat"] == 12
+        assert character.combat_state["target_id"] is None
+        spawn = db.scalar(
+            select(EnemySpawn).where(
+                EnemySpawn.scope_type == "solo",
+                EnemySpawn.scope_id == registered["account_id"],
+                EnemySpawn.location_id == "goblin_town",
+            )
+        )
+        assert spawn is not None and spawn.is_alive
 
 
 def test_content_editor_validates_enemy_attack_die(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1016,6 +1073,127 @@ def test_friend_requests_require_recipient_acceptance(client: TestClient) -> Non
         json={"recipient_account_id": alice["account_id"]},
     )
     assert self_request.status_code == 409
+
+
+def test_party_invites_require_acceptance_and_party_chat_is_member_only(client: TestClient) -> None:
+    leader = register(client, "party-leader@example.com", "Mira")
+    invitee = register(client, "party-invitee@example.com", "Sable")
+    outsider = register(client, "party-outsider@example.com", "Rook")
+    leader_headers = auth(leader["token"])
+    invitee_headers = auth(invitee["token"])
+    outsider_headers = auth(outsider["token"])
+
+    created = client.post("/api/v1/party", headers=leader_headers)
+    assert created.status_code == 201
+    party = created.json()["party"]
+    assert party["leader_account_id"] == leader["account_id"]
+    assert [member["account_id"] for member in party["members"]] == [leader["account_id"]]
+
+    invitation = client.post(
+        "/api/v1/party/invitations",
+        headers=leader_headers,
+        json={"recipient_account_id": invitee["account_id"]},
+    )
+    assert invitation.status_code == 201
+    invitee_state = client.get("/api/v1/party", headers=invitee_headers).json()
+    assert invitee_state["party"] is None
+    assert invitee_state["incoming_invitations"][0]["player"]["name"] == "Mira"
+    channel_id = party["channel_id"]
+
+    outsider_chat = client.post(
+        "/api/v1/chat/messages",
+        headers=outsider_headers,
+        json={"channel_id": channel_id, "text": "Should not reach the party."},
+    )
+    assert outsider_chat.status_code == 403
+
+    accepted = client.patch(
+        f"/api/v1/party/invitations/{invitee_state['incoming_invitations'][0]['invite_id']}",
+        headers=invitee_headers,
+        json={"status": "accepted"},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["party"]["party_id"] == party["party_id"]
+    assert {member["account_id"] for member in accepted.json()["party"]["members"]} == {
+        leader["account_id"],
+        invitee["account_id"],
+    }
+
+    sent = client.post(
+        "/api/v1/chat/messages",
+        headers=invitee_headers,
+        json={"channel_id": channel_id, "text": "Glad to join."},
+    )
+    assert sent.status_code == 201
+    history = client.get(
+        f"/api/v1/chat/{channel_id}/messages",
+        headers=leader_headers,
+    )
+    assert history.status_code == 200
+    assert [message["text"] for message in history.json()["messages"]] == ["Glad to join."]
+
+    removed = client.delete(
+        f"/api/v1/party/members/{invitee['account_id']}",
+        headers=leader_headers,
+    )
+    assert removed.status_code == 200
+    assert removed.json()["party"]["members"][0]["account_id"] == leader["account_id"]
+    assert client.get("/api/v1/party", headers=invitee_headers).json()["party"] is None
+    kicked_chat = client.post(
+        "/api/v1/chat/messages",
+        headers=invitee_headers,
+        json={"channel_id": channel_id, "text": "I am no longer a member."},
+    )
+    assert kicked_chat.status_code == 403
+
+
+def test_party_updates_reach_invited_member_and_leadership_transfers_on_leave(
+    client: TestClient,
+) -> None:
+    leader = register(client, "party-live-leader@example.com", "Mira")
+    member = register(client, "party-live-member@example.com", "Sable")
+    leader_headers = auth(leader["token"])
+    member_headers = auth(member["token"])
+    created = client.post("/api/v1/party", headers=leader_headers)
+    assert created.status_code == 201
+    party_id = created.json()["party"]["party_id"]
+
+    with client.websocket_connect(
+        "/api/v1/live",
+        headers={"Origin": "http://localhost:5173"},
+    ) as websocket:
+        websocket.send_json({"type": "auth", "token": member["token"]})
+        assert websocket.receive_json() == {"type": "auth.ok"}
+        account_channel = f"account:{member['account_id']}"
+        websocket.send_json({"type": "subscribe", "channel_id": account_channel})
+        assert websocket.receive_json() == {
+            "type": "subscribed",
+            "channel_id": account_channel,
+        }
+
+        invitation = client.post(
+            "/api/v1/party/invitations",
+            headers=leader_headers,
+            json={"recipient_account_id": member["account_id"]},
+        )
+        assert invitation.status_code == 201
+        assert websocket.receive_json()["type"] == "party.updated"
+        invitation_id = client.get("/api/v1/party", headers=member_headers).json()[
+            "incoming_invitations"
+        ][0]["invite_id"]
+        accepted = client.patch(
+            f"/api/v1/party/invitations/{invitation_id}",
+            headers=member_headers,
+            json={"status": "accepted"},
+        )
+        assert accepted.status_code == 200
+        assert websocket.receive_json()["type"] == "party.updated"
+
+        left = client.delete("/api/v1/party/membership", headers=leader_headers)
+        assert left.status_code == 200
+        remaining_party = client.get("/api/v1/party", headers=member_headers).json()["party"]
+        assert remaining_party["party_id"] == party_id
+        assert remaining_party["leader_account_id"] == member["account_id"]
 
 
 def test_observe_player_opens_profile_only_for_same_area_player(client: TestClient) -> None:
@@ -1299,14 +1477,25 @@ def test_slug_defeat_awards_configured_experience_and_loot(
         db.commit()
 
     result = None
-    for _ in range(5):
-        response = client.post(
-            "/api/v1/commands",
-            headers=auth(player["token"]),
-            json={"request_id": str(uuid4()), "text": "Attack the slug"},
-        )
-        assert response.status_code == 202, response.text
-        result = response.json()["result"]
+    with live_as(client, player):
+        for index in range(8):
+            request_id = str(uuid4())
+            response = client.post(
+                "/api/v1/commands",
+                headers=auth(player["token"]),
+                json={"request_id": request_id, "text": "Attack the slug"},
+            )
+            assert response.status_code == 202, response.text
+            if response.json()["status"] == "queued":
+                api._run_combat_round_tick(
+                    api.utc_now() + timedelta(seconds=11 * (index + 1))
+                )
+            result = client.get(
+                f"/api/v1/commands/{request_id}",
+                headers=auth(player["token"]),
+            ).json()["result"]
+            if any("Slug is defeated." in message for message in result["messages"]):
+                break
 
     assert any("Slug is defeated." in message for message in result["messages"])
     assert "You gain 15 experience." in result["messages"]
@@ -1408,12 +1597,13 @@ def test_enemy_spawn_settings_default_to_safe_values(
     assert world.locations[0].enemy_spawn_limit == 1
 
 
-def test_enemy_spawn_tick_obeys_shared_location_cap_and_allows_duplicates(
+def test_enemy_spawn_tick_obeys_scoped_location_cap_and_allows_duplicates(
     client: TestClient,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _write_enemy_world(tmp_path, monkeypatch, respawn_chance=100, spawn_limit=2)
+    player = register(client, "spawn-test@example.com", "Spawn Tester")
 
     class AlwaysSpawn:
         @staticmethod
@@ -1421,13 +1611,16 @@ def test_enemy_spawn_tick_obeys_shared_location_cap_and_allows_duplicates(
             return 0.0
 
     monkeypatch.setattr(api, "_enemy_spawn_rng", AlwaysSpawn())
-    api._run_enemy_spawn_tick()
-    api._run_enemy_spawn_tick()
+    scope = ("solo", player["account_id"])
+    api._run_enemy_spawn_tick([scope])
+    api._run_enemy_spawn_tick([scope])
 
     with api.SessionLocal() as db:
         rows = db.scalars(
             select(EnemySpawn).where(
                 EnemySpawn.location_id == "spawn_room",
+                EnemySpawn.scope_type == scope[0],
+                EnemySpawn.scope_id == scope[1],
                 EnemySpawn.is_alive.is_(True),
             )
         ).all()
@@ -1438,12 +1631,14 @@ def test_enemy_spawn_tick_obeys_shared_location_cap_and_allows_duplicates(
         duplicate.is_alive = False
         db.commit()
 
-    api._run_enemy_spawn_tick()
+    api._run_enemy_spawn_tick([scope])
 
     with api.SessionLocal() as db:
         living = db.scalars(
             select(EnemySpawn).where(
                 EnemySpawn.location_id == "spawn_room",
+                EnemySpawn.scope_type == scope[0],
+                EnemySpawn.scope_id == scope[1],
                 EnemySpawn.is_alive.is_(True),
             )
         ).all()
@@ -1451,7 +1646,7 @@ def test_enemy_spawn_tick_obeys_shared_location_cap_and_allows_duplicates(
         assert len({row.enemy_id for row in living}) == 1
 
 
-def test_enemy_health_is_shared_between_players(
+def test_enemy_health_is_scoped_per_solo_character(
     client: TestClient,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -1469,13 +1664,451 @@ def test_enemy_health_is_shared_between_players(
         json={"request_id": str(uuid4()), "text": "Attack the test rat"},
     )
     assert attacked.status_code == 202
-    assert "Test rat does not fight back." in attacked.json()["result"]["messages"]
 
     second_snapshot = client.get(
         "/api/v1/world/snapshot",
         headers=auth(second["token"]),
     ).json()
-    assert second_snapshot["area"]["enemies"][0]["health"] == 9
+    assert second_snapshot["area"]["enemies"][0]["health"] == 12
+
+
+def test_party_members_share_encounter_enemy_population(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(tmp_path, monkeypatch, behavior="neutral", respawn_chance=0)
+    leader = register(client, "party-spawn-leader@example.com", "Leader")
+    member = register(client, "party-spawn-member@example.com", "Member", "goblin")
+    solo = register(client, "party-spawn-solo@example.com", "Solo")
+    leader_headers = auth(leader["token"])
+    member_headers = auth(member["token"])
+
+    created = client.post("/api/v1/party", headers=leader_headers)
+    invite = client.post(
+        "/api/v1/party/invitations",
+        headers=leader_headers,
+        json={"recipient_account_id": member["account_id"]},
+    )
+    assert created.status_code == 201
+    assert invite.status_code == 201
+    invite_id = client.get("/api/v1/party", headers=member_headers).json()[
+        "incoming_invitations"
+    ][0]["invite_id"]
+    accepted = client.patch(
+        f"/api/v1/party/invitations/{invite_id}",
+        headers=member_headers,
+        json={"status": "accepted"},
+    )
+    assert accepted.status_code == 200
+
+    class MinimumRoll:
+        @staticmethod
+        def randint(minimum: int, _: int) -> int:
+            return minimum
+
+    monkeypatch.setattr(game, "combat_rng", MinimumRoll())
+
+    leader_snapshot = client.get(
+        "/api/v1/world/snapshot",
+        headers=leader_headers,
+    ).json()
+    member_snapshot = client.get(
+        "/api/v1/world/snapshot",
+        headers=member_headers,
+    ).json()
+    solo_snapshot = client.get(
+        "/api/v1/world/snapshot",
+        headers=auth(solo["token"]),
+    ).json()
+    assert leader_snapshot["area"]["enemies"][0]["id"] == member_snapshot["area"]["enemies"][0]["id"]
+    assert leader_snapshot["area"]["enemies"][0]["id"] != solo_snapshot["area"]["enemies"][0]["id"]
+
+    with live_as(client, leader), live_as(client, member):
+        command = client.post(
+            "/api/v1/commands",
+            headers=leader_headers,
+            json={"request_id": str(uuid4()), "text": "Attack the test rat"},
+        )
+        assert command.json()["status"] == "queued"
+        api._run_combat_round_tick(api.utc_now() + timedelta(seconds=11))
+        leader_after = client.get(
+            "/api/v1/world/snapshot",
+            headers=leader_headers,
+        ).json()
+        member_after = client.get(
+            "/api/v1/world/snapshot",
+            headers=member_headers,
+        ).json()
+        solo_after = client.get(
+            "/api/v1/world/snapshot",
+            headers=auth(solo["token"]),
+        ).json()
+        assert leader_after["area"]["enemies"][0]["health"] == 9
+        assert member_after["area"]["enemies"][0]["health"] == 9
+        assert solo_after["area"]["enemies"][0]["health"] == 12
+        assert leader_after["character"]["stats"]["health"] == 99
+        assert member_after["character"]["stats"]["health"] == 99
+
+
+def test_combat_sentences_resolve_one_occurrence_per_round_and_cap_pending_actions(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(tmp_path, monkeypatch, behavior="passive", respawn_chance=0)
+    player = register(client, "combat-queue@example.com", "Queue")
+    headers = auth(player["token"])
+
+    with live_as(client, player):
+        request_id = str(uuid4())
+        submitted = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={
+                "request_id": request_id,
+                "text": (
+                    "Attack the test rat and attack the test rat "
+                    "and attack the test rat"
+                ),
+            },
+        )
+        assert submitted.status_code == 202
+        assert submitted.json()["status"] == "queued"
+        assert "3 combat actions queued" in submitted.json()["result"]["messages"][-1]
+
+        base_time = api.utc_now()
+        for round_number, expected_health in enumerate((9, 6, 3), start=1):
+            api._run_combat_round_tick(
+                base_time + timedelta(seconds=11 * round_number)
+            )
+            with api.SessionLocal() as db:
+                command = db.scalar(
+                    select(Command).where(Command.request_id == request_id)
+                )
+                assert command is not None
+                assert command.status == (
+                    "completed" if round_number == 3 else "queued"
+                )
+                spawn = db.scalar(
+                    select(EnemySpawn).where(
+                        EnemySpawn.scope_type == "solo",
+                        EnemySpawn.scope_id == player["account_id"],
+                        EnemySpawn.location_id == "spawn_room",
+                        EnemySpawn.is_alive.is_(True),
+                    )
+                )
+                assert spawn is not None
+                assert spawn.health == expected_health
+                actions = db.scalars(
+                    select(CombatAction).where(
+                        CombatAction.command_id == command.id
+                    )
+                ).all()
+                assert sum(action.status == "resolved" for action in actions) == round_number
+                assert sum(action.status == "queued" for action in actions) == 3 - round_number
+
+        request_ids = []
+        for _ in range(9):
+            pending_id = str(uuid4())
+            request_ids.append(pending_id)
+            response = client.post(
+                "/api/v1/commands",
+                headers=headers,
+                json={"request_id": pending_id, "text": "Attack the test rat"},
+            )
+            assert response.status_code == 202
+
+        assert client.get(
+            f"/api/v1/commands/{request_ids[-1]}",
+            headers=headers,
+        ).json()["status"] == "completed"
+        with api.SessionLocal() as db:
+            queued = db.scalars(
+                select(CombatAction).where(
+                    CombatAction.account_id == player["account_id"],
+                    CombatAction.status == "queued",
+                )
+            ).all()
+            assert len(queued) == 8
+            last_command = db.scalar(
+                select(Command).where(Command.request_id == request_ids[-1])
+            )
+            assert last_command is not None
+            assert any(
+                "at most eight pending combat actions" in message
+                for message in last_command.result["messages"]
+            )
+
+
+def test_party_reinforcement_bonus_and_idle_enemy_rounds(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(tmp_path, monkeypatch, behavior="neutral", respawn_chance=0)
+    leader = register(client, "reinforcement-leader@example.com", "Leader")
+    member = register(client, "reinforcement-member@example.com", "Member", "goblin")
+    leader_headers = auth(leader["token"])
+    member_headers = auth(member["token"])
+    created = client.post("/api/v1/party", headers=leader_headers)
+    invite = client.post(
+        "/api/v1/party/invitations",
+        headers=leader_headers,
+        json={"recipient_account_id": member["account_id"]},
+    )
+    assert created.status_code == 201
+    invitation_id = client.get("/api/v1/party", headers=member_headers).json()[
+        "incoming_invitations"
+    ][0]["invite_id"]
+    assert invite.status_code == 201
+    accepted = client.patch(
+        f"/api/v1/party/invitations/{invitation_id}",
+        headers=member_headers,
+        json={"status": "accepted"},
+    )
+    assert accepted.status_code == 200
+    party_id = accepted.json()["party"]["party_id"]
+    client.get("/api/v1/world/snapshot", headers=leader_headers)
+
+    with api.SessionLocal() as db:
+        db.add(
+            EnemySpawn(
+                location_id="spawn_room",
+                enemy_id="test_rat",
+                scope_type="party",
+                scope_id=party_id,
+                health=12,
+            )
+        )
+        db.commit()
+
+    class ReinforcementRoll:
+        @staticmethod
+        def random() -> float:
+            return 0.12
+
+    class MinimumCombatRoll:
+        @staticmethod
+        def randint(minimum: int, _: int) -> int:
+            return minimum
+
+    monkeypatch.setattr(api, "_enemy_spawn_rng", ReinforcementRoll())
+    monkeypatch.setattr(game, "combat_rng", MinimumCombatRoll())
+    with live_as(client, leader), live_as(client, member):
+        request_id = str(uuid4())
+        submitted = client.post(
+            "/api/v1/commands",
+            headers=leader_headers,
+            json={"request_id": request_id, "text": "Attack the test rat"},
+        )
+        assert submitted.json()["status"] == "queued"
+        start = api.utc_now()
+        api._run_combat_round_tick(start + timedelta(seconds=11))
+        first_round = client.get(
+            f"/api/v1/commands/{request_id}",
+            headers=leader_headers,
+        ).json()["result"]
+        assert any("joins the fight" in message for message in first_round["messages"])
+        with api.SessionLocal() as db:
+            leader_character = db.scalar(
+                select(Character).where(Character.account_id == leader["account_id"])
+            )
+            member_character = db.scalar(
+                select(Character).where(Character.account_id == member["account_id"])
+            )
+            assert leader_character.combat_stats["health"] == 99
+            assert member_character.combat_stats["health"] == 99
+
+        api._run_combat_round_tick(start + timedelta(seconds=22))
+        with api.SessionLocal() as db:
+            leader_character = db.scalar(
+                select(Character).where(Character.account_id == leader["account_id"])
+            )
+            member_character = db.scalar(
+                select(Character).where(Character.account_id == member["account_id"])
+            )
+            assert leader_character.combat_stats["health"] == 97
+            assert member_character.combat_stats["health"] == 97
+
+
+def test_travel_inside_combat_uses_a_turn_and_ends_solo_encounter(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _write_enemy_world(tmp_path, monkeypatch, behavior="passive", respawn_chance=0)
+    world_data = world.model_dump(mode="json")
+    world_data["locations"][0]["exits"] = {"east": "other_room"}
+    world_data["locations"].append(
+        {
+            **world_data["locations"][0],
+            "id": "other_room",
+            "name": "Other room",
+            "position": {"x": 55, "y": 50},
+            "starting_species": [],
+            "enemy_ids": [],
+            "exits": {},
+            "exit_requirements": {},
+        }
+    )
+    updated_world = content_store.WorldContent.model_validate(world_data)
+    content_store.WORLD_CONTENT_PATH.write_text(
+        updated_world.model_dump_json(),
+        encoding="utf-8",
+    )
+    player = register(client, "combat-travel@example.com", "Traveler")
+    headers = auth(player["token"])
+
+    with live_as(client, player):
+        attack_id = str(uuid4())
+        travel_id = str(uuid4())
+        attack = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={"request_id": attack_id, "text": "Attack the test rat"},
+        )
+        travel = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={"request_id": travel_id, "text": "Travel east"},
+        )
+        assert attack.json()["status"] == "queued"
+        assert travel.json()["status"] == "queued"
+
+        start = api.utc_now()
+        api._run_combat_round_tick(start + timedelta(seconds=11))
+        assert client.get(
+            f"/api/v1/commands/{travel_id}",
+            headers=headers,
+        ).json()["status"] == "queued"
+        api._run_combat_round_tick(start + timedelta(seconds=22))
+        finished = client.get(
+            f"/api/v1/commands/{travel_id}",
+            headers=headers,
+        ).json()
+        assert finished["status"] == "completed"
+        assert finished["result"]["snapshot"]["character"]["area_id"] == "other_room"
+        assert any("You travel east to Other room." in message for message in finished["result"]["messages"])
+        with api.SessionLocal() as db:
+            assert db.scalar(select(CombatEncounter.id)) is None
+
+
+def test_solo_disconnect_cancels_queued_actions_and_encounter(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(tmp_path, monkeypatch, behavior="passive", respawn_chance=0)
+    player = register(client, "combat-disconnect@example.com", "Disconnect")
+    headers = auth(player["token"])
+    request_id = str(uuid4())
+
+    with live_as(client, player):
+        submitted = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={
+                "request_id": request_id,
+                "text": "Attack the test rat and attack the test rat",
+            },
+        )
+        assert submitted.json()["status"] == "queued"
+
+    command_url = f"/api/v1/commands/{request_id}"
+    deadline = monotonic() + 2
+    completed = client.get(command_url, headers=headers).json()
+    while completed["status"] == "queued" and monotonic() < deadline:
+        sleep(0.01)
+        completed = client.get(command_url, headers=headers).json()
+    assert completed["status"] == "completed"
+    assert any("cancelled when you disconnected" in message for message in completed["result"]["messages"])
+    with api.SessionLocal() as db:
+        assert db.scalar(select(CombatAction.id).join(Command).where(Command.request_id == request_id)) is None
+        assert db.scalar(
+            select(CombatEncounter.id).where(
+                CombatEncounter.solo_account_id == player["account_id"]
+            )
+        ) is None
+
+
+def test_party_removal_and_disband_cancel_queued_actions(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(tmp_path, monkeypatch, behavior="passive", respawn_chance=0)
+    leader = register(client, "combat-party-leader@example.com", "Leader")
+    member = register(client, "combat-party-member@example.com", "Member", "goblin")
+    leader_headers = auth(leader["token"])
+    member_headers = auth(member["token"])
+    assert client.post("/api/v1/party", headers=leader_headers).status_code == 201
+    assert client.post(
+        "/api/v1/party/invitations",
+        headers=leader_headers,
+        json={"recipient_account_id": member["account_id"]},
+    ).status_code == 201
+    invite_id = client.get("/api/v1/party", headers=member_headers).json()[
+        "incoming_invitations"
+    ][0]["invite_id"]
+    assert client.patch(
+        f"/api/v1/party/invitations/{invite_id}",
+        headers=member_headers,
+        json={"status": "accepted"},
+    ).status_code == 200
+
+    member_request_id = str(uuid4())
+    with live_as(client, member):
+        submitted = client.post(
+            "/api/v1/commands",
+            headers=member_headers,
+            json={
+                "request_id": member_request_id,
+                "text": "Attack the test rat",
+            },
+        )
+        assert submitted.json()["status"] == "queued"
+        removed = client.delete(
+            f"/api/v1/party/members/{member['account_id']}",
+            headers=leader_headers,
+        )
+        assert removed.status_code == 200
+
+    member_command = client.get(
+        f"/api/v1/commands/{member_request_id}",
+        headers=member_headers,
+    ).json()
+    assert member_command["status"] == "completed"
+    assert any(
+        "cancelled because you were removed from the party" in message
+        for message in member_command["result"]["messages"]
+    )
+
+    leader_request_id = str(uuid4())
+    with live_as(client, leader):
+        submitted = client.post(
+            "/api/v1/commands",
+            headers=leader_headers,
+            json={
+                "request_id": leader_request_id,
+                "text": "Attack the test rat",
+            },
+        )
+        assert submitted.json()["status"] == "queued"
+        disbanded = client.delete("/api/v1/party", headers=leader_headers)
+        assert disbanded.status_code == 200
+
+    leader_command = client.get(
+        f"/api/v1/commands/{leader_request_id}",
+        headers=leader_headers,
+    ).json()
+    assert leader_command["status"] == "completed"
+    assert any(
+        "party was disbanded before your queued action" in message
+        for message in leader_command["result"]["messages"]
+    )
+    with api.SessionLocal() as db:
+        assert db.scalar(select(CombatEncounter.id)) is None
 
 
 @pytest.mark.parametrize(
@@ -1506,11 +2139,18 @@ def test_enemy_behavior_controls_retaliation(
             return 1.0
 
     monkeypatch.setattr(game, "combat_rng", MinimumRoll())
-    result = client.post(
-        "/api/v1/commands",
-        headers=auth(player["token"]),
-        json={"request_id": str(uuid4()), "text": "Attack the test rat"},
-    ).json()["result"]
+    with live_as(client, player):
+        submitted = client.post(
+            "/api/v1/commands",
+            headers=auth(player["token"]),
+            json={"request_id": "adf0f265-edca-449a-8ce5-100000000123", "text": "Attack the test rat"},
+        ).json()
+        assert submitted["status"] == "queued"
+        api._run_combat_round_tick(api.utc_now() + timedelta(seconds=11))
+        result = client.get(
+            "/api/v1/commands/adf0f265-edca-449a-8ce5-100000000123",
+            headers=auth(player["token"]),
+        ).json()["result"]
 
     assert any(expected_message in message for message in result["messages"])
     assert result["snapshot"]["character"]["stats"]["health"] == expected_health
@@ -1523,6 +2163,10 @@ def test_aggressive_enemy_attacks_connected_players_every_30_seconds(
 ) -> None:
     _write_enemy_world(tmp_path, monkeypatch, behavior="aggressive", respawn_chance=0)
     player = register(client, "aggressive@example.com", "Rill")
+    assert client.get(
+        "/api/v1/world/snapshot",
+        headers=auth(player["token"]),
+    ).status_code == 200
 
     class MinimumRoll:
         @staticmethod
