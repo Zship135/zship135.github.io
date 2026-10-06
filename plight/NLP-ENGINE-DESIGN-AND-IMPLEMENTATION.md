@@ -15,7 +15,7 @@ This specification defines:
 - the parse-to-execution boundary and internal intent contract;
 - ambiguity, action chaining, and Boolean operator semantics;
 - the initial commandable world-action catalog and its MVP rules;
-- the queue lifecycle, failure handling, persistence, and test requirements.
+- the command execution lifecycle, failure handling, persistence, and test requirements.
 
 Chat composition/moderation, complete character creation, and general NPC dialogue generation are outside the NLP engine. `talk` is an action intent that carries the player's utterance or topic to the separate NPC dialogue rules.
 
@@ -30,13 +30,13 @@ Chat composition/moderation, complete character creation, and general NPC dialog
 | Parse ambiguity | Ask only when the highest-ranked distinct interpretations tie exactly |
 | Entity ambiguity | Ask the player to select when a target name matches multiple present entities |
 | Boolean operators | English words/phrases for standard Boolean connectives; no symbolic forms initially |
-| Random choices | Uniformly select a satisfying action-occurrence assignment when the expression reaches execution; record the selected assignment |
+| Random choices | Uniformly select a satisfying action-occurrence assignment when the command is submitted; record the selected assignment with its result |
 | Action order | Preserve sentence order among selected action occurrences; revalidate each at execution |
-| Failed action | Do not reroll. Explain the failure, skip without stamina/action-opportunity cost, and continue the queue |
+| Failed action | Do not reroll. Explain the failure, skip the failed occurrence, and continue with later selected actions |
 | Empty satisfying assignment | Execute no action and return a short neutral message, such as “You do nothing.” |
 | No satisfying assignment | Execute nothing and explain that the requested combination has no valid action |
 
-“Exact tie” refers to a tie in the parser/ranker result after duplicate semantic parses have been collapsed. Do not add a confidence-margin threshold in the MVP. If two distinct highest-ranked interpretations tie, return a clarification prompt with the candidate interpretations and do not enqueue either one until the player chooses.
+“Exact tie” refers to a tie in the parser/ranker result after duplicate semantic parses have been collapsed. Do not add a confidence-margin threshold in the MVP. If two distinct highest-ranked interpretations tie, return a clarification prompt with the candidate interpretations and do not execute either one until the player clarifies.
 
 ## 3. Processing architecture
 
@@ -45,12 +45,12 @@ Use a pipeline with explicit boundaries:
 1. **Receive:** Accept raw command text from the authenticated server session. Associate it with the actor, command/request ID, and current session; never trust a client-supplied actor ID or game state.
 2. **Normalize:** Normalize whitespace and casing for analysis while retaining original text and character spans for names, quoted phrases, and NPC utterances. Do not discard negation, operator words, or target wording.
 3. **Parse:** Call RPGNLP through the Plight adapter. Produce typed candidate action occurrences and expression structure, not executable callbacks.
-4. **Canonicalize:** Map synonyms and paraphrases to allow-listed action IDs and typed parameters. Preserve repeated mentions as separate occurrences; “attack the rat and attack the rat” is two queued attempts.
+4. **Canonicalize:** Map synonyms and paraphrases to allow-listed action IDs and typed parameters. Preserve repeated mentions as separate occurrences; “attack the rat and attack the rat” is two distinct attempts.
 5. **Rank:** Select the highest-ranked semantic parse. If distinct highest-ranked parses tie exactly, return clarification. The ranker must always be able to score supported action candidates, including a deterministic local lexical/alias fallback when RPGNLP produces no usable candidate. Do not use a confidence cutoff; game validation remains responsible for failure.
 6. **Resolve references:** Resolve names and aliases against authoritative, current world state. Missing or inaccessible references become ordinary action failures. Multiple present-entity matches require player selection before execution.
-7. **Build queue entry:** Store the parsed expression and ordered occurrences with the request ID. Do not apply world effects during parsing.
-8. **Resolve Boolean choice:** When a queued Boolean expression reaches execution, use server-owned randomness to select uniformly among satisfying assignments. Persist the selected assignment before applying its actions; never re-draw it after a retry or restart.
-9. **Execute:** Execute the selected occurrences sequentially in source order. Re-read and validate authoritative state before every occurrence. Persist each result and emit its player-facing outcome.
+7. **Record command:** Associate the parsed expression and ordered occurrences with the idempotent request ID. Do not apply world effects during parsing.
+8. **Resolve Boolean choice:** When handling the command, use server-owned randomness to select uniformly among satisfying assignments. Commit the selected assignment and its effects atomically; a duplicate request returns the recorded result rather than drawing again.
+9. **Execute:** Execute the selected occurrences sequentially in source order. Re-read and validate authoritative state before every occurrence, including between immediate combat actions and their enemy responses. Persist the completed result and emit its player-facing outcome.
 
 The game-action layer owns preconditions, costs, target existence, location restrictions, inventory changes, combat results, and transaction atomicity. The NLP layer must never infer success from a grammatical parse.
 
@@ -144,13 +144,13 @@ Examples for two distinct action occurrences `A` then `B`:
 
 `not A` selects the empty set. Converses use the standard converse of material implication; for `A only if B`, evaluate `A implies B`. Generalize n-ary `and`, `or`, `nand`, and `nor` by their truth tables. For chained implication or other grouping that is genuinely ambiguous in English, use ranked parses and the exact-tie clarification rule rather than inventing a special precedence.
 
-If there are no satisfying assignments, emit a no-valid-combination result and execute nothing. If the empty set is one of several satisfying assignments and is selected, emit the neutral “You do nothing” response. Random selection happens once, at the queue head, for that expression; persist the selected occurrence IDs before executing. A restart or duplicate request must resume from the recorded choice, not draw again.
+If there are no satisfying assignments, emit a no-valid-combination result and execute nothing. If the empty set is one of several satisfying assignments and is selected, emit the neutral “You do nothing” response. Random selection happens once while handling the command; persist the selected occurrence IDs with the completed result. A duplicate request returns the recorded choice and outcome rather than drawing again.
 
 ### 4.3 Ordering, validation, and failures
 
-After selection, execute included occurrences in their original sentence order. Each action is independently checked against current state when its turn arrives. If one is no longer possible (for example, its target disappeared), report the concrete failure, skip that occurrence without stamina or combat-action-opportunity cost, and continue with remaining selected occurrences. Never choose an alternate Boolean assignment just because a selected action failed.
+After selection, execute included occurrences in their original sentence order. Each action is independently checked against current state when it resolves. If one is no longer possible (for example, its target disappeared), report the concrete failure, skip that occurrence without applying its effects, and continue with remaining selected occurrences. Never choose an alternate Boolean assignment just because a selected action failed.
 
-When multiple live entities match a target reference, return a target clarification and pause that command before execution. When none match, return the action's normal missing-target failure. A later action in the same queue may resolve differently after earlier actions have changed the world.
+When multiple live entities match a target reference, return a target clarification and pause that command before execution. When none match, return the action's normal missing-target failure. A later action in the same command may resolve differently after earlier actions have changed the world.
 
 ## 5. Starter canonical action catalog
 
@@ -160,13 +160,13 @@ IDs below are internal examples of stable lowercase identifiers. The implementat
 |---|---|---|
 | `observe` | Optional visible entity/object target or self-view subject | Without a target, describe the current area. A self-reference opens the player's own profile. `inventory` opens the player's own inventory/equipment menu; `armor`, `hands`, and `weapons` open that menu on the corresponding view. Phrases such as “look in my inventory” and “what am I carrying?” map to `observe` with subject `inventory`. Observing a co-located player opens that player's existing profile with equipped gear only; it never reveals their inventory. Resolve immediately; it does not use a combat action slot. |
 | `talk` | Required NPC target plus utterance/topic | Carry the player's utterance/topic to NPC dialogue rules. The NPC system, not the parser, generates the reply. Resolve immediately and do not use a combat action slot. Player-to-player chat is not this action. |
-| `travel` | One directly connected exit/direction | Move only through an exit from the current area; do not path-find to a farther destination. Resolve immediately outside combat and through the appropriate combat queue during combat. Validate the exit and current state at execution. |
-| `attack` | Enemy target | Strike with both equipped hands. Fists are the default; an owned weapon adds its authored damage to the player's attack stat. A named target must be present. |
+| `travel` | One directly connected exit/direction | Move only through an exit from the current area; do not path-find to a farther destination. Resolve immediately in sentence order. Leaving an encounter area prevents that action's enemy response. Validate the exit and current state when the action resolves. |
+| `attack` | Enemy target | Strike with both equipped hands. Fists are the default; an owned weapon adds its authored damage to the player's attack stat. A named target must be present. Resolve the strike and any immediate enemy response in the command request. |
 | `light_attack` | Enemy target | Make a weaker attack with both equipped hands. |
 | `heavy_attack` | Enemy target | Make a stronger attack with both equipped hands. |
-| `defend` | No target | Reduce damage from the next enemy response by half, rounded down. |
-| `wait` | Optional duration only if a later rule adds it | In combat, consume the player's action without attacking or defending. During gathering, wait for the timed gathering action to complete. Otherwise do nothing and return a brief “nothing to wait for” result. |
-| `gather` | Resource/action plus required tool | Require a suitable resource in the current area and the correct tool. Start a timed gathering state; consume the resource and grant yield only on completion. While gathering, the character is action-locked except for `wait` and `cancel_gather`; the queue resumes after completion or cancellation. |
+| `defend` | No target | Take a guarded stance; halve each hit in the immediate enemy response, rounded down. |
+| `wait` | Optional duration only if a later rule adds it | In combat, take a turn without attacking or defending; engaged non-passive enemies respond immediately. During gathering, wait for the timed gathering action to complete. Otherwise do nothing and return a brief “nothing to wait for” result. |
+| `gather` | Resource/action plus required tool | Require a suitable resource in the current area and the correct tool. Start a timed gathering state; consume the resource and grant yield only on completion. While gathering, the character is action-locked except for `wait` and `cancel_gather`; later selected actions resume after completion or cancellation. |
 | `cancel_gather` | No target | Cancel the active gathering state. Award no yield, consume no resource, and discard elapsed progress; a later attempt starts over. |
 | `craft` | Recipe ID or unambiguous recipe/product reference | Require a known recipe, all ingredients, required station, and required skill. Validate then consume ingredients and grant outputs atomically. |
 | `equip_item` | Owned item and optional equipment slot | The server validates item ownership, authored equipment definition, and slot compatibility. The current content defines weapons for `left_hand` and `right_hand`; other item types are rejected with a clear missing-definition message. |
@@ -198,7 +198,7 @@ The blacksmith sells a basic pickaxe so a new character can acquire a first one 
 
 ### 5.2 Combat and gathering tuning data
 
-Use a small, capped, data-driven combat action-budget model. Speed determines the number of queued actions before an enemy response; stamina limits the burst and funds action costs. The action handlers/configuration define the cap, thresholds, costs, damage, and defend reduction. Keep these values outside parser logic and cover their effect with game-rule tests.
+The current combat model resolves each selected action immediately, followed by an immediate response from living, engaged non-passive enemies against only the acting character. Future speed or stamina rules may cap action bursts; they must not reintroduce a delay between a submitted action and its response. Keep combat values outside parser logic and cover their effect with game-rule tests.
 
 Gathering duration scales with both resource and tool/skill:
 
@@ -210,14 +210,14 @@ duration = max(minimum_duration,
 
 The server starts the timer only after validating area, resource, tool, and character state. Completion consumes the configured resource amount and grants configured yield atomically. Cancellation has the no-yield/no-resource-loss behavior in the action catalog.
 
-## 6. Queue and persistence contract
+## 6. Command and persistence contract
 
 - The server creates a stable request ID and enforces idempotency for command submission and consequential actions.
 - Persist the raw command only according to the game's command-history/privacy policy; the execution record must at minimum preserve the canonical expression, selected occurrence IDs, parser/catalog versions, and ordered outcomes.
-- The Boolean draw is made by the server, never the browser. Inject the random source so tests can force each satisfying assignment. Persist the actual selected assignment before applying its first effect.
-- Store enough queue data to resume after a server restart without reparsing under a different package/catalog version or rerolling a Boolean choice.
+- The Boolean draw is made by the server, never the browser. Inject the random source so tests can force each satisfying assignment. Persist the selected assignment and ordered outcomes atomically with the command's effects.
+- New commands resolve synchronously and return completed results. Do not leave new combat actions pending for a later round or timer.
 - Process state mutations and inventory/economy transfers in transactions or equivalent atomic operations. Duplicate submissions must not double-spend, double-gather, double-craft, or double-transfer.
-- Treat parser/catalog versions as part of reproducibility data. A new catalog version must not silently reinterpret already queued actions.
+- Treat parser/catalog versions as part of reproducibility data. A duplicate request must return the original completed result rather than silently reinterpret or re-execute it under a newer catalog.
 - Return structured outcomes (`succeeded`, `failed`, `clarification_required`, or `no_action`) with player-facing text. Do not return success-shaped defaults on parser, persistence, or handler errors.
 
 ## 7. Implementation sequence
@@ -226,7 +226,7 @@ The server starts the timer only after validating area, resource, tool, and char
 2. **Define models and catalog:** Add typed action occurrences, Boolean expression nodes, catalog entries, candidate rankings, and explicit outcome variants.
 3. **Implement expression semantics:** Add parser mappings for supported English operator forms and truth-table assignment enumeration. Test all supported operators independently of the world.
 4. **Implement ranking and clarifications:** Deduplicate semantically equivalent candidates, choose the top candidate, ask on exact ties, and expose live target ambiguity as a separate resolution result.
-5. **Wire the authoritative queue:** Persist command/expression/choice/outcomes, apply selection at queue head, revalidate every occurrence, skip failures without rerolls, and resume safely after restart.
+5. **Wire authoritative command execution:** Persist command/expression/choice/outcomes, apply the selection once, revalidate every occurrence in order, skip failures without rerolls, and preserve idempotency across retries.
 6. **Add action handlers in vertical slices:** Begin with observe/talk/travel, then combat, gathering/crafting, inventory/shops, and player/marketplace transactions. Keep parsing and game effects independently testable.
 7. **Expand the hand-written corpus:** Add paraphrases and regressions whenever parser behavior or action rules change.
 
@@ -246,26 +246,26 @@ Maintain a hand-written automated corpus with input text, expected ranked parse/
 - Check target resolution for unique, missing, inaccessible, and duplicate-name entities.
 - Check unknown wording maps to the best supported action and is still subject to ordinary server validation.
 
-### Game-state and queue tests
+### Game-state and ordered-action tests
 
 - Execute selected actions in sentence order, rereading state before each one.
-- When a selected action fails, assert its concrete failure text, no stamina/action-opportunity cost, no alternate random draw, and continued processing of later selected actions.
-- Combat: current-target fallback, missing target, target ambiguity, attack variants, defend against next response, wait, speed/stamina budget cap, queued travel, and no effect when a target is no longer present.
+- When a selected action fails, assert its concrete failure text, no effects from that occurrence, no alternate random draw, and continued processing of later selected actions.
+- Combat: current-target fallback, missing target, target ambiguity, attack variants, immediate actor-only enemy response, defend, wait, party enemy sharing, reinforcements, and no effect when a target is no longer present.
 - Gathering: missing tool/resource, timer formula, action lock, completion consumption/yield, wait, cancellation, and restart behavior.
 - Crafting: all starter recipes, missing ingredients/station/skill, atomic ingredient/output changes, and blacksmith pickaxe purchase.
 - Shops, gifts, offers, and marketplace: insufficient funds/items, co-location, reservation/release, explicit acceptance, 24-hour offer expiry, seller offline/location changes, seller-selected currency partial fills, full barter fills, cancellation, and concurrent purchase attempts.
-- Persistence: duplicate command IDs, process restart during a queue, and no duplicate effects or random rerolls.
+- Persistence: duplicate command IDs, process restart during an action sequence, and no duplicate effects or random rerolls.
 
 ### Release gate
 
 - All committed hand-written golden cases pass with exact expected parse/arguments and outcome.
-- All operator truth-table and queue replay tests pass.
+- All operator truth-table and ordered action replay tests pass.
 - No parser test can directly mutate state or bypass a server-side action precondition.
 - Every canonical action has explicit target/argument requirements, context checks, failure text, and state-transition tests before being enabled for players.
 
 ## 9. Values and content to tune outside the parser
 
-The first browser combat slice uses persistent per-character encounters. Initial player stats are 100 health, 3 attack, 1 defense, and 10 speed, with a fist in each hand. An attack applies both hand strikes in left-to-right order; fists are the default, and an owned weapon adds its authored damage. Standard, light, and heavy attacks use 1x, 0.75x, and 1.5x multipliers respectively. Each player strike deals `max(1, round((player attack + weapon damage) * multiplier) - enemy defense)`. A living enemy then retaliates with `base attack + roll(1..attack_die_sides) - player defense`, floored at zero. Defend halves the next retaliation's damage, rounded down. Defeated players respawn at their species' starting area with full health, keep their inventory, and reset their current enemy. Enemy damage state resets for that character when they leave the area. The configured speed stat is recorded but is not yet used to schedule actions; there is not yet a shared party combat queue.
+The first browser combat slice uses persistent per-character encounters. Initial player stats are 100 health, 3 attack, 1 defense, and 10 speed, with a fist in each hand. An attack applies both hand strikes in left-to-right order; fists are the default, and an owned weapon adds its authored damage. Standard, light, and heavy attacks use 1x, 0.75x, and 1.5x multipliers respectively. Each player strike deals `max(1, round((player attack + weapon damage) * multiplier) - enemy defense)`. After each action, every living, engaged non-passive enemy responds immediately and targets only the character who acted, using `base attack + roll(1..attack_die_sides) - player defense`, floored at zero. Defend halves every hit in that immediate response, rounded down. Neutral and aggressive enemies can join after an exchange; aggressive enemies also attack connected players every 30 seconds outside combat. Defeated players respawn at their species' starting area with full health, keep their inventory, and reset their current enemy. Enemy damage state resets for that character when they leave the area. Party members share enemy instances and health, but one member's action never exposes the others to its enemy response. The configured speed stat is recorded but is not yet used to schedule actions.
 
 The following remain game-data decisions or later action-system work, not NLP parser behavior:
 

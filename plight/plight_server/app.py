@@ -20,7 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.websockets import WebSocketDisconnect
@@ -559,10 +559,9 @@ async def _chat_retention_loop() -> None:
 async def _enemy_world_loop() -> None:
     next_spawn = time.monotonic() + 15
     next_aggression = time.monotonic() + 5
-    next_combat = time.monotonic() + 10
     while True:
         now = time.monotonic()
-        await asyncio.sleep(max(0, min(next_spawn, next_aggression, next_combat) - now))
+        await asyncio.sleep(max(0, min(next_spawn, next_aggression) - now))
         now = time.monotonic()
         if now >= next_spawn:
             try:
@@ -576,12 +575,6 @@ async def _enemy_world_loop() -> None:
             except Exception:
                 LOGGER.exception("Enemy aggression tick failed.")
             next_aggression += 5 * (int((now - next_aggression) // 5) + 1)
-        if now >= next_combat:
-            try:
-                await asyncio.to_thread(_run_combat_round_tick)
-            except Exception:
-                LOGGER.exception("Combat round tick failed.")
-            next_combat += 10 * (int((now - next_combat) // 10) + 1)
 
 
 def _active_enemy_scopes(db: Session) -> list[tuple[str, str]]:
@@ -2653,32 +2646,19 @@ def _submit_command_locked(
     party = _party_for_account(db, account.id)
     scope_type = "party" if party is not None else "solo"
     scope_id = party.id if party is not None else account.id
-    encounter_filter = (
-        CombatEncounter.party_id == scope_id
-        if party is not None
-        else CombatEncounter.solo_account_id == scope_id
-    )
-    encounter = db.scalar(
-        select(CombatEncounter).where(
-            encounter_filter,
-            CombatEncounter.location_id == character.area_id,
-        )
-    )
-    deferred_action_ids = {"attack", "light_attack", "heavy_attack"}
-    if encounter is not None:
-        deferred_action_ids.update({"defend", "wait"})
     command = Command(
         account_id=account.id,
         request_id=str(body.request_id),
         raw_text=body.text,
-        status="queued",
+        status="completed",
     )
-    changed_locations: set[str] = set()
-    cancellation_notifications: list[tuple[str, dict[str, Any]]] = []
+    party_notifications: dict[str, list[str]] = defaultdict(list)
     try:
         db.add(command)
         db.flush()
         content = world_content_dict()
+        entities = {entity["id"]: entity for entity in content["entities"]}
+        areas = {location["id"]: location for location in content["locations"]}
         spawns_by_location, spawn_rows = _enemy_spawn_state(
             db,
             content,
@@ -2686,6 +2666,22 @@ def _submit_command_locked(
             scope_id,
             {character.area_id},
         )
+        loaded_locations = {character.area_id}
+
+        def load_enemy_spawns(location_id: str) -> None:
+            if location_id in loaded_locations:
+                return
+            destination_spawns, destination_rows = _enemy_spawn_state(
+                db,
+                content,
+                scope_type,
+                scope_id,
+                {location_id},
+            )
+            spawns_by_location.update(destination_spawns)
+            spawn_rows.extend(destination_rows)
+            loaded_locations.add(location_id)
+
         nearby_players = db.scalars(
             select(Character).where(
                 Character.area_id == character.area_id,
@@ -2697,46 +2693,42 @@ def _submit_command_locked(
             character,
             available_players=nearby_players,
             enemy_spawns_by_location=spawns_by_location,
-            deferred_action_ids=deferred_action_ids,
-            defer_all_actions=encounter is not None,
+            defer_all_actions=True,
         )
-        queued_actions = result.pop("queued_actions", [])
-        if character.area_id not in spawns_by_location:
-            destination_spawns, destination_rows = _enemy_spawn_state(
-                db,
-                content,
-                scope_type,
-                scope_id,
-                {character.area_id},
-            )
-            spawns_by_location.update(destination_spawns)
-            spawn_rows.extend(destination_rows)
-        result["snapshot"] = snapshot(character, spawns_by_location)
-        if encounter is not None and character.area_id != encounter.location_id:
-            result["messages"].append(
-                "Leaving the encounter cancels your queued combat actions."
-            )
-            cancellation_notifications.extend(
-                _cancel_encounter_actions(
-                    db,
-                    {encounter.id},
-                    "Your queued actions were cancelled because you left the encounter area.",
-                    {account.id},
-                )
-            )
-            if party is None:
-                db.delete(encounter)
-            encounter = None
-            queued_actions = []
-        valid_actions: list[tuple[int, dict[str, Any]]] = []
+        actions = result.pop("queued_actions", [])
+        result["messages"] = list(result.get("messages", []))
+        result["dialogues"] = list(result.get("dialogues", []))
+        result["profile_account_ids"] = list(result.get("profile_account_ids", []))
+        result["observed_player_equipment"] = dict(
+            result.get("observed_player_equipment", {})
+        )
+        result.pop("inventory_view", None)
         occurrence_order = {
             occurrence["occurrence_id"]: index
             for index, occurrence in enumerate(
                 result.get("interpretation", {}).get("occurrences", [])
             )
         }
-        for occurrence in queued_actions:
-            if occurrence["action_id"] in {"attack", "light_attack", "heavy_attack"}:
+        for occurrence in sorted(
+            actions,
+            key=lambda item: occurrence_order.get(item["occurrence_id"], 0),
+        ):
+            location_id = character.area_id
+            load_enemy_spawns(location_id)
+            encounter_filter = (
+                CombatEncounter.party_id == scope_id
+                if party is not None
+                else CombatEncounter.solo_account_id == scope_id
+            )
+            encounter = db.scalar(
+                select(CombatEncounter).where(
+                    encounter_filter,
+                    CombatEncounter.location_id == location_id,
+                )
+            )
+            action_id = occurrence["action_id"]
+            is_attack = action_id in {"attack", "light_attack", "heavy_attack"}
+            if is_attack:
                 target_spawn_id, error_message = resolve_attack_target_id(
                     character,
                     occurrence,
@@ -2745,70 +2737,241 @@ def _submit_command_locked(
                 if error_message:
                     result["messages"].append(error_message)
                     continue
-                if target_spawn_id is not None:
-                    occurrence["target_spawn_id"] = target_spawn_id
-            valid_actions.append(
-                (occurrence_order.get(occurrence["occurrence_id"], 0), occurrence)
-            )
-
-        pending_count = db.scalar(
-            select(func.count()).select_from(CombatAction).where(
-                CombatAction.account_id == account.id,
-                CombatAction.status == "queued",
-            )
-        ) or 0
-        available_slots = max(0, 8 - pending_count)
-        accepted_actions = valid_actions[:available_slots]
-        if len(accepted_actions) < len(valid_actions):
-            result["messages"].append(
-                "You can have at most eight pending combat actions. Some actions were not queued."
-            )
-
-        if accepted_actions:
-            if encounter is None:
-                encounter = CombatEncounter(
-                    party_id=party.id if party is not None else None,
-                    solo_account_id=None if party is not None else account.id,
-                    location_id=character.area_id,
-                )
-                db.add(encounter)
-                db.flush()
-            linked_spawn_ids = set(
-                db.scalars(
-                    select(CombatEncounterEnemy.enemy_spawn_id).where(
-                        CombatEncounterEnemy.encounter_id == encounter.id
+                if target_spawn_id is None:
+                    continue
+                occurrence["target_spawn_id"] = target_spawn_id
+                if encounter is None:
+                    encounter = CombatEncounter(
+                        party_id=party.id if party is not None else None,
+                        solo_account_id=None if party is not None else account.id,
+                        location_id=location_id,
                     )
-                ).all()
-            )
-            for occurrence_index, occurrence in accepted_actions:
-                db.add(
-                    CombatAction(
-                        encounter_id=encounter.id,
-                        account_id=account.id,
-                        command_id=command.id,
-                        occurrence_index=occurrence_index,
-                        occurrence=occurrence,
-                        submitted_at=utc_now(),
-                    )
-                )
-                target_spawn_id = occurrence.get("target_spawn_id")
-                if target_spawn_id and target_spawn_id not in linked_spawn_ids:
+                    db.add(encounter)
+                    db.flush()
+                if db.get(
+                    CombatEncounterEnemy,
+                    (encounter.id, target_spawn_id),
+                ) is None:
                     db.add(
                         CombatEncounterEnemy(
                             encounter_id=encounter.id,
                             enemy_spawn_id=target_spawn_id,
                         )
                     )
-                    linked_spawn_ids.add(target_spawn_id)
-            result["messages"].append(
-                f"{len(accepted_actions)} combat action"
-                f"{'' if len(accepted_actions) == 1 else 's'} queued for the next round."
+                    db.flush()
+
+            if encounter is None:
+                outcome = resolve_command(
+                    body.text,
+                    character,
+                    available_players=nearby_players,
+                    enemy_spawns_by_location=spawns_by_location,
+                    selected_occurrence_ids={occurrence["occurrence_id"]},
+                )
+                result["messages"].extend(outcome["messages"])
+                result["dialogues"].extend(outcome.get("dialogues", []))
+                result["profile_account_ids"].extend(
+                    outcome.get("profile_account_ids", [])
+                )
+                result["observed_player_equipment"].update(
+                    outcome.get("observed_player_equipment", {})
+                )
+                if "inventory_view" in outcome:
+                    result["inventory_view"] = outcome["inventory_view"]
+                continue
+
+            action_row = CombatAction(
+                encounter_id=encounter.id,
+                account_id=account.id,
+                command_id=command.id,
+                occurrence_index=occurrence_order.get(
+                    occurrence["occurrence_id"],
+                    0,
+                ),
+                occurrence=occurrence,
+                status="resolved",
+                submitted_at=utc_now(),
             )
-            command.status = "queued"
-        else:
-            command.status = "completed"
+            db.add(action_row)
+            if is_attack:
+                outcome = resolve_combat_occurrence(
+                    character,
+                    occurrence,
+                    spawns_by_location,
+                    body.text,
+                )
+            else:
+                outcome = resolve_command(
+                    body.text,
+                    character,
+                    available_players=nearby_players,
+                    enemy_spawns_by_location=spawns_by_location,
+                    selected_occurrence_ids={occurrence["occurrence_id"]},
+                    combat_context=True,
+                )
+                outcome = {
+                    **outcome,
+                    "defeated_enemy_id": None,
+                }
+            action_row.result = outcome
+            result["messages"].extend(outcome["messages"])
+            result["dialogues"].extend(outcome.get("dialogues", []))
+            result["profile_account_ids"].extend(
+                outcome.get("profile_account_ids", [])
+            )
+            result["observed_player_equipment"].update(
+                outcome.get("observed_player_equipment", {})
+            )
+            if "inventory_view" in outcome:
+                result["inventory_view"] = outcome["inventory_view"]
+
+            defeated_enemy_id = outcome.get("defeated_enemy_id")
+            if defeated_enemy_id is not None:
+                enemy = entities.get(defeated_enemy_id)
+                if enemy is not None:
+                    fighters = _active_combat_fighters(
+                        db,
+                        encounter,
+                        live_hub.active_account_ids() | {account.id},
+                    )
+                    if character not in fighters:
+                        fighters.append(character)
+                    for fighter in fighters:
+                        rewards = award_enemy_defeat(
+                            fighter,
+                            defeated_enemy_id,
+                            content,
+                        )
+                        if fighter.account_id == account.id:
+                            result["messages"].extend(rewards)
+                        else:
+                            party_notifications[fighter.account_id].extend(
+                                [
+                                    f"{enemy['name']} is defeated.",
+                                    *rewards,
+                                ]
+                            )
+                    engagement = db.get(
+                        CombatEncounterEnemy,
+                        (encounter.id, occurrence["target_spawn_id"]),
+                    )
+                    if engagement is not None:
+                        db.delete(engagement)
+
+            if character.area_id != location_id:
+                remaining_online = live_hub.active_account_ids() - {account.id}
+                if not _active_combat_fighters(db, encounter, remaining_online):
+                    db.delete(encounter)
+                load_enemy_spawns(character.area_id)
+                continue
+
+            engagements = db.scalars(
+                select(CombatEncounterEnemy).where(
+                    CombatEncounterEnemy.encounter_id == encounter.id
+                )
+            ).all()
+            spawn_by_id = {
+                spawn["id"]: spawn
+                for spawn in spawns_by_location.get(location_id, [])
+            }
+            engaged_ids = {engagement.enemy_spawn_id for engagement in engagements}
+            for engagement in engagements:
+                spawn = spawn_by_id.get(engagement.enemy_spawn_id)
+                if spawn is None or not spawn["is_alive"]:
+                    db.delete(engagement)
+                    engaged_ids.discard(engagement.enemy_spawn_id)
+                    continue
+                enemy = entities.get(spawn["enemy_id"])
+                if enemy is None or enemy.get("behavior", "neutral") == "passive":
+                    continue
+                result["messages"].extend(
+                    enemy_strike(
+                        character,
+                        enemy,
+                        areas,
+                        consume_defending=False,
+                    )
+                )
+                if character.area_id != location_id:
+                    break
+            state = dict(character.combat_state or {})
+            state.pop("defending", None)
+            character.combat_state = state
+
+            remaining_online = live_hub.active_account_ids() | {account.id}
+            fighters = _active_combat_fighters(db, encounter, remaining_online)
+            additional_fighter_bonus = max(0, len(fighters) - 1) * 5
+            if character.area_id == location_id:
+                for spawn in spawns_by_location.get(location_id, []):
+                    if not spawn["is_alive"] or spawn["id"] in engaged_ids:
+                        continue
+                    enemy = entities.get(spawn["enemy_id"])
+                    if enemy is None:
+                        continue
+                    base_chance = {"neutral": 10, "aggressive": 20}.get(
+                        enemy.get("behavior", "neutral")
+                    )
+                    if base_chance is None:
+                        continue
+                    chance = min(60, base_chance + additional_fighter_bonus)
+                    if _enemy_spawn_rng.random() * 100 >= chance:
+                        continue
+                    db.add(
+                        CombatEncounterEnemy(
+                            encounter_id=encounter.id,
+                            enemy_spawn_id=spawn["id"],
+                        )
+                    )
+                    engaged_ids.add(spawn["id"])
+                    result["messages"].append(f"{enemy['name']} joins the fight.")
+
+            if party is not None:
+                if is_attack:
+                    target = entities.get(
+                        next(
+                            (
+                                spawn["enemy_id"]
+                                for spawn in spawns_by_location.get(location_id, [])
+                                if spawn["id"] == occurrence.get("target_spawn_id")
+                            ),
+                            "",
+                        )
+                    )
+                    activity = (
+                        f"{character.name} attacks {target['name']}."
+                        if target is not None
+                        else f"{character.name} acts in combat."
+                    )
+                else:
+                    activity = f"{character.name} takes a turn in combat."
+                for fighter in fighters:
+                    if fighter.account_id != account.id:
+                        party_notifications[fighter.account_id].append(activity)
+
+            if character.area_id != location_id:
+                remaining_online = live_hub.active_account_ids() - {account.id}
+                if not _active_combat_fighters(db, encounter, remaining_online):
+                    db.delete(encounter)
+            else:
+                active_engagement = db.scalar(
+                    select(CombatEncounterEnemy.enemy_spawn_id)
+                    .join(
+                        EnemySpawn,
+                        EnemySpawn.id == CombatEncounterEnemy.enemy_spawn_id,
+                    )
+                    .where(
+                        CombatEncounterEnemy.encounter_id == encounter.id,
+                        EnemySpawn.is_alive.is_(True),
+                    )
+                    .limit(1)
+                )
+                if active_engagement is None:
+                    db.delete(encounter)
+
+        load_enemy_spawns(character.area_id)
+        result["snapshot"] = snapshot(character, spawns_by_location)
         command.result = result
-        changed_locations = _persist_enemy_spawn_state(spawn_rows, spawns_by_location)
+        _persist_enemy_spawn_state(spawn_rows, spawns_by_location)
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -2827,7 +2990,6 @@ def _submit_command_locked(
             "status": prior.status,
             "result": prior.result,
         }
-    _emit_command_completions(cancellation_notifications)
     if command.status == "completed":
         _publish(
             db,
@@ -2840,12 +3002,19 @@ def _submit_command_locked(
             },
             {account.id},
         )
-    for location_id in changed_locations:
-        _publish_scoped_world_update(db, scope_type, scope_id, location_id, [])
+    for recipient_id, messages in party_notifications.items():
+        live_hub.publish(
+            recipient_id,
+            f"account:{recipient_id}",
+            {
+                "type": "world.updated",
+                "payload": {"id": str(uuid4()), "messages": messages},
+            },
+        )
     return {"request_id": command.request_id, "status": command.status, "result": command.result}
 
 
-@app.post("/api/v1/commands", status_code=202)
+@app.post("/api/v1/commands")
 def submit_command(
     body: CommandRequest,
     request: Request,

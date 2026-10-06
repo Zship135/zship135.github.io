@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 from time import monotonic, sleep
@@ -268,10 +267,9 @@ def test_commands_are_persisted_and_idempotent(client: TestClient) -> None:
         event = websocket.receive_json()
         retry = client.post("/api/v1/commands", json=body, headers=auth(registered["token"]))
 
-    assert first.status_code == retry.status_code == 202
+    assert first.status_code == retry.status_code == 200
     assert first.json() == retry.json()
     assert first.json()["status"] == "completed"
-    assert first.json()["result"]["snapshot"]["character"]["area_id"] == "goblin_town"
     assert event["type"] == "command.completed"
     assert event["payload"]["request_id"] == request_id
     status = client.get(f"/api/v1/commands/{request_id}", headers=auth(registered["token"]))
@@ -739,7 +737,7 @@ def test_equip_unequip_validate_ownership_slot_and_item_definition(client: TestC
             headers=headers,
             json={"request_id": request_id, "text": text},
         )
-        assert response.status_code == 202, response.text
+        assert response.status_code == 200, response.text
         return response.json()["result"]
 
     equipped = command("equip the iron sword in my left hand", "adf0f265-edca-449a-8ce5-100000000041")
@@ -833,12 +831,8 @@ def test_combat_uses_only_right_hand_and_enemy_attack_die(client: TestClient, mo
             headers=headers,
             json={"request_id": "adf0f265-edca-449a-8ce5-100000000022", "text": "Attack the forest rat"},
         )
-        assert attacked.json()["status"] == "queued"
-        api._run_combat_round_tick(api.utc_now() + timedelta(seconds=11))
-        attacked = client.get(
-            "/api/v1/commands/adf0f265-edca-449a-8ce5-100000000022",
-            headers=headers,
-        )
+        assert attacked.status_code == 200
+        assert attacked.json()["status"] == "completed"
 
     assert "equip Iron sword in your left hand" in left_equipped.json()["result"]["messages"][0]
     assert "equip Wooden club in your right hand" in equipped.json()["result"]["messages"][0]
@@ -857,7 +851,12 @@ def test_combat_uses_only_right_hand_and_enemy_attack_die(client: TestClient, mo
     assert enemy["attack_die_sides"] == 2
 
 
-def test_defend_reduces_the_next_enemy_strike(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_defend_reduces_the_immediate_enemy_response(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(tmp_path, monkeypatch, behavior="neutral", respawn_chance=0)
     registered = register(client, "guard@example.com", "Briar")
 
     class FixedRoll:
@@ -868,22 +867,25 @@ def test_defend_reduces_the_next_enemy_strike(client: TestClient, monkeypatch: p
     monkeypatch.setattr(game, "combat_rng", FixedRoll())
     with api.SessionLocal() as db:
         character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
-        character.area_id = "new_location_2"
-        character.combat_state = {"target_id": None, "enemy_health": {}, "defending": True}
+        character.area_id = "spawn_room"
+        character.combat_state = {"target_id": None, "enemy_health": {}}
         db.commit()
 
     with live_as(client, registered):
-        client.post(
+        first_attack = client.post(
             "/api/v1/commands",
             headers=auth(registered["token"]),
-            json={"request_id": "adf0f265-edca-449a-8ce5-100000000026", "text": "Attack the slug"},
+            json={"request_id": "adf0f265-edca-449a-8ce5-100000000026", "text": "Attack the test rat"},
         )
-        api._run_combat_round_tick(api.utc_now() + timedelta(seconds=11))
-        result = client.get(
-            "/api/v1/commands/adf0f265-edca-449a-8ce5-100000000026",
+        defended = client.post(
+            "/api/v1/commands",
             headers=auth(registered["token"]),
-        ).json()["result"]
-    assert any("hits you for 1 damage (99/100 health)" in message for message in result["messages"])
+            json={"request_id": "adf0f265-edca-449a-8ce5-100000000027", "text": "Defend"},
+        )
+    assert first_attack.status_code == 200
+    assert any("hits you for 1 damage (99/100 health)" in message for message in first_attack.json()["result"]["messages"])
+    assert defended.status_code == 200
+    assert any("hits you for 0 damage (99/100 health)" in message for message in defended.json()["result"]["messages"])
 
 
 def test_defeat_restores_player_and_enemy_at_species_start(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -908,18 +910,14 @@ def test_defeat_restores_player_and_enemy_at_species_start(client: TestClient, m
         db.commit()
 
     with live_as(client, registered):
-        client.post(
+        defeated = client.post(
             "/api/v1/commands",
             headers=auth(registered["token"]),
             json={"request_id": "adf0f265-edca-449a-8ce5-100000000022", "text": "Attack the forest rat"},
         )
-        api._run_combat_round_tick(api.utc_now() + timedelta(seconds=11))
-        result = client.get(
-            "/api/v1/commands/adf0f265-edca-449a-8ce5-100000000022",
-            headers=auth(registered["token"]),
-        ).json()["result"]
+        result = defeated.json()["result"]
     assert any("You are defeated" in message for message in result["messages"])
-    assert result["snapshot"]["character"]["area_id"] == "human_city"
+    assert result["snapshot"]["character"]["area_id"] == initial_area("human")
     assert result["snapshot"]["character"]["stats"]["health"] == 100
     with api.SessionLocal() as db:
         character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
@@ -1243,13 +1241,13 @@ def test_legacy_fetch_quest_runs_in_builder_and_unlocks_exit_per_character(clien
                 headers=headers,
                 json={"request_id": str(uuid4()), "text": "Travel west"},
             )
-            assert town.status_code == 202
+            assert town.status_code == 200
         path = client.post(
             "/api/v1/commands",
             headers=headers,
             json={"request_id": str(uuid4()), "text": "Travel west"},
         )
-        assert path.status_code == 202
+        assert path.status_code == 200
         assert path.json()["result"]["snapshot"]["area"]["id"] == "new_location_2"
 
     player_world = client.get("/api/v1/world/snapshot", headers=player_headers).json()
@@ -1478,22 +1476,16 @@ def test_slug_defeat_awards_configured_experience_and_loot(
 
     result = None
     with live_as(client, player):
-        for index in range(8):
+        for _ in range(8):
             request_id = str(uuid4())
             response = client.post(
                 "/api/v1/commands",
                 headers=auth(player["token"]),
                 json={"request_id": request_id, "text": "Attack the slug"},
             )
-            assert response.status_code == 202, response.text
-            if response.json()["status"] == "queued":
-                api._run_combat_round_tick(
-                    api.utc_now() + timedelta(seconds=11 * (index + 1))
-                )
-            result = client.get(
-                f"/api/v1/commands/{request_id}",
-                headers=auth(player["token"]),
-            ).json()["result"]
+            assert response.status_code == 200, response.text
+            assert response.json()["status"] == "completed"
+            result = response.json()["result"]
             if any("Slug is defeated." in message for message in result["messages"]):
                 break
 
@@ -1663,7 +1655,8 @@ def test_enemy_health_is_scoped_per_solo_character(
         headers=first_headers,
         json={"request_id": str(uuid4()), "text": "Attack the test rat"},
     )
-    assert attacked.status_code == 202
+    assert attacked.status_code == 200
+    assert attacked.json()["status"] == "completed"
 
     second_snapshot = client.get(
         "/api/v1/world/snapshot",
@@ -1730,8 +1723,8 @@ def test_party_members_share_encounter_enemy_population(
             headers=leader_headers,
             json={"request_id": str(uuid4()), "text": "Attack the test rat"},
         )
-        assert command.json()["status"] == "queued"
-        api._run_combat_round_tick(api.utc_now() + timedelta(seconds=11))
+        assert command.status_code == 200
+        assert command.json()["status"] == "completed"
         leader_after = client.get(
             "/api/v1/world/snapshot",
             headers=leader_headers,
@@ -1748,10 +1741,10 @@ def test_party_members_share_encounter_enemy_population(
         assert member_after["area"]["enemies"][0]["health"] == 9
         assert solo_after["area"]["enemies"][0]["health"] == 12
         assert leader_after["character"]["stats"]["health"] == 99
-        assert member_after["character"]["stats"]["health"] == 99
+        assert member_after["character"]["stats"]["health"] == 100
 
 
-def test_combat_sentences_resolve_one_occurrence_per_round_and_cap_pending_actions(
+def test_combat_sentence_resolves_each_action_immediately(
     client: TestClient,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -1773,75 +1766,32 @@ def test_combat_sentences_resolve_one_occurrence_per_round_and_cap_pending_actio
                 ),
             },
         )
-        assert submitted.status_code == 202
-        assert submitted.json()["status"] == "queued"
-        assert "3 combat actions queued" in submitted.json()["result"]["messages"][-1]
-
-        base_time = api.utc_now()
-        for round_number, expected_health in enumerate((9, 6, 3), start=1):
-            api._run_combat_round_tick(
-                base_time + timedelta(seconds=11 * round_number)
-            )
-            with api.SessionLocal() as db:
-                command = db.scalar(
-                    select(Command).where(Command.request_id == request_id)
-                )
-                assert command is not None
-                assert command.status == (
-                    "completed" if round_number == 3 else "queued"
-                )
-                spawn = db.scalar(
-                    select(EnemySpawn).where(
-                        EnemySpawn.scope_type == "solo",
-                        EnemySpawn.scope_id == player["account_id"],
-                        EnemySpawn.location_id == "spawn_room",
-                        EnemySpawn.is_alive.is_(True),
-                    )
-                )
-                assert spawn is not None
-                assert spawn.health == expected_health
-                actions = db.scalars(
-                    select(CombatAction).where(
-                        CombatAction.command_id == command.id
-                    )
-                ).all()
-                assert sum(action.status == "resolved" for action in actions) == round_number
-                assert sum(action.status == "queued" for action in actions) == 3 - round_number
-
-        request_ids = []
-        for _ in range(9):
-            pending_id = str(uuid4())
-            request_ids.append(pending_id)
-            response = client.post(
-                "/api/v1/commands",
-                headers=headers,
-                json={"request_id": pending_id, "text": "Attack the test rat"},
-            )
-            assert response.status_code == 202
-
-        assert client.get(
-            f"/api/v1/commands/{request_ids[-1]}",
-            headers=headers,
-        ).json()["status"] == "completed"
+        assert submitted.status_code == 200
+        assert submitted.json()["status"] == "completed"
+        messages = submitted.json()["result"]["messages"]
+        assert not any("queued" in message.casefold() for message in messages)
+        assert sum("You strike Test rat" in message for message in messages) == 3
+        assert submitted.json()["result"]["snapshot"]["area"]["enemies"][0]["health"] == 3
         with api.SessionLocal() as db:
-            queued = db.scalars(
-                select(CombatAction).where(
+            command = db.scalar(
+                select(Command).where(Command.request_id == request_id)
+            )
+            assert command is not None
+            assert command.status == "completed"
+            actions = db.scalars(
+                select(CombatAction).where(CombatAction.command_id == command.id)
+            ).all()
+            assert len(actions) == 3
+            assert all(action.status == "resolved" for action in actions)
+            assert db.scalar(
+                select(CombatAction.id).where(
                     CombatAction.account_id == player["account_id"],
                     CombatAction.status == "queued",
                 )
-            ).all()
-            assert len(queued) == 8
-            last_command = db.scalar(
-                select(Command).where(Command.request_id == request_ids[-1])
-            )
-            assert last_command is not None
-            assert any(
-                "at most eight pending combat actions" in message
-                for message in last_command.result["messages"]
-            )
+            ) is None
 
 
-def test_party_reinforcement_bonus_and_idle_enemy_rounds(
+def test_party_reinforcement_rolls_and_only_the_actor_takes_enemy_response(
     client: TestClient,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -1896,19 +1846,13 @@ def test_party_reinforcement_bonus_and_idle_enemy_rounds(
     monkeypatch.setattr(api, "_enemy_spawn_rng", ReinforcementRoll())
     monkeypatch.setattr(game, "combat_rng", MinimumCombatRoll())
     with live_as(client, leader), live_as(client, member):
-        request_id = str(uuid4())
         submitted = client.post(
             "/api/v1/commands",
             headers=leader_headers,
-            json={"request_id": request_id, "text": "Attack the test rat"},
+            json={"request_id": str(uuid4()), "text": "Attack the test rat"},
         )
-        assert submitted.json()["status"] == "queued"
-        start = api.utc_now()
-        api._run_combat_round_tick(start + timedelta(seconds=11))
-        first_round = client.get(
-            f"/api/v1/commands/{request_id}",
-            headers=leader_headers,
-        ).json()["result"]
+        assert submitted.status_code == 200
+        first_round = submitted.json()["result"]
         assert any("joins the fight" in message for message in first_round["messages"])
         with api.SessionLocal() as db:
             leader_character = db.scalar(
@@ -1918,9 +1862,14 @@ def test_party_reinforcement_bonus_and_idle_enemy_rounds(
                 select(Character).where(Character.account_id == member["account_id"])
             )
             assert leader_character.combat_stats["health"] == 99
-            assert member_character.combat_stats["health"] == 99
+            assert member_character.combat_stats["health"] == 100
 
-        api._run_combat_round_tick(start + timedelta(seconds=22))
+        member_turn = client.post(
+            "/api/v1/commands",
+            headers=member_headers,
+            json={"request_id": str(uuid4()), "text": "Attack the test rat"},
+        )
+        assert member_turn.status_code == 200
         with api.SessionLocal() as db:
             leader_character = db.scalar(
                 select(Character).where(Character.account_id == leader["account_id"])
@@ -1928,8 +1877,8 @@ def test_party_reinforcement_bonus_and_idle_enemy_rounds(
             member_character = db.scalar(
                 select(Character).where(Character.account_id == member["account_id"])
             )
-            assert leader_character.combat_stats["health"] == 97
-            assert member_character.combat_stats["health"] == 97
+            assert leader_character.combat_stats["health"] == 99
+            assert member_character.combat_stats["health"] == 98
 
 
 def test_travel_inside_combat_uses_a_turn_and_ends_solo_encounter(
@@ -1973,20 +1922,10 @@ def test_travel_inside_combat_uses_a_turn_and_ends_solo_encounter(
             headers=headers,
             json={"request_id": travel_id, "text": "Travel east"},
         )
-        assert attack.json()["status"] == "queued"
-        assert travel.json()["status"] == "queued"
-
-        start = api.utc_now()
-        api._run_combat_round_tick(start + timedelta(seconds=11))
-        assert client.get(
-            f"/api/v1/commands/{travel_id}",
-            headers=headers,
-        ).json()["status"] == "queued"
-        api._run_combat_round_tick(start + timedelta(seconds=22))
-        finished = client.get(
-            f"/api/v1/commands/{travel_id}",
-            headers=headers,
-        ).json()
+        assert attack.status_code == 200
+        assert travel.status_code == 200
+        assert attack.json()["status"] == "completed"
+        finished = travel.json()
         assert finished["status"] == "completed"
         assert finished["result"]["snapshot"]["character"]["area_id"] == "other_room"
         assert any("You travel east to Other room." in message for message in finished["result"]["messages"])
@@ -1994,7 +1933,52 @@ def test_travel_inside_combat_uses_a_turn_and_ends_solo_encounter(
             assert db.scalar(select(CombatEncounter.id)) is None
 
 
-def test_solo_disconnect_cancels_queued_actions_and_encounter(
+def test_action_after_travel_uses_destination_enemy_state(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _write_enemy_world(tmp_path, monkeypatch, behavior="passive", respawn_chance=0)
+    world_data = world.model_dump(mode="json")
+    world_data["locations"][0]["exits"] = {"east": "other_room"}
+    world_data["locations"].append(
+        {
+            **world_data["locations"][0],
+            "id": "other_room",
+            "name": "Other room",
+            "position": {"x": 55, "y": 50},
+            "starting_species": [],
+            "exits": {},
+            "exit_requirements": {},
+        }
+    )
+    updated_world = content_store.WorldContent.model_validate(world_data)
+    content_store.WORLD_CONTENT_PATH.write_text(
+        updated_world.model_dump_json(),
+        encoding="utf-8",
+    )
+    player = register(client, "travel-attack@example.com", "Traveler")
+
+    with live_as(client, player):
+        submitted = client.post(
+            "/api/v1/commands",
+            headers=auth(player["token"]),
+            json={
+                "request_id": str(uuid4()),
+                "text": "Travel east and attack the test rat",
+            },
+        )
+
+    assert submitted.status_code == 200
+    assert submitted.json()["status"] == "completed"
+    result = submitted.json()["result"]
+    assert "You travel east to Other room." in result["messages"]
+    assert any("You strike Test rat" in message for message in result["messages"])
+    assert result["snapshot"]["character"]["area_id"] == "other_room"
+    assert result["snapshot"]["area"]["enemies"][0]["health"] == 9
+
+
+def test_solo_disconnect_does_not_delay_or_rewrite_completed_actions(
     client: TestClient,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -2013,26 +1997,40 @@ def test_solo_disconnect_cancels_queued_actions_and_encounter(
                 "text": "Attack the test rat and attack the test rat",
             },
         )
-        assert submitted.json()["status"] == "queued"
+        assert submitted.status_code == 200
+        assert submitted.json()["status"] == "completed"
 
     command_url = f"/api/v1/commands/{request_id}"
-    deadline = monotonic() + 2
     completed = client.get(command_url, headers=headers).json()
-    while completed["status"] == "queued" and monotonic() < deadline:
-        sleep(0.01)
-        completed = client.get(command_url, headers=headers).json()
     assert completed["status"] == "completed"
-    assert any("cancelled when you disconnected" in message for message in completed["result"]["messages"])
+    assert not any("cancelled" in message.casefold() for message in completed["result"]["messages"])
+    assert completed["result"]["snapshot"]["area"]["enemies"][0]["health"] == 6
+    deadline = monotonic() + 2
     with api.SessionLocal() as db:
-        assert db.scalar(select(CombatAction.id).join(Command).where(Command.request_id == request_id)) is None
-        assert db.scalar(
+        encounter_id = db.scalar(
             select(CombatEncounter.id).where(
                 CombatEncounter.solo_account_id == player["account_id"]
+            )
+        )
+    while encounter_id is not None and monotonic() < deadline:
+        sleep(0.01)
+        with api.SessionLocal() as db:
+            encounter_id = db.scalar(
+                select(CombatEncounter.id).where(
+                    CombatEncounter.solo_account_id == player["account_id"]
+                )
+            )
+    assert encounter_id is None
+    with api.SessionLocal() as db:
+        assert db.scalar(
+            select(CombatAction.id).where(
+                CombatAction.account_id == player["account_id"],
+                CombatAction.status == "queued",
             )
         ) is None
 
 
-def test_party_removal_and_disband_cancel_queued_actions(
+def test_party_removal_and_disband_preserve_completed_actions(
     client: TestClient,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -2067,7 +2065,8 @@ def test_party_removal_and_disband_cancel_queued_actions(
                 "text": "Attack the test rat",
             },
         )
-        assert submitted.json()["status"] == "queued"
+        assert submitted.status_code == 200
+        assert submitted.json()["status"] == "completed"
         removed = client.delete(
             f"/api/v1/party/members/{member['account_id']}",
             headers=leader_headers,
@@ -2079,10 +2078,7 @@ def test_party_removal_and_disband_cancel_queued_actions(
         headers=member_headers,
     ).json()
     assert member_command["status"] == "completed"
-    assert any(
-        "cancelled because you were removed from the party" in message
-        for message in member_command["result"]["messages"]
-    )
+    assert not any("cancelled" in message.casefold() for message in member_command["result"]["messages"])
 
     leader_request_id = str(uuid4())
     with live_as(client, leader):
@@ -2094,7 +2090,8 @@ def test_party_removal_and_disband_cancel_queued_actions(
                 "text": "Attack the test rat",
             },
         )
-        assert submitted.json()["status"] == "queued"
+        assert submitted.status_code == 200
+        assert submitted.json()["status"] == "completed"
         disbanded = client.delete("/api/v1/party", headers=leader_headers)
         assert disbanded.status_code == 200
 
@@ -2103,10 +2100,7 @@ def test_party_removal_and_disband_cancel_queued_actions(
         headers=leader_headers,
     ).json()
     assert leader_command["status"] == "completed"
-    assert any(
-        "party was disbanded before your queued action" in message
-        for message in leader_command["result"]["messages"]
-    )
+    assert not any("queued" in message.casefold() for message in leader_command["result"]["messages"])
     with api.SessionLocal() as db:
         assert db.scalar(select(CombatEncounter.id)) is None
 
@@ -2144,13 +2138,10 @@ def test_enemy_behavior_controls_retaliation(
             "/api/v1/commands",
             headers=auth(player["token"]),
             json={"request_id": "adf0f265-edca-449a-8ce5-100000000123", "text": "Attack the test rat"},
-        ).json()
-        assert submitted["status"] == "queued"
-        api._run_combat_round_tick(api.utc_now() + timedelta(seconds=11))
-        result = client.get(
-            "/api/v1/commands/adf0f265-edca-449a-8ce5-100000000123",
-            headers=auth(player["token"]),
-        ).json()["result"]
+        )
+        assert submitted.status_code == 200
+        assert submitted.json()["status"] == "completed"
+        result = submitted.json()["result"]
 
     assert any(expected_message in message for message in result["messages"])
     assert result["snapshot"]["character"]["stats"]["health"] == expected_health

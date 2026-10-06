@@ -59,19 +59,19 @@ The engine should execute its best interpretation without routinely stopping to 
 
 ### Action-chain behavior
 
-Actions in a chain execute sequentially, not as one indivisible batch. The game re-evaluates the world when each queued action reaches execution. Repeated mentions are distinct action occurrences; selected occurrences retain their sentence order. For example, if a player queues an attack and then travel, combat responses may occur between those actions, and the later travel action resolves against the state at that time.
+Actions in a chain execute sequentially, not as one indivisible batch. The game re-evaluates the world after each selected action. Repeated mentions are distinct action occurrences; selected occurrences retain their sentence order. Combat responses happen between combat actions in the same sentence, and later actions resolve against the state at that time.
 
 The MVP supports English Boolean operator words and phrases, including `not`, `and`, `or`, `xor`, `nand`, `nor`, `xnor`, implication, converse/“only if,” and equivalence/“if and only if”; symbolic forms are deferred. Each action occurrence is a Boolean variable. The server uniformly selects one satisfying assignment when the expression reaches execution, including an empty action set when valid. Selected actions then run sequentially in sentence order. The exact formal semantics and failed-action behavior are defined in the linked implementation document.
 
 ### Parser boundary
 
-“The player can type anything” describes the input experience; it must not mean that arbitrary text can bypass game rules. RPGNLP may identify the closest intended action, but the game server must still determine whether the target exists, the player has the required item or tool, the action is possible in that location, and the character can afford its costs. A failed selected action is not rerolled: the server explains the failure, skips it without stamina or combat-action cost, and continues the queue. A target that could refer to multiple present entities requires the player to choose; no action is executed until resolved.
+“The player can type anything” describes the input experience; it must not mean that arbitrary text can bypass game rules. RPGNLP may identify the closest intended action, but the game server must still determine whether the target exists, the player has the required item or tool, the action is possible in that location, and the character can afford its costs. A failed selected action is not rerolled: the server explains the failure and continues with the next selected action. A target that could refer to multiple present entities requires the player to choose; no action is executed until resolved.
 
 ## 4. World, characters, and social structure
 
 ### Areas and travel
 
-The world is a graph of discrete, named areas connected by exits, not a grid of tiles. Travel moves a character between areas. A player can attempt to leave an area during combat, but travel is itself added to the relevant action queue and resolves when its turn arrives.
+The world is a graph of discrete, named areas connected by exits, not a grid of tiles. Travel moves a character between areas. A player can leave during combat; travel resolves in sentence order, and leaving the encounter area prevents that action's enemy response.
 
 ### Initial playable identities
 
@@ -102,9 +102,9 @@ The world has hidden global variables, including relations between peoples and e
 
 There is no central narrative. Dynamic events and authored events can both give players reasons to act. The simulation should continue while no players are online, although its clock, tick frequency, and offline update rules still need to be designed. Advanced economy and simulation work can follow the interaction-focused initial release.
 
-## 5. Combat, queues, and parties
+## 5. Combat and parties
 
-The live combat implementation uses the timed queues and party rules below.
+The live combat implementation uses immediate action-response combat and the party rules below.
 
 ### Party formation and lifetime
 
@@ -114,22 +114,21 @@ The live combat implementation uses the timed queues and party rules below.
 - The party and its outstanding invitations remain available while at least one member is online. They are removed when every member is offline; a party is not restored after a server restart.
 - Party members share a real-time party-chat channel. The server checks membership when reading history, sending messages, and subscribing to live updates.
 
-### Timed combat queues
+### Immediate combat
 
-- Solo fighters use a personal queue. A party has a separate combat queue for each area in which its members are fighting. Players outside that party are not pulled into its encounter.
+- Solo fighters have a personal encounter. A party has a separate encounter for each area in which its members are fighting. Players outside that party are not pulled into its encounter.
 - Enemy populations are encounter-scoped rather than global: each solo character has its own living enemy instances and health, while members of one party share that party's instances and health. One solo player or party defeating an enemy does not remove it for another solo player or party. Each context has its own location population cap. A character's solo enemy state is preserved while they are in a party and resumes when they leave it; solo respawn rolls pause while that character is offline. Party enemy state is discarded when the party ends.
-- A fight begins when a fighter queues an attack. The opening attack resolves at the end of the first round, up to 10 seconds later. Each round lasts 10 seconds and has two phases: queued player actions first, then enemy actions. The round timer is server-side; the interface does not show a countdown.
-- Each fighter may resolve at most one queued action per round. If a submitted sentence selects multiple action occurrences, those occurrences stay in sentence order and consume one turn each across successive rounds. Actions from different fighters resolve in submission order, subject to the one-action-per-fighter limit.
-- A round's enemy phase still runs when no fighter submitted an action. Fighters must queue defend, attack, or travel rather than relying on combat to pause. Chat and UI navigation are not combat actions.
-- All online party members already in the area automatically participate in the party fight; a member who enters during combat joins at the next round. A queued travel action is resolved as that fighter's turn. A member who leaves the fight loses their pending combat actions and is excluded from later enemy attacks in that phase. Other characters in the area remain outside the party fight.
-- Combat participation requires a live connection and presence in the fight's area. A disconnect removes that fighter and cancels their pending actions; they take no offline combat damage or rewards. A returning party member in the area rejoins at the next round. The solo encounter also ends if its only fighter disconnects.
-- The encounter ends when its engaged enemies are defeated or no fighters remain in that area. If a party splits across areas, each area resolves its own queue.
+- A fight begins when an attack is submitted; it resolves immediately, and the command response includes the result. New commands complete synchronously rather than entering a combat queue or waiting for a timer.
+- Selected action occurrences resolve in sentence order, with each action and its enemy response forming a separate exchange. One sentence can select up to eight actions; each is revalidated against the state produced by the previous action.
+- All online party members in the area are eligible to participate in the party encounter; a member who enters during combat can act on their next command. Only the member whose action is resolving receives the enemy response. A member who leaves the fight no longer participates there. Other characters in the area remain outside the party fight.
+- Combat rewards and party participation require a live connection and presence in the fight's area. A disconnected member takes no offline combat damage or rewards. The solo encounter ends if its only fighter disconnects.
+- The encounter ends when its engaged enemies are defeated or no connected party fighters remain in that area. If a party splits across areas, each area has an independent encounter.
 
 ### Enemy turns and reinforcements
 
-- After the queued player actions, each living, engaged non-passive enemy attacks every active fighter in its encounter. Each enemy rolls separately against each fighter; that fighter's defense reduces their own hit. A defend action halves every hit received during that enemy phase.
-- Passive enemies never attack or join a fight. Neutral enemies retaliate when attacked and may join an already-active fight. Aggressive enemies attack every round while engaged; outside combat, the existing 30-second aggressive-enemy behavior remains in effect.
-- At each round boundary, every living, unengaged neutral or aggressive enemy assigned to the same area makes an independent join roll. Its chance is 10% for neutral or 20% for aggressive, plus 5 percentage points for each active fighter after the first, capped at 60%. A bystander retries each round until it joins or the encounter ends. A successful join is announced immediately, but that enemy first attacks in the following round. Location spawn limits still cap the total living population. Helpful NPC combatants are deferred until their combat stats and behavior are separately designed.
+- Immediately after each combat action, every living, engaged non-passive enemy attacks only the member who just acted. Each enemy rolls separately; that character's defense reduces each hit. Defend halves every hit in its immediate response.
+- Passive enemies never attack or join a fight. Neutral enemies retaliate when attacked and may join an active fight. Aggressive enemies attack the acting member during combat; outside combat, the existing 30-second aggressive-enemy behavior remains in effect.
+- After each action exchange, every living, unengaged neutral or aggressive enemy assigned to the same area makes an independent join roll. Its chance is 10% for neutral or 20% for aggressive, plus 5 percentage points for each other active fighter, capped at 60%. A bystander retries after later action exchanges until it joins or the encounter ends. A successful join is announced immediately, but that enemy first attacks after the next combat action. Location spawn limits still cap the total living population. Helpful NPC combatants are deferred until their combat stats and behavior are separately designed.
 
 ### Rewards and scope
 
@@ -186,7 +185,7 @@ The first major release should prioritize what players directly interact with an
 - A guided introduction with the wise old NPC.
 - Optional multi-step NPC quests with collect, kill, talk, and visit objectives, explicit branching choices, per-character progress, item/experience rewards, and quest-gated exits.
 - A useful, tested set of canonical natural-language actions and sequential action chains.
-- NPC and enemy interaction, including basic queued combat and travel between areas.
+- NPC and enemy interaction, including immediate combat responses and travel between areas.
 - Global chat, party chat, profile-initiated private chats, and player blocking.
 - Basic resource gathering, crafting, direct trading, and marketplace access consistent with the rules above.
 - A responsive text-only browser UI with real-time updates.
@@ -215,7 +214,7 @@ Build the text-first desktop layout and its stacked mobile counterpart. Connect 
 
 ### Stage 5 — Complete the shared interaction MVP
 
-Add the combat queue and party behavior, gathering timers, initial crafting, chat tabs and blocking, direct trade, and the marketplace. Exercise concurrent players and queue changes, especially joining/leaving combat and completing a transaction when the seller is offline.
+Add immediate combat and party behavior, gathering timers, initial crafting, chat tabs and blocking, direct trade, and the marketplace. Exercise concurrent players and party membership changes in combat, as well as completing a transaction when the seller is offline.
 
 ### Stage 6 — Operate the shared world safely
 
@@ -235,10 +234,10 @@ The suite should cover:
 - Correct extraction of action, subject, target, object, and relevant modifiers.
 - Ordered action chains; truth-table coverage for every supported Boolean operator; valid, empty, and unsatisfiable action selections.
 - Exact-tie clarification, target disambiguation, server-side random selection, and replay without rerolling.
-- Context changes between queued actions, such as a target moving or a player leaving an area.
+- Context changes between actions in a selected sentence, such as a target moving or a player leaving an area.
 - Required tools, inventory, reachability, species/faction restrictions, and unavailable targets.
 - Best-interpretation behavior for ambiguous or unfamiliar sentences, including its in-world response.
-- Combat retaliation, passive enemies, enemy/NPC joins, spawn caps, player separation, and party queue membership changes.
+- Immediate combat retaliation, passive enemies, enemy/NPC joins, spawn caps, player separation, and party membership changes.
 - Gathering completion, cancellation, and prevention of conflicting actions during its timed state.
 - Trading and marketplace transfers, including offline sellers, barter, and two players attempting conflicting purchases.
 - Persistence across logout, server restart, and reconnect.
@@ -250,7 +249,7 @@ For parser tests, assert both the structured interpretation and the resulting ga
 
 These were deliberately left for focused design and implementation work:
 
-1. How should character speed, stamina, and other combat stats affect action budgets and initiative beyond the initial 10-second, one-action-per-round rule? How should queued actions be reconciled across latency and reconnects?
+1. How should character speed, stamina, and other combat stats affect action budgets and initiative in immediate combat? If future actions become asynchronous, how should they be reconciled across latency and reconnects?
 2. What combat behaviors and weighted join rules should helpful NPCs use if they later participate in fights?
 3. Which skills, character backgrounds, appearance options, and religions are available at launch, and how do they affect mechanics?
 4. What resource respawn rules, NPC stock/prices, and shop inventories should populate the MVP world?

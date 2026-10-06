@@ -75,6 +75,14 @@ class FriendRequestUpdate(BaseModel):
     status: Literal["accepted", "rejected"]
 
 
+class PartyInviteCreate(BaseModel):
+    recipient_account_id: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
+
+
+class PartyInviteUpdate(BaseModel):
+    status: Literal["accepted", "declined"]
+
+
 class SessionResponse(BaseModel):
     token: str
     expires_at: str

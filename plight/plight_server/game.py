@@ -870,7 +870,7 @@ def resolve_combat_occurrence(
         state["defending"] = True
         character.combat_state = state
         return {
-            "messages": ["You take a guarded stance; damage from the enemy phase is halved."],
+            "messages": ["You take a guarded stance; damage from the immediate enemy response is halved."],
             "defeated_enemy_id": None,
         }
     if action_id == "wait":
