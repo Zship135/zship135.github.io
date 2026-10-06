@@ -145,7 +145,7 @@ function TextAreaField({ label, value, onChange, rows = 4 }) {
   );
 }
 
-function AudioAssetField({ label, assetId, token, onChange }) {
+function AudioAssetField({ label, assetId, token, onChange, onUploadStateChange, onUploaded, disabled }) {
   const [previewUrl, setPreviewUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -183,6 +183,7 @@ function AudioAssetField({ label, assetId, token, onChange }) {
       return;
     }
     setBusy(true);
+    onUploadStateChange(true);
     try {
       const uploaded = await api("/api/v1/content/audio", {
         token,
@@ -191,10 +192,12 @@ function AudioAssetField({ label, assetId, token, onChange }) {
         headers: { "Content-Type": "audio/mpeg" },
       });
       onChange(uploaded.asset_id);
+      onUploaded();
     } catch (requestError) {
       setError(requestError.message);
     } finally {
       setBusy(false);
+      onUploadStateChange(false);
     }
   }
 
@@ -209,7 +212,7 @@ function AudioAssetField({ label, assetId, token, onChange }) {
           {busy ? "Uploading…" : "Upload MP3"}
           <input
             accept=".mp3,audio/mpeg"
-            disabled={busy}
+            disabled={disabled || busy}
             onChange={(event) => {
               void upload(event.target.files?.[0]);
               event.target.value = "";
@@ -217,7 +220,7 @@ function AudioAssetField({ label, assetId, token, onChange }) {
             type="file"
           />
         </label>
-        {assetId && <button className="text-button" disabled={busy} onClick={() => onChange(null)} type="button">Clear assignment</button>}
+        {assetId && <button className="text-button" disabled={disabled || busy} onClick={() => onChange(null)} type="button">Clear assignment</button>}
       </div>
       <span className="studio-hint">MP3 audio, up to 25 MiB. Uploaded files are kept on the game server.</span>
       {error && <span className="studio-audio-error" role="alert">{error}</span>}
@@ -354,6 +357,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   const [tab, setTab] = useState("map");
   const [selectedId, setSelectedId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingAudioUploads, setPendingAudioUploads] = useState(0);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [linkForm, setLinkForm] = useState({ from: "", to: "", direction: "east" });
@@ -419,6 +423,10 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
       return next;
     });
     setNotice("");
+  }
+
+  function updateAudioUploadCount(uploading) {
+    setPendingAudioUploads((count) => Math.max(0, count + (uploading ? 1 : -1)));
   }
 
   function changeTab(nextTab) {
@@ -624,6 +632,10 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   }
 
   async function saveContent() {
+    if (pendingAudioUploads > 0) {
+      setError("Wait for the MP3 upload to finish before saving the world.");
+      return;
+    }
     const ambienceEntries = [
       ...content.locations.flatMap((location) => location.ambience || []),
       ...content.entities
@@ -703,8 +715,10 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
           <p>Edit your world in one place. Saving updates the active game data immediately.</p>
         </div>
         <div className="studio-actions">
-          <button className="studio-secondary-button" disabled={busy} onClick={loadContent} type="button">Reload</button>
-          <button className="primary-button" disabled={busy || !content} onClick={saveContent} type="button">{busy ? "Saving…" : "Save to active world"}</button>
+          <button className="studio-secondary-button" disabled={busy || pendingAudioUploads > 0} onClick={loadContent} type="button">Reload</button>
+          <button className="primary-button" disabled={busy || !content || pendingAudioUploads > 0} onClick={saveContent} type="button">
+            {busy ? "Saving…" : pendingAudioUploads > 0 ? "Wait for MP3 upload…" : "Save to active world"}
+          </button>
         </div>
       </div>
       {(error || notice) && (
@@ -778,6 +792,9 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       locations={content.locations}
                       quests={quests}
                       token={token}
+                      onAudioUploaded={() => setNotice("MP3 uploaded. Save to active world to keep this assignment.")}
+                      onUploadStateChange={updateAudioUploadCount}
+                      audioDisabled={busy}
                       onChange={updateLocation}
                     />
                   )}
@@ -786,6 +803,9 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       action={currentActionSound}
                       assetId={content.action_sounds?.[currentActionSound.id] || null}
                       token={token}
+                      onAudioUploaded={() => setNotice("MP3 uploaded. Save to active world to keep this assignment.")}
+                      onUploadStateChange={updateAudioUploadCount}
+                      audioDisabled={busy}
                       onChange={(assetId) => updateContent((next) => {
                         next.action_sounds ||= {};
                         if (assetId) next.action_sounds[currentActionSound.id] = assetId;
@@ -851,7 +871,17 @@ function visibleCount(content, tab) {
   return content.entities.filter((entity) => entity.type === type).length;
 }
 
-function LocationEditor({ location, entitiesById, locations, quests, token, onChange }) {
+function LocationEditor({
+  location,
+  entitiesById,
+  locations,
+  quests,
+  token,
+  onChange,
+  onUploadStateChange,
+  onAudioUploaded,
+  audioDisabled,
+}) {
   function change(field, value) {
     onChange((current, nextValue) => { current[field] = nextValue; }, value);
   }
@@ -886,6 +916,9 @@ function LocationEditor({ location, entitiesById, locations, quests, token, onCh
           label="Background music"
           token={token}
           onChange={(assetId) => change("music_asset_id", assetId)}
+          onUploadStateChange={onUploadStateChange}
+          onUploaded={onAudioUploaded}
+          disabled={audioDisabled}
         />
       </section>
       <TextBlockList
@@ -972,7 +1005,15 @@ function LocationEditor({ location, entitiesById, locations, quests, token, onCh
   );
 }
 
-function ActionSoundEditor({ action, assetId, token, onChange }) {
+function ActionSoundEditor({
+  action,
+  assetId,
+  token,
+  onChange,
+  onUploadStateChange,
+  onAudioUploaded,
+  audioDisabled,
+}) {
   return (
     <div className="studio-form">
       <div className="studio-detail-heading">
@@ -987,6 +1028,9 @@ function ActionSoundEditor({ action, assetId, token, onChange }) {
           label={`${action.name} sound`}
           token={token}
           onChange={onChange}
+          onUploadStateChange={onUploadStateChange}
+          onUploaded={onAudioUploaded}
+          disabled={audioDisabled}
         />
       </section>
     </div>
