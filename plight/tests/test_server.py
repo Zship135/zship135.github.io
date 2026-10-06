@@ -127,6 +127,13 @@ def auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def test_production_ui_origin_keeps_local_ui_origins() -> None:
+    production_origin = "https://game.example"
+    assert api._allowed_ui_origins(production_origin) == api.LOCAL_ORIGINS | {
+        production_origin
+    }
+
+
 def test_cors_allows_ngrok_browser_warning_bypass_header(client: TestClient) -> None:
     response = client.options(
         "/api/v1/auth/login",
@@ -139,6 +146,7 @@ def test_cors_allows_ngrok_browser_warning_bypass_header(client: TestClient) -> 
         },
     )
     assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
     allowed_headers = response.headers["access-control-allow-headers"].lower()
     assert "ngrok-skip-browser-warning" in allowed_headers
 

@@ -76,12 +76,24 @@ if ($apiListeners -or $ngrokListeners) {
         } `
         -UseBasicParsing `
         -TimeoutSec 5
+    $localPreflight = Invoke-WebRequest `
+        -Uri "http://127.0.0.1:8000/api/v1/content/permission" `
+        -Method Options `
+        -Headers @{
+            Origin = "http://localhost:5173"
+            "Access-Control-Request-Method" = "GET"
+            "Access-Control-Request-Headers" = "authorization,ngrok-skip-browser-warning"
+        } `
+        -UseBasicParsing `
+        -TimeoutSec 5
     $tunnels = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -TimeoutSec 5
     $tunnel = $tunnels.tunnels | Where-Object { $_.proto -eq "https" -and $_.public_url -eq $publicApi }
     if ($localHealth.status -ne "ok" -or
         $preflight.StatusCode -ne 200 -or
         $preflight.Headers["Access-Control-Allow-Origin"] -ne $pagesOrigin -or
         $preflight.Headers["Access-Control-Allow-Headers"] -notmatch "ngrok-skip-browser-warning" -or
+        $localPreflight.StatusCode -ne 200 -or
+        $localPreflight.Headers["Access-Control-Allow-Origin"] -ne "http://localhost:5173" -or
         -not $tunnel) {
         throw "Existing services are running but are not correctly configured for the public Plight site."
     }

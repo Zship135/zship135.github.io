@@ -85,7 +85,16 @@ from plight_server.security import authenticate_token, create_session, hash_pass
 LOCAL_ORIGINS = {"http://localhost:5173", "http://127.0.0.1:5173"}
 LOGGER = logging.getLogger(__name__)
 PRODUCTION_ORIGIN = os.getenv("PLIGHT_UI_ORIGIN", "").strip()
-ALLOWED_ORIGINS = {PRODUCTION_ORIGIN} if PRODUCTION_ORIGIN else LOCAL_ORIGINS
+
+
+def _allowed_ui_origins(production_origin: str) -> set[str]:
+    origins = set(LOCAL_ORIGINS)
+    if production_origin:
+        origins.add(production_origin)
+    return origins
+
+
+ALLOWED_ORIGINS = _allowed_ui_origins(PRODUCTION_ORIGIN)
 MAX_REQUEST_BYTES = 1_048_576
 MAX_WEBSOCKET_FRAME_CHARS = 4_096
 MAX_PROFILE_IMAGE_BYTES = 512 * 1024
