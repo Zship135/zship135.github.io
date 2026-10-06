@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, apiBlob } from "./api.js";
+import { restoreLocationSelection } from "./contentStudioSelection.js";
+
+const SELECTED_LOCATION_KEY = "plight.content.selectedLocation";
 
 const NAVIGATION = [
   ["map", "World map"],
@@ -355,7 +358,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   const [content, setContent] = useState(null);
   const [revision, setRevision] = useState("");
   const [tab, setTab] = useState("map");
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(() => sessionStorage.getItem(SELECTED_LOCATION_KEY) || "");
   const [busy, setBusy] = useState(false);
   const [pendingAudioUploads, setPendingAudioUploads] = useState(0);
   const [error, setError] = useState("");
@@ -367,9 +370,17 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
     setBusy(true);
     try {
       const result = await api("/api/v1/content", { token });
+      const nextSelectedId = restoreLocationSelection(
+        result.content.locations,
+        selectedId,
+        sessionStorage.getItem(SELECTED_LOCATION_KEY),
+      );
       setContent(result.content);
       setRevision(result.revision);
-      setSelectedId(result.content.locations[0]?.id || "");
+      setSelectedId(nextSelectedId);
+      if (result.content.locations.some((location) => location.id === nextSelectedId)) {
+        sessionStorage.setItem(SELECTED_LOCATION_KEY, nextSelectedId);
+      }
       setLinkForm({
         from: result.content.locations[0]?.id || "",
         to: result.content.locations[1]?.id || "",
@@ -429,22 +440,37 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
     setPendingAudioUploads((count) => Math.max(0, count + (uploading ? 1 : -1)));
   }
 
+  function selectLocation(id) {
+    setSelectedId(id);
+    sessionStorage.setItem(SELECTED_LOCATION_KEY, id);
+  }
+
   function changeTab(nextTab) {
     setTab(nextTab);
     const nextList = nextTab === "audio"
       ? ACTION_SOUND_OPTIONS
       : nextTab === "locations"
         ? content.locations
-        : nextTab === "recipes"
-          ? content.recipes
-          : nextTab === "quests"
-            ? content.quests
-            : (content.entities || []).filter((entity) =>
-              nextTab === "environment"
-                ? ["furniture", "object"].includes(entity.type)
-                : entity.type === ENTITY_TABS[nextTab]?.[0],
-            );
-    setSelectedId(nextList[0]?.id || "");
+        : nextTab === "map"
+          ? content.locations
+          : nextTab === "recipes"
+            ? content.recipes
+            : nextTab === "quests"
+              ? content.quests
+              : (content.entities || []).filter((entity) =>
+                nextTab === "environment"
+                  ? ["furniture", "object"].includes(entity.type)
+                  : entity.type === ENTITY_TABS[nextTab]?.[0],
+              );
+    const selectedLocation = nextTab === "locations" || nextTab === "map"
+      ? nextList.find((entry) => entry.id === selectedId)
+        || nextList.find((entry) => entry.id === sessionStorage.getItem(SELECTED_LOCATION_KEY))
+      : null;
+    const nextSelectedId = selectedLocation?.id || nextList[0]?.id || "";
+    setSelectedId(nextSelectedId);
+    if ((nextTab === "locations" || nextTab === "map") && nextSelectedId) {
+      sessionStorage.setItem(SELECTED_LOCATION_KEY, nextSelectedId);
+    }
   }
 
   function createEntry() {
@@ -468,7 +494,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
           resource_ids: [],
         });
       });
-      setSelectedId(id);
+      selectLocation(id);
       return;
     }
     if (tab === "quests") {
@@ -750,7 +776,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                   <button className="studio-secondary-button" onClick={() => changeTab("locations")} type="button">Manage locations</button>
                 </div>
                 <div className="studio-map-frame">
-                  <WorldMap content={{ ...content, selectedLocationId: selectedId }} onSelect={(id) => { setSelectedId(id); setTab("locations"); }} />
+                  <WorldMap content={{ ...content, selectedLocationId: selectedId }} onSelect={(id) => { selectLocation(id); setTab("locations"); }} />
                 </div>
                 <div className="studio-map-controls">
                   <p>Connections create matching exits in both locations. Select nodes to edit them; their map position can be adjusted in location details.</p>
@@ -773,7 +799,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                   </div>
                   <div className="studio-entry-list">
                     {currentEntries.map((entry) => (
-                      <button className={`studio-entry ${selectedId === entry.id ? "selected" : ""}`} key={entry.id} onClick={() => setSelectedId(entry.id)} type="button">
+                      <button className={`studio-entry ${selectedId === entry.id ? "selected" : ""}`} key={entry.id} onClick={() => tab === "locations" ? selectLocation(entry.id) : setSelectedId(entry.id)} type="button">
                         <span>{tab === "quests" ? entry.title : entry.name}</span>
                         <small>{entry.id}</small>
                       </button>
