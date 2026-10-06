@@ -13,12 +13,12 @@ import re
 import threading
 import time
 from typing import Any
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
@@ -31,6 +31,12 @@ from plight_server.content import (
     read_world_content,
     world_content_dict,
     write_world_content,
+)
+from plight_server.audio_assets import (
+    MAX_AUDIO_ASSET_BYTES,
+    is_mp3_audio,
+    mp3_audio_path,
+    save_mp3_audio,
 )
 from plight_server.game import (
     award_enemy_defeat,
@@ -1240,13 +1246,18 @@ class RequestSizeLimitMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        max_request_bytes = (
+            MAX_AUDIO_ASSET_BYTES
+            if scope["method"] == "POST" and scope["path"] == "/api/v1/content/audio"
+            else MAX_REQUEST_BYTES
+        )
         content_length = next(
             (value.decode("latin-1") for key, value in scope["headers"] if key == b"content-length"),
             None,
         )
         if content_length:
             try:
-                if int(content_length) > MAX_REQUEST_BYTES:
+                if int(content_length) > max_request_bytes:
                     response = _error_response(413, "request_too_large", "Request body exceeds the size limit.")
                     await response(scope, receive, send)
                     return
@@ -1261,7 +1272,7 @@ class RequestSizeLimitMiddleware:
             if message["type"] == "http.disconnect":
                 return
             body.extend(message.get("body", b""))
-            if len(body) > MAX_REQUEST_BYTES:
+            if len(body) > max_request_bytes:
                 response = _error_response(413, "request_too_large", "Request body exceeds the size limit.")
                 await response(scope, receive, send)
                 return
@@ -2381,6 +2392,42 @@ def get_content(
     return {"revision": revision, "content": content.model_dump(mode="json")}
 
 
+@app.post("/api/v1/content/audio", status_code=201)
+async def upload_content_audio(
+    request: Request,
+    account: Account = Depends(require_account),
+) -> dict[str, str]:
+    if not _is_content_editor(account):
+        raise HTTPException(status_code=403, detail="World content editing is not enabled for this account.")
+    _check_rate(request, "content_audio_upload", 30, 3600)
+    declared_mime = request.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+    if declared_mime != "audio/mpeg":
+        raise HTTPException(status_code=415, detail="Upload an MP3 audio file.")
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="The uploaded MP3 file is empty.")
+    if len(body) > MAX_AUDIO_ASSET_BYTES:
+        raise HTTPException(status_code=413, detail="MP3 files may not exceed 25 MiB.")
+    if not is_mp3_audio(body):
+        raise HTTPException(status_code=415, detail="The uploaded data is not a valid MP3 audio stream.")
+    return {"asset_id": save_mp3_audio(body)}
+
+
+@app.get("/api/v1/content/audio/{asset_id}")
+def get_content_audio(asset_id: UUID) -> FileResponse:
+    path = mp3_audio_path(asset_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="That audio asset does not exist.")
+    return FileResponse(
+        path,
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @app.put("/api/v1/content")
 def update_content(
     body: WorldContentUpdate,
@@ -2697,6 +2744,7 @@ def _submit_command_locked(
         )
         actions = result.pop("queued_actions", [])
         result["messages"] = list(result.get("messages", []))
+        result["action_events"] = []
         result["dialogues"] = list(result.get("dialogues", []))
         result["profile_account_ids"] = list(result.get("profile_account_ids", []))
         result["observed_player_equipment"] = dict(
@@ -2778,6 +2826,7 @@ def _submit_command_locked(
                 )
                 if "inventory_view" in outcome:
                     result["inventory_view"] = outcome["inventory_view"]
+                result["action_events"].append(occurrence["action_id"])
                 continue
 
             action_row = CombatAction(
@@ -2814,6 +2863,7 @@ def _submit_command_locked(
                     "defeated_enemy_id": None,
                 }
             action_row.result = outcome
+            result["action_events"].append(action_id)
             result["messages"].extend(outcome["messages"])
             result["dialogues"].extend(outcome.get("dialogues", []))
             result["profile_account_ids"].extend(

@@ -192,6 +192,8 @@ The first major release should prioritize what players directly interact with an
 
 The developer specifically wants to prioritize fleshing out and testing actions over building a broad world. Quests are optional content authored in the Content Studio; fetch-quest acceptance, progress, turn-in, loot, experience, character level, and quest-gated exits are character-specific and server-authoritative. Advanced economic simulation, extensive world simulation, additional species, and larger content sets can be developed after the core interaction loop is dependable. The MVP can contain simple initial relations and basic market features without attempting the full long-term simulation.
 
+Content Studio audio authoring supports a looping MP3 track per location and one globally shared MP3 sound effect for each recognized player action. Audio uploads are editor-only, limited to 25 MiB per file, and stored separately from world JSON; the API serves those assets to game clients. Players explicitly enable or mute playback and may adjust volume, respecting browser autoplay restrictions. Backups must include the audio asset directory as well as the world-content file and database.
+
 ## 9. Recommended development process
 
 Build in vertical slices: each stage should leave behind a runnable, testable game rather than a large collection of disconnected systems.

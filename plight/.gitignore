@@ -8,5 +8,6 @@ venv/
 plight.db
 plight.db-shm
 plight.db-wal
+plight_server/audio_assets/
 web/node_modules/
 web/dist/

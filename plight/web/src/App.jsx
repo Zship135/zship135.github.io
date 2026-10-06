@@ -134,6 +134,9 @@ export default function App() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [form, setForm] = useState({ email: "", password: "" });
   const [snapshot, setSnapshot] = useState(null);
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const [audioVolume, setAudioVolume] = useState(0.65);
+  const [audioError, setAudioError] = useState("");
   const [ambienceEvents, setAmbienceEvents] = useState([]);
   const [characterSetupPending, setCharacterSetupPending] = useState(false);
   const [characterForm, setCharacterForm] = useState({
@@ -167,6 +170,121 @@ export default function App() {
   const [profileForm, setProfileForm] = useState({ pronouns: "", lore: "" });
   const [profileBusy, setProfileBusy] = useState(false);
   const [profileError, setProfileError] = useState("");
+  const musicAudioRef = useRef(null);
+  const actionAudioRef = useRef(null);
+  const audioUrlsRef = useRef(new Map());
+  const audioLoadsRef = useRef(new Map());
+  const audioEnabledRef = useRef(false);
+  const audioVolumeRef = useRef(0.65);
+  const actionSoundQueueRef = useRef(Promise.resolve());
+
+  const getAudioSource = useCallback(async (assetId) => {
+    const cached = audioUrlsRef.current.get(assetId);
+    if (cached) {
+      audioUrlsRef.current.delete(assetId);
+      audioUrlsRef.current.set(assetId, cached);
+      return cached;
+    }
+    const pending = audioLoadsRef.current.get(assetId);
+    if (pending) return pending;
+    const loadPromise = (async () => {
+      const blob = await apiBlob(`/api/v1/content/audio/${encodeURIComponent(assetId)}`, { token });
+      const objectUrl = URL.createObjectURL(blob);
+      audioUrlsRef.current.set(assetId, objectUrl);
+      while (audioUrlsRef.current.size > 12) {
+        const activeSources = new Set([
+          musicAudioRef.current?.src,
+          actionAudioRef.current?.src,
+        ]);
+        const staleEntry = [...audioUrlsRef.current].find(
+          ([cachedId, source]) => cachedId !== assetId && !activeSources.has(source),
+        );
+        if (!staleEntry) break;
+        URL.revokeObjectURL(staleEntry[1]);
+        audioUrlsRef.current.delete(staleEntry[0]);
+      }
+      return objectUrl;
+    })();
+    audioLoadsRef.current.set(assetId, loadPromise);
+    try {
+      return await loadPromise;
+    } finally {
+      if (audioLoadsRef.current.get(assetId) === loadPromise) {
+        audioLoadsRef.current.delete(assetId);
+      }
+    }
+  }, [token]);
+
+  useEffect(() => {
+    const player = musicAudioRef.current;
+    const assetId = snapshot?.area?.music_asset_id;
+    if (!player) return undefined;
+    if (!audioEnabled || !assetId) {
+      player.pause();
+      if (!assetId) player.removeAttribute("src");
+      return undefined;
+    }
+    let cancelled = false;
+    player.pause();
+    getAudioSource(assetId)
+      .then((source) => {
+        if (cancelled || !audioEnabledRef.current) return;
+        player.src = source;
+        player.loop = true;
+        player.volume = audioVolumeRef.current;
+        return player.play();
+      })
+      .catch((error) => {
+        if (!cancelled) setAudioError(`Location music could not play: ${error.message}`);
+      });
+    return () => { cancelled = true; };
+  }, [audioEnabled, getAudioSource, snapshot?.area?.music_asset_id, studioMode]);
+
+  useEffect(() => {
+    audioEnabledRef.current = audioEnabled;
+    if (!audioEnabled) {
+      musicAudioRef.current?.pause();
+      actionAudioRef.current?.pause();
+    }
+  }, [audioEnabled]);
+
+  useEffect(() => {
+    audioVolumeRef.current = audioVolume;
+    if (musicAudioRef.current) musicAudioRef.current.volume = audioVolume;
+    if (actionAudioRef.current) actionAudioRef.current.volume = audioVolume;
+  }, [audioVolume]);
+
+  useEffect(() => () => {
+    musicAudioRef.current?.pause();
+    actionAudioRef.current?.pause();
+    for (const source of audioUrlsRef.current.values()) URL.revokeObjectURL(source);
+    audioUrlsRef.current.clear();
+  }, []);
+
+  const queueActionSounds = useCallback((actionIds, soundAssignments) => {
+    if (!Array.isArray(actionIds) || actionIds.length === 0) return;
+    const playSounds = async () => {
+      for (const actionId of actionIds) {
+        if (!audioEnabledRef.current) return;
+        const assetId = soundAssignments?.[actionId];
+        if (!assetId) continue;
+        const source = await getAudioSource(assetId);
+        if (!audioEnabledRef.current) return;
+        const player = new Audio(source);
+        player.volume = audioVolumeRef.current;
+        actionAudioRef.current = player;
+        await new Promise((resolve, reject) => {
+          player.addEventListener("ended", resolve, { once: true });
+          player.addEventListener("pause", resolve, { once: true });
+          player.addEventListener("error", () => reject(new Error("An action sound could not be played.")), { once: true });
+          player.play().catch(reject);
+        });
+      }
+    };
+    actionSoundQueueRef.current = actionSoundQueueRef.current
+      .then(playSounds, playSounds)
+      .catch((error) => setAudioError(`Action sound could not play: ${error.message}`));
+  }, [getAudioSource]);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [peopleBusy, setPeopleBusy] = useState(false);
   const [peopleError, setPeopleError] = useState("");
@@ -862,6 +980,10 @@ export default function App() {
       if (result.status !== "queued") {
         removePendingCommand(accountId, request.request_id);
       }
+      queueActionSounds(
+        result.result?.action_events,
+        result.result?.snapshot?.action_sounds || snapshot?.action_sounds,
+      );
       setActivity((current) => upsertActivity(current, result));
       if (result.result?.inventory_view) setInventoryView(result.result.inventory_view);
       const observedAccountId = result.result?.profile_account_ids?.[0];
@@ -891,6 +1013,17 @@ export default function App() {
     document.getElementById("command-input")?.focus();
   }
 
+  function toggleAudio() {
+    const enabled = !audioEnabledRef.current;
+    audioEnabledRef.current = enabled;
+    setAudioEnabled(enabled);
+    setAudioError("");
+    if (!enabled) {
+      musicAudioRef.current?.pause();
+      actionAudioRef.current?.pause();
+    }
+  }
+
   async function selectDialogueChoice(entry, dialogue, choice) {
     const busyKey = `${entry.request_id}:${dialogue.occurrence_id}`;
     setDialogueBusyKey(busyKey);
@@ -905,6 +1038,7 @@ export default function App() {
           choice_id: choice.id,
         }),
       });
+      queueActionSounds(["talk"], snapshot?.action_sounds);
       setActivity((current) => current.map((currentEntry) => {
         if (currentEntry.request_id !== entry.request_id) return currentEntry;
         const dialogues = (currentEntry.result?.dialogues || []).map((currentDialogue) => {
@@ -1043,14 +1177,17 @@ export default function App() {
 
   if (studioMode && canEditContent) {
     return (
-      <ContentStudio
-        onClose={() => {
-          setStudioMode(false);
-          refreshWorld(token).catch(showError);
-        }}
-        onSignOut={signOut}
-        token={token}
-      />
+      <>
+        <audio aria-hidden="true" ref={musicAudioRef} />
+        <ContentStudio
+          onClose={() => {
+            setStudioMode(false);
+            refreshWorld(token).catch(showError);
+          }}
+          onSignOut={signOut}
+          token={token}
+        />
+      </>
     );
   }
 
@@ -1087,6 +1224,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <audio aria-hidden="true" ref={musicAudioRef} />
       <header className="topbar">
         <a className="wordmark" href="#world">PLIGHT</a>
         <div className="topbar-right">
@@ -1094,9 +1232,26 @@ export default function App() {
           <button className="text-button" onClick={openPeople} type="button">Party & friends</button>
           <button className="text-button" onClick={openOwnProfile} type="button">My profile</button>
           {canEditContent && <button className="text-button studio-nav-trigger" onClick={() => setStudioMode(true)} type="button">Content studio</button>}
+          <div className="audio-controls">
+            <button aria-pressed={audioEnabled} className="text-button" onClick={toggleAudio} type="button">
+              {audioEnabled ? "Sound on" : "Sound off"}
+            </button>
+            <label className="sr-only" htmlFor="audio-volume">Game audio volume</label>
+            <input
+              aria-label="Game audio volume"
+              id="audio-volume"
+              max="1"
+              min="0"
+              onChange={(event) => setAudioVolume(Number(event.target.value))}
+              step="0.05"
+              type="range"
+              value={audioVolume}
+            />
+          </div>
           <button className="text-button" onClick={signOut} type="button">Sign out</button>
         </div>
       </header>
+      {audioError && <div className="audio-error" role="status">{audioError}<button aria-label="Dismiss audio message" onClick={() => setAudioError("")} type="button">×</button></div>}
       {notice && <div className="notice" role="status">{notice}<button aria-label="Dismiss notice" onClick={() => setNotice("")}>×</button></div>}
       <main className="world-layout" id="world">
         <section className="panel activity-panel" aria-label="Activity and command">

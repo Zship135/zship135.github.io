@@ -423,6 +423,7 @@ def _snapshot(
             "id": character.area_id,
             "name": area["name"],
             "description": area["description"],
+            "music_asset_id": area.get("music_asset_id"),
             "exits": [key for key in ("north", "south", "east", "west") if key in exits],
             "exit_destinations": {
                 direction: areas[destination]["name"]
@@ -441,6 +442,7 @@ def _snapshot(
             if (getattr(character, "quest_state", None) or {}).get(quest["id"], {}).get("status")
             in {"active", "completed"}
         ],
+        "action_sounds": content.get("action_sounds", {}),
         "atmosphere": atmosphere_data,
     }
 

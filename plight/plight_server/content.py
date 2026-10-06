@@ -6,8 +6,11 @@ import re
 import threading
 from pathlib import Path
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from plight_nlp_inspector import ACTION_ALIASES
 
 
 WORLD_CONTENT_PATH = Path(__file__).with_name("world_content.json")
@@ -152,6 +155,7 @@ class ContentLocation(ContentModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(max_length=4000)
     position: MapPosition
+    music_asset_id: UUID | None = None
     starting_species: list[Literal["human", "goblin"]] = Field(default_factory=list, max_length=2)
     exits: dict[str, str] = Field(default_factory=dict, max_length=4)
     exit_requirements: dict[str, str] = Field(default_factory=dict, max_length=4)
@@ -405,9 +409,20 @@ class WorldContent(BaseModel):
 
     schema_version: int = Field(default=1, ge=1)
     locations: list[ContentLocation] = Field(min_length=1, max_length=500)
+    action_sounds: dict[str, UUID] = Field(default_factory=dict)
     entities: list[ContentEntity] = Field(default_factory=list, max_length=2000)
     recipes: list[ContentRecipe] = Field(default_factory=list, max_length=2000)
     quests: list[Quest] = Field(default_factory=list, max_length=2000)
+
+    @field_validator("action_sounds")
+    @classmethod
+    def validate_action_sounds(cls, sounds: dict[str, UUID]) -> dict[str, UUID]:
+        unsupported = set(sounds) - set(ACTION_ALIASES)
+        if unsupported:
+            raise ValueError(
+                f"Action sounds reference unsupported actions: {', '.join(sorted(unsupported))}."
+            )
+        return sounds
 
     @model_validator(mode="after")
     def validate_references(self) -> WorldContent:

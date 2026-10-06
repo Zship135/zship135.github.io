@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "./api.js";
+import { api, apiBlob } from "./api.js";
 
 const NAVIGATION = [
   ["map", "World map"],
   ["locations", "Locations"],
+  ["audio", "Audio"],
   ["enemies", "Enemies"],
   ["npcs", "NPCs"],
   ["items", "Items"],
@@ -13,6 +14,31 @@ const NAVIGATION = [
   ["environment", "Furniture / objects"],
   ["resources", "Resources"],
 ];
+
+const ACTION_SOUND_OPTIONS = [
+  ["observe", "Observe"],
+  ["talk", "Talk"],
+  ["travel", "Travel"],
+  ["attack", "Attack"],
+  ["light_attack", "Light attack"],
+  ["heavy_attack", "Heavy attack"],
+  ["defend", "Defend"],
+  ["wait", "Wait / rest"],
+  ["gather", "Gather"],
+  ["cancel_gather", "Cancel gathering"],
+  ["craft", "Craft"],
+  ["equip_item", "Equip item"],
+  ["unequip_item", "Unequip item"],
+  ["use_item", "Use item"],
+  ["shop_buy", "Buy from shop"],
+  ["shop_sell", "Sell to shop"],
+  ["give_item", "Give item"],
+  ["trade_offer", "Offer trade"],
+  ["trade_accept", "Accept trade"],
+  ["market_list", "List market item"],
+  ["market_buy", "Buy market listing"],
+  ["market_cancel", "Cancel market listing"],
+].map(([id, name]) => ({ id, name }));
 
 const ENTITY_TABS = {
   enemies: ["enemy", { health: 20, attack: 3, defense: 1, speed: 10, experience: 10 }],
@@ -116,6 +142,86 @@ function TextAreaField({ label, value, onChange, rows = 4 }) {
       <span>{label}</span>
       <textarea onChange={(event) => onChange(event.target.value)} rows={rows} value={value} />
     </label>
+  );
+}
+
+function AudioAssetField({ label, assetId, token, onChange }) {
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!assetId) {
+      setPreviewUrl("");
+      return undefined;
+    }
+    setPreviewUrl("");
+    setError("");
+    let stale = false;
+    let objectUrl = "";
+    apiBlob(`/api/v1/content/audio/${encodeURIComponent(assetId)}`, { token })
+      .then((blob) => {
+        if (stale) return;
+        objectUrl = URL.createObjectURL(blob);
+        setPreviewUrl(objectUrl);
+        setError("");
+      })
+      .catch((requestError) => {
+        if (!stale) setError(requestError.message);
+      });
+    return () => {
+      stale = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [assetId, token]);
+
+  async function upload(file) {
+    if (!file) return;
+    setError("");
+    if (file.size > 25 * 1024 * 1024) {
+      setError("MP3 files may not exceed 25 MiB.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const uploaded = await api("/api/v1/content/audio", {
+        token,
+        method: "POST",
+        body: file,
+        headers: { "Content-Type": "audio/mpeg" },
+      });
+      onChange(uploaded.asset_id);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="studio-audio-field">
+      <p>{label}</p>
+      {previewUrl ? (
+        <audio aria-label={`${label} preview`} controls preload="none" src={previewUrl} />
+      ) : <span className="studio-hint">{error ? "Preview unavailable." : assetId ? "Loading audio preview…" : "No MP3 assigned."}</span>}
+      <div className="studio-audio-actions">
+        <label className="studio-secondary-button">
+          {busy ? "Uploading…" : "Upload MP3"}
+          <input
+            accept=".mp3,audio/mpeg"
+            disabled={busy}
+            onChange={(event) => {
+              void upload(event.target.files?.[0]);
+              event.target.value = "";
+            }}
+            type="file"
+          />
+        </label>
+        {assetId && <button className="text-button" disabled={busy} onClick={() => onChange(null)} type="button">Clear assignment</button>}
+      </div>
+      <span className="studio-hint">MP3 audio, up to 25 MiB. Uploaded files are kept on the game server.</span>
+      {error && <span className="studio-audio-error" role="alert">{error}</span>}
+    </div>
   );
 }
 
@@ -286,19 +392,24 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   const currentEntity = ["enemies", "npcs", "items", "weapons", "environment", "resources"].includes(tab)
     ? (content?.entities || []).find((entity) => entity.id === selectedId)
     : null;
+  const currentActionSound = tab === "audio"
+    ? ACTION_SOUND_OPTIONS.find((action) => action.id === selectedId)
+    : null;
   const visibleEntities = useMemo(() => {
     if (!content) return [];
     if (tab === "environment") return content.entities.filter((entity) => ["furniture", "object"].includes(entity.type));
     const entityType = ENTITY_TABS[tab]?.[0];
     return entityType ? content.entities.filter((entity) => entity.type === entityType) : [];
   }, [content, tab]);
-  const currentEntries = tab === "locations"
-    ? content?.locations || []
-    : tab === "recipes"
-      ? recipes
-      : tab === "quests"
-        ? quests
-        : visibleEntities;
+  const currentEntries = tab === "audio"
+    ? ACTION_SOUND_OPTIONS
+    : tab === "locations"
+      ? content?.locations || []
+      : tab === "recipes"
+        ? recipes
+        : tab === "quests"
+          ? quests
+          : visibleEntities;
 
   function updateContent(mutator) {
     setContent((current) => {
@@ -312,17 +423,19 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
 
   function changeTab(nextTab) {
     setTab(nextTab);
-    const nextList = nextTab === "locations"
-      ? content.locations
-      : nextTab === "recipes"
-        ? content.recipes
-        : nextTab === "quests"
-          ? content.quests
-        : (content.entities || []).filter((entity) =>
-          nextTab === "environment"
-            ? ["furniture", "object"].includes(entity.type)
-            : entity.type === ENTITY_TABS[nextTab]?.[0],
-        );
+    const nextList = nextTab === "audio"
+      ? ACTION_SOUND_OPTIONS
+      : nextTab === "locations"
+        ? content.locations
+        : nextTab === "recipes"
+          ? content.recipes
+          : nextTab === "quests"
+            ? content.quests
+            : (content.entities || []).filter((entity) =>
+              nextTab === "environment"
+                ? ["furniture", "object"].includes(entity.type)
+                : entity.type === ENTITY_TABS[nextTab]?.[0],
+            );
     setSelectedId(nextList[0]?.id || "");
   }
 
@@ -335,6 +448,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
           name: "New location",
           description: "",
           position: { x: 50, y: 50 },
+          music_asset_id: null,
           starting_species: [],
           exits: {},
           exit_requirements: {},
@@ -606,7 +720,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
             {NAVIGATION.map(([id, label]) => (
               <button aria-current={tab === id ? "page" : undefined} className={tab === id ? "active" : ""} key={id} onClick={() => changeTab(id)} type="button">
                 <span>{label}</span>
-                <small>{id === "map" || id === "locations" ? content.locations.length : id === "recipes" ? content.recipes.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
+                <small>{id === "map" || id === "locations" ? content.locations.length : id === "audio" ? Object.keys(content.action_sounds || {}).length : id === "recipes" ? content.recipes.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
               </button>
             ))}
             <div className="studio-nav-note">
@@ -638,8 +752,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
               <div className="studio-editor-layout">
                 <aside className="studio-list-pane">
                   <div className="studio-list-heading">
-                    <div><p className="eyebrow">{tab === "locations" ? "WORLD AREAS" : tab === "recipes" ? "CRAFTING" : "CATALOG"}</p><h2>{NAVIGATION.find(([id]) => id === tab)?.[1]}</h2></div>
-                    {tab !== "locations" || content.locations.length > 0 ? (
+                    <div><p className="eyebrow">{tab === "locations" ? "WORLD AREAS" : tab === "audio" ? "ACTION SOUNDS" : tab === "recipes" ? "CRAFTING" : "CATALOG"}</p><h2>{NAVIGATION.find(([id]) => id === tab)?.[1]}</h2></div>
+                    {tab !== "audio" && (tab !== "locations" || content.locations.length > 0) ? (
                       <button aria-label={`Create ${tab === "locations" ? "location" : tab === "recipes" ? "recipe" : tab === "quests" ? "quest" : "entity"}`} className="studio-add-button" onClick={createEntry} type="button">+</button>
                     ) : null}
                   </div>
@@ -663,7 +777,20 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       entitiesById={entitiesById}
                       locations={content.locations}
                       quests={quests}
+                      token={token}
                       onChange={updateLocation}
+                    />
+                  )}
+                  {currentActionSound && tab === "audio" && (
+                    <ActionSoundEditor
+                      action={currentActionSound}
+                      assetId={content.action_sounds?.[currentActionSound.id] || null}
+                      token={token}
+                      onChange={(assetId) => updateContent((next) => {
+                        next.action_sounds ||= {};
+                        if (assetId) next.action_sounds[currentActionSound.id] = assetId;
+                        else delete next.action_sounds[currentActionSound.id];
+                      })}
                     />
                   )}
                   {currentEntity && ["enemies", "npcs", "items", "weapons", "environment", "resources"].includes(tab) && (
@@ -724,7 +851,7 @@ function visibleCount(content, tab) {
   return content.entities.filter((entity) => entity.type === type).length;
 }
 
-function LocationEditor({ location, entitiesById, locations, quests, onChange }) {
+function LocationEditor({ location, entitiesById, locations, quests, token, onChange }) {
   function change(field, value) {
     onChange((current, nextValue) => { current[field] = nextValue; }, value);
   }
@@ -751,6 +878,16 @@ function LocationEditor({ location, entitiesById, locations, quests, onChange })
       </div>
       <Field label="Location name" value={location.name} onChange={(value) => change("name", value)} />
       <TextAreaField label="Description shown in the world" value={location.description} onChange={(value) => change("description", value)} />
+      <section className="studio-subsection">
+        <h3>Location music</h3>
+        <p>This MP3 loops while players are in this location. Players can turn game audio on or off.</p>
+        <AudioAssetField
+          assetId={location.music_asset_id || null}
+          label="Background music"
+          token={token}
+          onChange={(assetId) => change("music_asset_id", assetId)}
+        />
+      </section>
       <TextBlockList
         title="Location ambience"
         hint="One line is shown at random every 30 seconds while players are here."
@@ -830,6 +967,27 @@ function LocationEditor({ location, entitiesById, locations, quests, onChange })
         <EntityPicker title="Furniture and objects" options={[...entitiesById.values()].filter((entity) => ["furniture", "object"].includes(entity.type))} selected={location.object_ids} onToggle={(id, selected) => toggleId("object_ids", id, selected)} />
         <EntityPicker title="Gatherable resources" options={[...entitiesById.values()].filter((entity) => entity.type === "resource")} selected={location.resource_ids} onToggle={(id, selected) => toggleId("resource_ids", id, selected)} />
         {(enemies.length > 0 || npcs.length > 0) && <p className="studio-hint">This area currently contains {[...enemies, ...npcs].join(", ")}.</p>}
+      </section>
+    </div>
+  );
+}
+
+function ActionSoundEditor({ action, assetId, token, onChange }) {
+  return (
+    <div className="studio-form">
+      <div className="studio-detail-heading">
+        <div><p className="eyebrow">ACTION AUDIO / {action.id}</p><h2>{action.name}</h2></div>
+        <span className="studio-kind-tag">GLOBAL</span>
+      </div>
+      <section className="studio-subsection">
+        <h3>Sound effect</h3>
+        <p>This MP3 plays when a player performs this action, in any location.</p>
+        <AudioAssetField
+          assetId={assetId}
+          label={`${action.name} sound`}
+          token={token}
+          onChange={onChange}
+        />
       </section>
     </div>
   );

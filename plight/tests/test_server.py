@@ -16,6 +16,7 @@ from sqlalchemy import event
 from PIL import Image
 
 import plight_server.app as api
+import plight_server.audio_assets as audio_assets
 import plight_server.content as content_store
 import plight_server.game as game
 from plight_server.database import Base, get_db
@@ -456,6 +457,92 @@ def test_content_editor_is_restricted_and_publishes_active_world_data(
     )
     assert published.status_code == 200
     assert traveled.json()["result"]["snapshot"]["character"]["area_id"] == "goblin_town"
+
+
+def test_content_audio_uploads_are_editor_only_and_playable(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = content_store.WORLD_CONTENT_PATH.read_bytes()
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", tmp_path / "world_content.json")
+    content_store.WORLD_CONTENT_PATH.write_bytes(source)
+    monkeypatch.setattr(audio_assets, "AUDIO_ASSET_DIR", tmp_path / "audio_assets")
+    monkeypatch.setenv("PLIGHT_CONTENT_EDITOR_EMAIL", "audio-builder@example.com")
+    builder = register(client, "audio-builder@example.com", "Builder")
+    player = register(client, "audio-player@example.com", "Player")
+    mp3 = bytes.fromhex("fffb9064") + bytes(32)
+
+    upload = client.post(
+        "/api/v1/content/audio",
+        headers={**auth(builder["token"]), "Content-Type": "audio/mpeg"},
+        content=mp3,
+    )
+    assert upload.status_code == 201, upload.text
+    asset_id = upload.json()["asset_id"]
+    served = client.get(f"/api/v1/content/audio/{asset_id}")
+    assert served.status_code == 200
+    assert served.content == mp3
+    assert served.headers["content-type"] == "audio/mpeg"
+    assert served.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert client.get(f"/api/v1/content/audio/{uuid4()}").status_code == 404
+
+    forbidden = client.post(
+        "/api/v1/content/audio",
+        headers={**auth(player["token"]), "Content-Type": "audio/mpeg"},
+        content=mp3,
+    )
+    invalid = client.post(
+        "/api/v1/content/audio",
+        headers={**auth(builder["token"]), "Content-Type": "audio/mpeg"},
+        content=b"not an mp3 file",
+    )
+    oversized_general_request = client.post(
+        "/api/v1/content/audio",
+        headers={**auth(builder["token"]), "Content-Type": "audio/mpeg"},
+        content=b"x" * (api.MAX_REQUEST_BYTES + 1),
+    )
+    assert forbidden.status_code == 403
+    assert invalid.status_code == 415
+    assert oversized_general_request.status_code == 415
+    monkeypatch.setattr(api, "MAX_AUDIO_ASSET_BYTES", len(mp3))
+    oversized_audio = client.post(
+        "/api/v1/content/audio",
+        headers={**auth(builder["token"]), "Content-Type": "audio/mpeg"},
+        content=mp3 + b"x",
+    )
+    assert oversized_audio.status_code == 413
+
+    content_update = client.get("/api/v1/content", headers=auth(builder["token"])).json()
+    current_area_id = client.get(
+        "/api/v1/world/snapshot",
+        headers=auth(builder["token"]),
+    ).json()["area"]["id"]
+    current_area = next(
+        location
+        for location in content_update["content"]["locations"]
+        if location["id"] == current_area_id
+    )
+    current_area["music_asset_id"] = asset_id
+    content_update["content"]["action_sounds"] = {"attack": asset_id}
+    published = client.put(
+        "/api/v1/content",
+        headers=auth(builder["token"]),
+        json=content_update,
+    )
+    assert published.status_code == 200, published.text
+    snapshot_response = client.get("/api/v1/world/snapshot", headers=auth(builder["token"]))
+    assert snapshot_response.json()["area"]["music_asset_id"] == asset_id
+    assert snapshot_response.json()["action_sounds"] == {"attack": asset_id}
+
+    invalid_action_sound = client.get("/api/v1/content", headers=auth(builder["token"])).json()
+    invalid_action_sound["content"]["action_sounds"] = {"unknown_action": asset_id}
+    rejected = client.put(
+        "/api/v1/content",
+        headers=auth(builder["token"]),
+        json=invalid_action_sound,
+    )
+    assert rejected.status_code == 422
 
 
 def test_content_editor_rejects_broken_world_references(
@@ -1770,6 +1857,7 @@ def test_combat_sentence_resolves_each_action_immediately(
         assert submitted.json()["status"] == "completed"
         messages = submitted.json()["result"]["messages"]
         assert not any("queued" in message.casefold() for message in messages)
+        assert submitted.json()["result"]["action_events"] == ["attack", "attack", "attack"]
         assert sum("You strike Test rat" in message for message in messages) == 3
         assert submitted.json()["result"]["snapshot"]["area"]["enemies"][0]["health"] == 3
         with api.SessionLocal() as db:
