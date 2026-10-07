@@ -127,7 +127,7 @@ The live combat implementation uses immediate action-response combat and the par
 ### Enemy turns and reinforcements
 
 - Immediately after each combat action, every living, engaged non-passive enemy attacks only the member who just acted. Each enemy rolls separately; that character's defense reduces each hit. Defend halves every hit in its immediate response.
-- Passive enemies never attack or join a fight. Neutral enemies retaliate when attacked and may join an active fight. Aggressive enemies attack the acting member during combat; outside combat, the existing 30-second aggressive-enemy behavior remains in effect.
+- Passive enemies never attack or join a fight. Neutral enemies retaliate when attacked and may join an active fight. Aggressive enemies attack the acting member during combat; outside combat, each aggressive enemy instance independently rolls for each online player every 15 seconds using its Content Studio-configured 0–100% hit chance. The default chance is 0%, which disables these attacks.
 - After each action exchange, every living, unengaged neutral or aggressive enemy assigned to the same area makes an independent join roll. Its chance is 10% for neutral or 20% for aggressive, plus 5 percentage points for each other active fighter, capped at 60%. A bystander retries after later action exchanges until it joins or the encounter ends. A successful join is announced immediately, but that enemy first attacks after the next combat action. Location spawn limits still cap the total living population. Helpful NPC combatants are deferred until their combat stats and behavior are separately designed.
 
 ### Rewards and scope

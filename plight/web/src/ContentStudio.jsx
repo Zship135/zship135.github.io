@@ -569,6 +569,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         ...(type === "enemy" ? {
           attack_die_sides: 2,
           respawn_chance_percent: 0,
+          aggressive_attack_chance_percent: 0,
           behavior: "neutral",
         } : {}),
         ...(type === "npc" ? {
@@ -1166,11 +1167,26 @@ function EntityEditor({ entity, entities, locations, lootItems, onChange, onLoca
               options={[
                 { id: "passive", name: "Passive — never fights back" },
                 { id: "neutral", name: "Neutral — retaliates when attacked" },
-                { id: "aggressive", name: "Aggressive — attacks players every 30 seconds" },
+                { id: "aggressive", name: "Aggressive — attacks in combat and rolls outside combat" },
               ]}
               value={entity.behavior || "neutral"}
               onChange={(value) => set("behavior", value)}
             />
+            {entity.behavior === "aggressive" && (
+              <>
+                <p className="studio-hint">
+                  Each aggressive enemy instance independently rolls for each nearby player every 15 seconds outside combat. Set to 0 to disable these attacks.
+                </p>
+                <Field
+                  label="Outside-combat hit chance per 15 seconds (%)"
+                  min={0}
+                  max={100}
+                  onChange={(value) => set("aggressive_attack_chance_percent", value)}
+                  type="number"
+                  value={entity.aggressive_attack_chance_percent ?? 0}
+                />
+              </>
+            )}
             <Field
               label="Attack die (number of sides)"
               min={2}

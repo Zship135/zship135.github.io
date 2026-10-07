@@ -184,6 +184,7 @@ _character_locks: dict[str, threading.RLock] = {}
 _character_locks_guard = threading.Lock()
 _enemy_world_lock = threading.RLock()
 _enemy_spawn_rng = random.SystemRandom()
+_enemy_aggression_rng = random.SystemRandom()
 
 
 def _character_lock(account_id: str) -> threading.RLock:
@@ -779,8 +780,13 @@ def _run_enemy_aggression_tick() -> None:
                 scope_type,
                 scope_id,
             )
+            combat_state = dict(character.combat_state or {})
+            legacy_attack_times = combat_state.get("enemy_attack_at")
             attack_times = dict(
-                (character.combat_state or {}).get("enemy_attack_at", {})
+                combat_state.get(
+                    "enemy_aggression_check_at",
+                    legacy_attack_times or {},
+                )
             )
             aggressive_spawn_ids = {
                 spawn["id"]
@@ -794,19 +800,27 @@ def _run_enemy_aggression_tick() -> None:
                 enemy = entities.get(spawn["enemy_id"])
                 if enemy is None or enemy.get("behavior", "neutral") != "aggressive":
                     continue
-                last_attack = attack_times.get(spawn["id"])
-                if last_attack:
+                chance = enemy.get("aggressive_attack_chance_percent", 0)
+                if chance <= 0:
+                    continue
+                last_check = attack_times.get(spawn["id"])
+                if not last_check:
+                    attack_times[spawn["id"]] = now.isoformat()
+                    continue
+                else:
                     try:
-                        if not isinstance(last_attack, str):
+                        if not isinstance(last_check, str):
                             raise ValueError
-                        elapsed = (now - datetime.fromisoformat(last_attack)).total_seconds()
+                        elapsed = (now - datetime.fromisoformat(last_check)).total_seconds()
                     except (TypeError, ValueError):
-                        LOGGER.warning("Discarding invalid enemy attack timestamp for %s.", spawn["id"])
-                        elapsed = 30
-                    if elapsed < 30:
+                        LOGGER.warning("Discarding invalid enemy aggression timestamp for %s.", spawn["id"])
+                        elapsed = 15
+                    if elapsed < 15:
                         continue
-                messages.extend(enemy_strike(character, enemy, areas))
                 attack_times[spawn["id"]] = now.isoformat()
+                if chance < 100 and _enemy_aggression_rng.random() * 100 >= chance:
+                    continue
+                messages.extend(enemy_strike(character, enemy, areas))
                 if character.area_id != location_id:
                     break
             attack_times = {
@@ -814,9 +828,10 @@ def _run_enemy_aggression_tick() -> None:
                 for spawn_id, attacked_at in attack_times.items()
                 if spawn_id in aggressive_spawn_ids
             }
-            if messages or attack_times != original_attack_times:
+            if messages or attack_times != original_attack_times or legacy_attack_times is not None:
                 state = dict(character.combat_state or {})
-                state["enemy_attack_at"] = attack_times
+                state.pop("enemy_attack_at", None)
+                state["enemy_aggression_check_at"] = attack_times
                 character.combat_state = state
             if db.new or db.dirty:
                 db.commit()

@@ -253,6 +253,7 @@ class ContentEntity(ContentModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
     attack_die_sides: int | None = Field(default=None, ge=2, le=100)
     respawn_chance_percent: int | None = Field(default=None, ge=0, le=100)
+    aggressive_attack_chance_percent: int | None = Field(default=None, ge=0, le=100)
     behavior: Literal["passive", "neutral", "aggressive"] | None = None
     race: NPCRace | None = None
     present_for: list[Literal["human", "goblin"]] | None = Field(default=None, max_length=2)
@@ -487,6 +488,8 @@ class WorldContent(BaseModel):
                     entity.attack_die_sides = 2
                 if entity.respawn_chance_percent is None:
                     entity.respawn_chance_percent = 0
+                if entity.aggressive_attack_chance_percent is None:
+                    entity.aggressive_attack_chance_percent = 0
                 if entity.behavior is None:
                     entity.behavior = "neutral"
                 for attribute in ("health", "attack", "defense"):
@@ -504,6 +507,7 @@ class WorldContent(BaseModel):
             elif (
                 entity.attack_die_sides is not None
                 or entity.respawn_chance_percent is not None
+                or entity.aggressive_attack_chance_percent is not None
                 or entity.behavior is not None
             ):
                 raise ValueError(f"Enemy combat settings only apply to enemies ({entity.id}).")

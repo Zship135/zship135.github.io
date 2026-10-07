@@ -1044,6 +1044,17 @@ def test_content_editor_validates_enemy_attack_die(client: TestClient, tmp_path:
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
 
+    enemy["attack_die_sides"] = 2
+    enemy["aggressive_attack_chance_percent"] = 101
+    invalid_chance = client.put(
+        "/api/v1/content",
+        headers=auth(builder["token"]),
+        json=update,
+    )
+
+    assert invalid_chance.status_code == 422
+    assert invalid_chance.json()["error"]["code"] == "validation_error"
+
 
 def test_profile_edit_search_and_authenticated_picture_upload(client: TestClient) -> None:
     owner = register(client, "profile-owner@example.com", "Fern")
@@ -1635,6 +1646,7 @@ def _write_enemy_world(
     *,
     behavior: str | None = "neutral",
     respawn_chance: int | None = 0,
+    aggressive_attack_chance: int | None = 0,
     spawn_limit: int | None = 2,
 ) -> content_store.WorldContent:
     location: dict[str, Any] = {
@@ -1658,6 +1670,8 @@ def _write_enemy_world(
         enemy["behavior"] = behavior
     if respawn_chance is not None:
         enemy["respawn_chance_percent"] = respawn_chance
+    if aggressive_attack_chance is not None:
+        enemy["aggressive_attack_chance_percent"] = aggressive_attack_chance
     world = content_store.WorldContent.model_validate(
         {"locations": [location], "entities": [enemy]}
     )
@@ -1676,11 +1690,13 @@ def test_enemy_spawn_settings_default_to_safe_values(
         monkeypatch,
         behavior=None,
         respawn_chance=None,
+        aggressive_attack_chance=None,
         spawn_limit=None,
     )
 
     assert world.entities[0].behavior == "neutral"
     assert world.entities[0].respawn_chance_percent == 0
+    assert world.entities[0].aggressive_attack_chance_percent == 0
     assert world.locations[0].enemy_spawn_limit == 1
 
 
@@ -2243,12 +2259,18 @@ def test_enemy_behavior_controls_retaliation(
     assert result["snapshot"]["character"]["stats"]["health"] == expected_health
 
 
-def test_aggressive_enemy_attacks_connected_players_every_30_seconds(
+def test_aggressive_enemy_attacks_connected_players_every_15_seconds_at_full_chance(
     client: TestClient,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _write_enemy_world(tmp_path, monkeypatch, behavior="aggressive", respawn_chance=0)
+    _write_enemy_world(
+        tmp_path,
+        monkeypatch,
+        behavior="aggressive",
+        respawn_chance=0,
+        aggressive_attack_chance=100,
+    )
     player = register(client, "aggressive@example.com", "Rill")
     assert client.get(
         "/api/v1/world/snapshot",
@@ -2266,20 +2288,15 @@ def test_aggressive_enemy_attacks_connected_players_every_30_seconds(
         websocket.send_json({"type": "auth", "token": player["token"]})
         assert websocket.receive_json() == {"type": "auth.ok"}
         api._run_enemy_aggression_tick()
-        first_update = websocket.receive_json()
-        assert first_update["type"] == "world.updated"
-        assert any("hits you for 1 damage" in message for message in first_update["payload"]["messages"])
-
-        api._run_enemy_aggression_tick()
         with api.SessionLocal() as db:
             character = db.scalar(
                 select(Character).where(Character.account_id == player["account_id"])
             )
-            assert character.combat_stats["health"] == 99
-            attack_times = dict(character.combat_state["enemy_attack_at"])
+            assert character.combat_stats["health"] == 100
+            attack_times = dict(character.combat_state["enemy_aggression_check_at"])
             character.combat_state = {
                 **character.combat_state,
-                "enemy_attack_at": {
+                "enemy_aggression_check_at": {
                     spawn_id: "2000-01-01T00:00:00"
                     for spawn_id in attack_times
                 },
@@ -2287,14 +2304,154 @@ def test_aggressive_enemy_attacks_connected_players_every_30_seconds(
             db.commit()
 
         api._run_enemy_aggression_tick()
-        second_update = websocket.receive_json()
-        assert second_update["type"] == "world.updated"
+        first_update = websocket.receive_json()
+        assert first_update["type"] == "world.updated"
+        assert any("hits you for 1 damage" in message for message in first_update["payload"]["messages"])
+
+        api._run_enemy_aggression_tick()
 
     with api.SessionLocal() as db:
         character = db.scalar(
             select(Character).where(Character.account_id == player["account_id"])
         )
-        assert character.combat_stats["health"] == 98
+        assert character.combat_stats["health"] == 99
+
+
+def test_aggressive_enemy_does_not_attack_with_default_zero_chance(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(
+        tmp_path,
+        monkeypatch,
+        behavior="aggressive",
+        respawn_chance=0,
+    )
+    player = register(client, "aggressive-zero-chance@example.com", "Rill")
+    assert client.get(
+        "/api/v1/world/snapshot",
+        headers=auth(player["token"]),
+    ).status_code == 200
+
+    class NoChanceRoll:
+        @staticmethod
+        def random() -> float:
+            raise AssertionError("A zero hit chance must not roll.")
+
+    monkeypatch.setattr(api, "_enemy_aggression_rng", NoChanceRoll())
+    with client.websocket_connect(
+        "/api/v1/live",
+        headers={"Origin": "http://localhost:5173"},
+    ) as websocket:
+        websocket.send_json({"type": "auth", "token": player["token"]})
+        assert websocket.receive_json() == {"type": "auth.ok"}
+        api._run_enemy_aggression_tick()
+
+    with api.SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == player["account_id"])
+        )
+        assert character.combat_stats["health"] == 100
+
+
+def test_aggressive_attack_chance_rolls_independently_per_player_every_15_seconds(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_enemy_world(
+        tmp_path,
+        monkeypatch,
+        behavior="aggressive",
+        respawn_chance=0,
+        aggressive_attack_chance=50,
+    )
+    players = [
+        register(client, "aggressive-chance-one@example.com", "Pine"),
+        register(client, "aggressive-chance-two@example.com", "Fern"),
+    ]
+    for player in players:
+        assert client.get(
+            "/api/v1/world/snapshot",
+            headers=auth(player["token"]),
+        ).status_code == 200
+
+    class MinimumRoll:
+        @staticmethod
+        def randint(minimum: int, _: int) -> int:
+            return minimum
+
+    class SequenceRoll:
+        def __init__(self) -> None:
+            self.values = iter((0.99, 0.0, 0.0, 0.99))
+            self.calls = 0
+
+        def random(self) -> float:
+            self.calls += 1
+            return next(self.values)
+
+    chance_rng = SequenceRoll()
+    monkeypatch.setattr(game, "combat_rng", MinimumRoll())
+    monkeypatch.setattr(api, "_enemy_aggression_rng", chance_rng)
+
+    def make_checks_due(account_id: str) -> None:
+        with api.SessionLocal() as db:
+            character = db.scalar(
+                select(Character).where(Character.account_id == account_id)
+            )
+            checks = dict(character.combat_state["enemy_aggression_check_at"])
+            character.combat_state = {
+                **character.combat_state,
+                "enemy_aggression_check_at": {
+                    spawn_id: "2000-01-01T00:00:00"
+                    for spawn_id in checks
+                },
+            }
+            db.commit()
+
+    ordered_accounts = sorted(player["account_id"] for player in players)
+    with client.websocket_connect(
+        "/api/v1/live",
+        headers={"Origin": "http://localhost:5173"},
+    ) as first_socket:
+        first_socket.send_json({"type": "auth", "token": players[0]["token"]})
+        assert first_socket.receive_json() == {"type": "auth.ok"}
+        with client.websocket_connect(
+            "/api/v1/live",
+            headers={"Origin": "http://localhost:5173"},
+        ) as second_socket:
+            second_socket.send_json({"type": "auth", "token": players[1]["token"]})
+            assert second_socket.receive_json() == {"type": "auth.ok"}
+
+            api._run_enemy_aggression_tick()
+            for account_id in ordered_accounts:
+                make_checks_due(account_id)
+            api._run_enemy_aggression_tick()
+            assert chance_rng.calls == 2
+
+            api._run_enemy_aggression_tick()
+            assert chance_rng.calls == 2
+            with api.SessionLocal() as db:
+                health_by_account = {
+                    character.account_id: character.combat_stats["health"]
+                    for character in db.scalars(select(Character)).all()
+                }
+            assert health_by_account[ordered_accounts[0]] == 100
+            assert health_by_account[ordered_accounts[1]] == 99
+
+            for account_id in ordered_accounts:
+                make_checks_due(account_id)
+            api._run_enemy_aggression_tick()
+            assert chance_rng.calls == 4
+
+    with api.SessionLocal() as db:
+        health_by_account = {
+            character.account_id: character.combat_stats["health"]
+            for character in db.scalars(select(Character)).all()
+        }
+    assert health_by_account[ordered_accounts[0]] == 99
+    assert health_by_account[ordered_accounts[1]] == 99
 
 
 def test_level_thresholds_grant_health_and_attack_increases() -> None:
