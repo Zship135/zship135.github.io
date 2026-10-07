@@ -16,6 +16,11 @@ PLAYER_BASE_STATS = {
     "defense": 1,
     "speed": 10,
 }
+ATTACK_INITIATIVE_MULTIPLIERS = {
+    "light_attack": 1.05,
+    "attack": 1.0,
+    "heavy_attack": 0.95,
+}
 EQUIPMENT_SLOTS = (
     "helm",
     "tunic",
@@ -744,6 +749,17 @@ def _normalize_npc_name(value: str) -> str:
 def _positive_stat(entity: dict[str, Any], key: str, default: int) -> int:
     value = entity.get("attributes", {}).get(key, default)
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else default
+
+
+def attack_initiative_relation(character: Any, action_id: str, enemy: dict[str, Any]) -> int:
+    stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
+    player_speed = stats["speed"] * ATTACK_INITIATIVE_MULTIPLIERS[action_id]
+    enemy_speed = _positive_stat(enemy, "speed", 0)
+    return (player_speed > enemy_speed) - (player_speed < enemy_speed)
+
+
+def roll_d20() -> int:
+    return combat_rng.randint(1, 20)
 
 
 def _matching_entities(

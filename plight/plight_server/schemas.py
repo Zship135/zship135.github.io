@@ -101,6 +101,11 @@ class CommandRequest(BaseModel):
         return text
 
 
+class RollRequest(BaseModel):
+    roll_id: UUID
+    request_id: UUID | None = None
+
+
 class DialogueChoiceRequest(BaseModel):
     npc_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     node_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")

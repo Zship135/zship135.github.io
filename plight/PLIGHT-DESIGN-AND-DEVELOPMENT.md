@@ -251,11 +251,12 @@ For parser tests, assert both the structured interpretation and the resulting ga
 
 These were deliberately left for focused design and implementation work:
 
-1. How should character speed, stamina, and other combat stats affect action budgets and initiative in immediate combat? If future actions become asynchronous, how should they be reconciled across latency and reconnects?
-2. What combat behaviors and weighted join rules should helpful NPCs use if they later participate in fights?
-3. Which skills, character backgrounds, appearance options, and religions are available at launch, and how do they affect mechanics?
-4. What resource respawn rules, NPC stock/prices, and shop inventories should populate the MVP world?
-5. What moderation/reporting tools are needed beyond initial word blocking and player blocking? Chat retention is set to 90 days in [NETWORKING-AND-UI-ARCHITECTURE.md](./NETWORKING-AND-UI-ARCHITECTURE.md).
-6. What clock and tick model drives weather, respawns, events, and offline simulation?
+The initial Speed-based attack initiative decision is implemented: attacks compare action-adjusted player Speed to each engaged non-passive enemy independently; light, normal, and heavy attacks use 1.05×, 1.0×, and 0.95× player Speed. The faster actor acts first. Exact Speed ties pause for player-triggered D20 rolls, and tied D20s require another click. An enemy that defeats the player before their turn cancels that attack. Defend and wait do not use initiative.
+
+1. What combat behaviors and weighted join rules should helpful NPCs use if they later participate in fights?
+2. Which skills, character backgrounds, appearance options, and religions are available at launch, and how do they affect mechanics?
+3. What resource respawn rules, NPC stock/prices, and shop inventories should populate the MVP world?
+4. What moderation/reporting tools are needed beyond initial word blocking and player blocking? Chat retention is set to 90 days in [NETWORKING-AND-UI-ARCHITECTURE.md](./NETWORKING-AND-UI-ARCHITECTURE.md).
+5. What clock and tick model drives weather, respawns, events, and offline simulation?
 
 The NLP action semantics, starter recipes, and marketplace/direct-trade lifecycle are specified in the companion NLP document. The initial laptop-hosted networking, browser UI, framework, database, transport, and backup decisions are recorded in [NETWORKING-AND-UI-ARCHITECTURE.md](./NETWORKING-AND-UI-ARCHITECTURE.md). Resolve the remaining system-specific questions just before those systems are built, using small prototypes and concrete test cases. The initial priority is to prove that players can express intent in ordinary text and reliably see that intent resolved within a persistent, shared world.

@@ -25,8 +25,15 @@ ACTION_ALIASES: dict[str, tuple[str, ...]] = {
     "talk": ("talk", "speak", "say", "tell", "ask", "whisper", "shout", "chat"),
     "travel": ("travel", "go", "walk", "run", "move", "head", "travel to", "sprint"),
     "attack": ("attack", "hit", "strike", "slash", "stab", "shoot", "kick", "fight"),
-    "light_attack": ("light attack", "poke", "prod", "tap", "flick", "nip"),
-    "heavy_attack": ("heavy attack", "smash", "crush", "demolish", "shatter"),
+    "light_attack": (
+        "light attack", "quick attack", "fast attack", "attack quickly", "attack fast",
+        "quickly attack", "poke", "prod", "tap", "flick", "nip",
+    ),
+    "heavy_attack": (
+        "heavy attack", "powerful attack", "strong attack", "attack with force",
+        "attack powerfully", "attack strongly", "attack forcefully",
+        "smash", "crush", "demolish", "shatter",
+    ),
     "defend": ("defend", "block", "parry", "dodge", "guard", "protect"),
     "wait": ("wait", "rest"),
     "gather": ("gather", "chop", "mine", "harvest", "collect", "forage"),
@@ -85,6 +92,15 @@ _ACTION_PATTERN = re.compile(
     )
     + r")(?!\w)",
     re.IGNORECASE,
+)
+_LIGHT_ATTACK_CUE_PATTERN = re.compile(r"\b(?:quick|quickly|fast)\b", re.I)
+_HEAVY_ATTACK_CUE_PATTERN = re.compile(
+    r"\b(?:powerful(?:ly)?|strong(?:ly)?|forcefully|with\s+(?:great\s+)?force)\b",
+    re.I,
+)
+_ATTACK_STYLE_CUE_PATTERN = re.compile(
+    rf"(?:{_LIGHT_ATTACK_CUE_PATTERN.pattern}|{_HEAVY_ATTACK_CUE_PATTERN.pattern})",
+    re.I,
 )
 
 _OPERATOR_PATTERN = re.compile(
@@ -199,6 +215,24 @@ def _find_mentions(text: str) -> list[_Mention]:
     return selected
 
 
+def _attack_action_for_text(action_id: str, text: str) -> str:
+    if action_id not in {"attack", "light_attack", "heavy_attack"}:
+        return action_id
+    has_light_cue = action_id == "light_attack" or bool(
+        _LIGHT_ATTACK_CUE_PATTERN.search(text)
+    )
+    has_heavy_cue = action_id == "heavy_attack" or bool(
+        _HEAVY_ATTACK_CUE_PATTERN.search(text)
+    )
+    if has_light_cue and has_heavy_cue:
+        return "attack"
+    if has_light_cue:
+        return "light_attack"
+    if has_heavy_cue:
+        return "heavy_attack"
+    return action_id
+
+
 def _clean_phrase(value: str) -> str:
     value = value.strip(" \t\r\n,.;:!?")
     value = _ARTICLE_PATTERN.sub("", value)
@@ -218,9 +252,15 @@ def _quantity_and_name(value: str) -> dict[str, Any]:
 
 
 def _extract_arguments(
-    text: str, mention: _Mention, raw_arguments: str, all_quoted: list[re.Match[str]]
+    text: str,
+    mention: _Mention,
+    raw_arguments: str,
+    all_quoted: list[re.Match[str]],
+    *,
+    action_id: str | None = None,
 ) -> dict[str, Any]:
     args: dict[str, Any] = {}
+    action_id = action_id or mention.action_id
     fragment = raw_arguments.strip(" \t\r\n,.;:!?")
     quote = next(
         (
@@ -306,13 +346,15 @@ def _extract_arguments(
             args["topic"] = _clean_phrase(topic.group(1))
         if quote is not None:
             args["utterance"] = quote
-    elif mention.action_id in {"attack", "light_attack", "heavy_attack"}:
-        target_end = re.search(r"\b(?:with|using|while|quickly|slowly|carefully)\b", fragment, re.I)
-        target = fragment[: target_end.start()] if target_end else fragment
+    elif action_id in {"attack", "light_attack", "heavy_attack"}:
+        attack_fragment = _ATTACK_STYLE_CUE_PATTERN.sub(" ", fragment)
+        target_end = re.search(r"\b(?:with|using|while|slowly|carefully)\b", attack_fragment, re.I)
+        target = attack_fragment[: target_end.start()] if target_end else attack_fragment
+        target = re.sub(r"^(?:at|on|against|toward|towards)\s+", "", target, flags=re.I)
         target = re.sub(r"\b(?:and|or)\s*$", "", target, flags=re.I)
         if _clean_phrase(target):
             args["subject"] = _clean_phrase(target)
-        instrument = re.search(r"\b(?:with|using)\s+(.+)$", fragment, re.I)
+        instrument = re.search(r"\b(?:with|using)\s+(.+)$", attack_fragment, re.I)
         if instrument:
             args["objects"] = [_quantity_and_name(instrument.group(1))]
     elif mention.action_id in {"gather"}:
@@ -593,11 +635,20 @@ def parse_local(text: str) -> dict[str, Any]:
                     raw_end = mentions[index + 1].start
             raw_arguments = text[mention.end : raw_end].strip(" \t\r\n,.;:!?")
             occurrence_id = f"action-{index + 1}"
+            action_id = _attack_action_for_text(
+                mention.action_id, f"{mention.phrase} {raw_arguments}"
+            )
             occurrences.append(
                 Occurrence(
                     occurrence_id=occurrence_id,
-                    action_id=mention.action_id,
-                    arguments=_extract_arguments(text, mention, raw_arguments, quoted_matches),
+                    action_id=action_id,
+                    arguments=_extract_arguments(
+                        text,
+                        mention,
+                        raw_arguments,
+                        quoted_matches,
+                        action_id=action_id,
+                    ),
                     source_span=(mention.start, mention.end),
                     phrase=mention.phrase,
                     raw_arguments=raw_arguments,
@@ -680,6 +731,7 @@ def parse_with_rpgnlp(text: str) -> dict[str, Any]:
                 "raw_rpgnlp": result,
             }
         canonical = action_id
+    canonical = _attack_action_for_text(canonical, text)
 
     args: dict[str, Any] = {}
     for source, target in (

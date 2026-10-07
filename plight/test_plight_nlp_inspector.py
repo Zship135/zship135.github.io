@@ -17,6 +17,35 @@ class LocalParserTests(unittest.TestCase):
             [{"name": "daggers", "quantity": 2}],
         )
 
+    def test_attack_style_phrases_map_to_canonical_actions(self):
+        examples = {
+            "attack the forest rat": "attack",
+            "hit the forest rat": "attack",
+            "slash the forest rat": "attack",
+            "shoot the forest rat": "attack",
+            "quick attack the forest rat": "light_attack",
+            "fast attack the forest rat": "light_attack",
+            "quickly attack the forest rat": "light_attack",
+            "attack the forest rat quickly": "light_attack",
+            "poke the forest rat": "light_attack",
+            "powerful attack against the forest rat": "heavy_attack",
+            "strong attack on the forest rat": "heavy_attack",
+            "attack the forest rat with force": "heavy_attack",
+            "attack the forest rat forcefully": "heavy_attack",
+            "smash the forest rat": "heavy_attack",
+        }
+        for text, action_id in examples.items():
+            with self.subTest(text=text):
+                occurrence = parse_local(text)["occurrences"][0]
+                self.assertEqual(occurrence["action_id"], action_id)
+                self.assertEqual(occurrence["arguments"]["subject"], "forest rat")
+
+    def test_light_and_heavy_cues_cancel_and_force_is_not_an_instrument(self):
+        occurrence = parse_local("quickly attack the forest rat with force")["occurrences"][0]
+        self.assertEqual(occurrence["action_id"], "attack")
+        self.assertEqual(occurrence["arguments"]["subject"], "forest rat")
+        self.assertNotIn("objects", occurrence["arguments"])
+
     def test_equip_extracts_hand_and_item(self):
         result = parse_local("Equip the iron sword in my right hand")
         occurrence = result["occurrences"][0]

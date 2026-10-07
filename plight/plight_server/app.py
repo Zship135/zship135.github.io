@@ -41,12 +41,14 @@ from plight_server.audio_assets import (
 from plight_server.game import (
     award_enemy_defeat,
     award_experience,
+    attack_initiative_relation,
     enemy_strike,
     initial_area,
     initialize_quest_step,
     resolve_attack_target_id,
     resolve_combat_occurrence,
     resolve_command,
+    roll_d20,
     snapshot,
 )
 from plight_server.models import (
@@ -79,6 +81,7 @@ from plight_server.schemas import (
     ProfileUpdateRequest,
     QuestChoiceRequest,
     RegisterRequest,
+    RollRequest,
 )
 from plight_server.security import authenticate_token, create_session, hash_password, verify_password
 
@@ -2699,34 +2702,114 @@ def _submit_command_locked(
     body: CommandRequest,
     account: Account,
     db: Session,
+    *,
+    roll_id: str | None = None,
 ) -> dict[str, Any]:
     prior = db.scalar(
         select(Command).where(Command.account_id == account.id, Command.request_id == str(body.request_id))
     )
+    resumed_initiative: dict[str, Any] | None = None
+    forced_initiative: dict[str, dict[str, list[str]]] = {}
     if prior is not None:
         if prior.raw_text != body.text:
             raise HTTPException(status_code=409, detail="That request ID was already used for different text.")
-        return {
-            "request_id": prior.request_id,
-            "status": prior.status,
-            "result": prior.result,
+        prior_result = dict(prior.result or {})
+        if roll_id is None:
+            return {"request_id": prior.request_id, "status": prior.status, "result": prior.result}
+        if prior_result.get("_last_roll_id") == roll_id:
+            return {"request_id": prior.request_id, "status": prior.status, "result": prior.result}
+        if prior.status != "awaiting_roll":
+            raise HTTPException(status_code=409, detail="This command is not waiting for an initiative roll.")
+        resumed_initiative = prior_result.pop("_pending_initiative_state", None)
+        if not isinstance(resumed_initiative, dict):
+            raise HTTPException(status_code=409, detail="The pending initiative state is unavailable.")
+        current_tie = resumed_initiative["tie_enemy_ids"][0]
+        player_roll = roll_d20()
+        enemy_roll = roll_d20()
+        roll_message = (
+            f"Roll for initiative:\nPlayer: {player_roll}\n{current_tie['name']}: {enemy_roll}"
+        )
+        prior_result.setdefault("messages", []).append(roll_message)
+        prior_result["roll_animation"] = {
+            "rolls": [
+                {"label": "Player", "value": player_roll},
+                {"label": current_tie["name"], "value": enemy_roll},
+            ],
+            "is_tie": player_roll == enemy_roll,
         }
+        prior_result["_last_roll_id"] = roll_id
+        if player_roll == enemy_roll:
+            prior_result["messages"][-1] += "\nTie—click Roll to try again."
+        else:
+            resolved_enemy_ids = list(resumed_initiative["tie_enemy_ids"][1:])
+            result_key = (
+                "before_enemy_ids" if enemy_roll > player_roll else "after_enemy_ids"
+            )
+            resumed_initiative[result_key].append(current_tie["spawn_id"])
+            resumed_initiative["tie_enemy_ids"] = resolved_enemy_ids
+        if player_roll == enemy_roll or resumed_initiative["tie_enemy_ids"]:
+            if player_roll != enemy_roll:
+                next_enemy = resumed_initiative["tie_enemy_ids"][0]
+                prior_result["messages"].append(
+                    f"Roll for initiative against {next_enemy['name']}."
+                )
+            prior_result["_pending_initiative_state"] = resumed_initiative
+            prior.result = prior_result
+            db.commit()
+            return {
+                "request_id": prior.request_id,
+                "status": "awaiting_roll",
+                "result": prior.result,
+            }
+        occurrence = resumed_initiative["occurrence"]
+        forced_initiative[occurrence["occurrence_id"]] = {
+            "before_enemy_ids": resumed_initiative["before_enemy_ids"],
+            "after_enemy_ids": resumed_initiative["after_enemy_ids"],
+        }
+        actions = [occurrence, *resumed_initiative["remaining_actions"]]
+        command = prior
+        command.status = "completed"
+        result = prior_result
+        result["messages"] = list(result.get("messages", []))
+        result["action_events"] = list(result.get("action_events", []))
+        result["dialogues"] = list(result.get("dialogues", []))
+        result["profile_account_ids"] = list(result.get("profile_account_ids", []))
+        result["observed_player_equipment"] = dict(result.get("observed_player_equipment", {}))
+        result.pop("_pending_initiative_state", None)
+        is_resuming = True
+    else:
+        pending_command = db.scalar(
+            select(Command).where(
+                Command.account_id == account.id,
+                Command.status == "awaiting_roll",
+            )
+        )
+        if pending_command is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Resolve the pending initiative roll before submitting another command.",
+            )
+        if roll_id is not None:
+            raise HTTPException(status_code=404, detail="Command request was not found.")
+        is_resuming = False
     if account.character is None:
         raise HTTPException(status_code=409, detail="Create a character before submitting commands.")
     character = account.character
     party = _party_for_account(db, account.id)
     scope_type = "party" if party is not None else "solo"
     scope_id = party.id if party is not None else account.id
-    command = Command(
-        account_id=account.id,
-        request_id=str(body.request_id),
-        raw_text=body.text,
-        status="completed",
-    )
+    if prior is None:
+        command = Command(
+            account_id=account.id,
+            request_id=str(body.request_id),
+            raw_text=body.text,
+            status="completed",
+        )
     party_notifications: dict[str, list[str]] = defaultdict(list)
     try:
-        db.add(command)
-        db.flush()
+        if not is_resuming:
+            db.add(command)
+            db.flush()
         content = world_content_dict()
         entities = {entity["id"]: entity for entity in content["entities"]}
         areas = {location["id"]: location for location in content["locations"]}
@@ -2759,32 +2842,34 @@ def _submit_command_locked(
                 Character.account_id != account.id,
             )
         ).all()
-        result = resolve_command(
-            body.text,
-            character,
-            available_players=nearby_players,
-            enemy_spawns_by_location=spawns_by_location,
-            defer_all_actions=True,
-        )
-        actions = result.pop("queued_actions", [])
-        result["messages"] = list(result.get("messages", []))
-        result["action_events"] = []
-        result["dialogues"] = list(result.get("dialogues", []))
-        result["profile_account_ids"] = list(result.get("profile_account_ids", []))
-        result["observed_player_equipment"] = dict(
-            result.get("observed_player_equipment", {})
-        )
-        result.pop("inventory_view", None)
+        if not is_resuming:
+            result = resolve_command(
+                body.text,
+                character,
+                available_players=nearby_players,
+                enemy_spawns_by_location=spawns_by_location,
+                defer_all_actions=True,
+            )
+            actions = result.pop("queued_actions", [])
+            result["messages"] = list(result.get("messages", []))
+            result["action_events"] = []
+            result["dialogues"] = list(result.get("dialogues", []))
+            result["profile_account_ids"] = list(result.get("profile_account_ids", []))
+            result["observed_player_equipment"] = dict(
+                result.get("observed_player_equipment", {})
+            )
+            result.pop("inventory_view", None)
         occurrence_order = {
             occurrence["occurrence_id"]: index
             for index, occurrence in enumerate(
                 result.get("interpretation", {}).get("occurrences", [])
             )
         }
-        for occurrence in sorted(
+        ordered_actions = sorted(
             actions,
             key=lambda item: occurrence_order.get(item["occurrence_id"], 0),
-        ):
+        )
+        for action_index, occurrence in enumerate(ordered_actions):
             location_id = character.area_id
             load_enemy_spawns(location_id)
             encounter_filter = (
@@ -2832,6 +2917,100 @@ def _submit_command_locked(
                     )
                     db.flush()
 
+            attack_initiative: dict[str, list[str]] | None = None
+            attack_interrupted = False
+            if is_attack and encounter is not None:
+                attack_initiative = forced_initiative.get(occurrence["occurrence_id"])
+                if attack_initiative is None:
+                    spawn_by_id = {
+                        spawn["id"]: spawn
+                        for spawn in spawns_by_location.get(location_id, [])
+                    }
+                    before_enemy_ids: list[str] = []
+                    after_enemy_ids: list[str] = []
+                    tie_enemy_ids: list[dict[str, str]] = []
+                    engagements = db.scalars(
+                        select(CombatEncounterEnemy)
+                        .where(CombatEncounterEnemy.encounter_id == encounter.id)
+                        .order_by(CombatEncounterEnemy.enemy_spawn_id)
+                    ).all()
+                    for engagement in engagements:
+                        spawn = spawn_by_id.get(engagement.enemy_spawn_id)
+                        enemy = entities.get(spawn["enemy_id"]) if spawn else None
+                        if spawn is None or not spawn["is_alive"] or enemy is None:
+                            continue
+                        if enemy.get("behavior", "neutral") == "passive":
+                            continue
+                        relation = attack_initiative_relation(
+                            character, action_id, enemy
+                        )
+                        if relation < 0:
+                            before_enemy_ids.append(spawn["id"])
+                        elif relation > 0:
+                            after_enemy_ids.append(spawn["id"])
+                        else:
+                            tie_enemy_ids.append(
+                                {"spawn_id": spawn["id"], "name": enemy["name"]}
+                            )
+                    if tie_enemy_ids:
+                        pending_state = {
+                            "occurrence": occurrence,
+                            "remaining_actions": ordered_actions[action_index + 1 :],
+                            "before_enemy_ids": before_enemy_ids,
+                            "after_enemy_ids": after_enemy_ids,
+                            "tie_enemy_ids": tie_enemy_ids,
+                        }
+                        next_enemy = tie_enemy_ids[0]
+                        result["messages"].append(
+                            f"Roll for initiative against {next_enemy['name']}."
+                        )
+                        result["snapshot"] = snapshot(character, spawns_by_location)
+                        result["_pending_initiative_state"] = pending_state
+                        command.status = "awaiting_roll"
+                        command.result = result
+                        _persist_enemy_spawn_state(spawn_rows, spawns_by_location)
+                        db.commit()
+                        for recipient_id, party_messages in party_notifications.items():
+                            live_hub.publish(
+                                recipient_id,
+                                f"account:{recipient_id}",
+                                {
+                                    "type": "world.updated",
+                                    "payload": {
+                                        "id": str(uuid4()),
+                                        "messages": party_messages,
+                                    },
+                                },
+                            )
+                        return {
+                            "request_id": command.request_id,
+                            "status": command.status,
+                            "result": command.result,
+                        }
+                    attack_initiative = {
+                        "before_enemy_ids": before_enemy_ids,
+                        "after_enemy_ids": after_enemy_ids,
+                    }
+                for enemy_spawn_id in attack_initiative["before_enemy_ids"]:
+                    spawn = next(
+                        (
+                            item
+                            for item in spawns_by_location.get(location_id, [])
+                            if item["id"] == enemy_spawn_id
+                        ),
+                        None,
+                    )
+                    enemy = entities.get(spawn["enemy_id"]) if spawn else None
+                    if spawn is None or not spawn["is_alive"] or enemy is None:
+                        continue
+                    strike_messages = enemy_strike(character, enemy, areas)
+                    result["messages"].extend(strike_messages)
+                    if character.area_id != location_id or any(
+                        message.startswith("You are defeated.") for message in strike_messages
+                    ):
+                        attack_interrupted = True
+                        break
+
             if encounter is None:
                 outcome = resolve_command(
                     body.text,
@@ -2862,11 +3041,18 @@ def _submit_command_locked(
                     0,
                 ),
                 occurrence=occurrence,
-                status="resolved",
+                status="cancelled" if attack_interrupted else "resolved",
                 submitted_at=utc_now(),
             )
             db.add(action_row)
-            if is_attack:
+            if attack_interrupted:
+                outcome = {
+                    "messages": [
+                        "Your attack is cancelled because you were defeated before acting."
+                    ],
+                    "defeated_enemy_id": None,
+                }
+            elif is_attack:
                 outcome = resolve_combat_occurrence(
                     character,
                     occurrence,
@@ -2887,7 +3073,8 @@ def _submit_command_locked(
                     "defeated_enemy_id": None,
                 }
             action_row.result = outcome
-            result["action_events"].append(action_id)
+            if not attack_interrupted:
+                result["action_events"].append(action_id)
             result["messages"].extend(outcome["messages"])
             result["dialogues"].extend(outcome.get("dialogues", []))
             result["profile_account_ids"].extend(
@@ -2955,6 +3142,12 @@ def _submit_command_locked(
                     db.delete(engagement)
                     engaged_ids.discard(engagement.enemy_spawn_id)
                     continue
+                if (
+                    is_attack
+                    and attack_initiative is not None
+                    and spawn["id"] not in attack_initiative["after_enemy_ids"]
+                ):
+                    continue
                 enemy = entities.get(spawn["enemy_id"])
                 if enemy is None or enemy.get("behavior", "neutral") == "passive":
                     continue
@@ -3000,7 +3193,7 @@ def _submit_command_locked(
                     result["messages"].append(f"{enemy['name']} joins the fight.")
 
             if party is not None:
-                if is_attack:
+                if is_attack and not attack_interrupted:
                     target = entities.get(
                         next(
                             (
@@ -3016,6 +3209,8 @@ def _submit_command_locked(
                         if target is not None
                         else f"{character.name} acts in combat."
                     )
+                elif attack_interrupted:
+                    activity = f"{character.name}'s attack is interrupted."
                 else:
                     activity = f"{character.name} takes a turn in combat."
                 for fighter in fighters:
@@ -3101,6 +3296,58 @@ def submit_command(
         db.refresh(character)
         with _enemy_world_lock:
             return _submit_command_locked(body, account, db)
+
+
+@app.post("/api/v1/roll")
+def roll_dice(
+    body: RollRequest,
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "dice_rolls", 60, 60)
+    if body.request_id is None:
+        value = roll_d20()
+        return {
+            "roll_id": str(body.roll_id),
+            "status": "completed",
+            "result": {
+                "messages": [f"You roll a D20: {value}."],
+                "roll_animation": {
+                    "rolls": [{"label": "Player", "value": value}],
+                    "is_tie": False,
+                },
+            },
+        }
+
+    with _character_lock(account.id):
+        db.refresh(_require_character(account))
+        with _enemy_world_lock:
+            command = db.scalar(
+                select(Command).where(
+                    Command.account_id == account.id,
+                    Command.request_id == str(body.request_id),
+                )
+            )
+            if command is None:
+                raise HTTPException(status_code=404, detail="Command request was not found.")
+            if command.status != "awaiting_roll":
+                if (command.result or {}).get("_last_roll_id") == str(body.roll_id):
+                    return {
+                        "request_id": command.request_id,
+                        "status": command.status,
+                        "result": command.result,
+                    }
+                raise HTTPException(
+                    status_code=409,
+                    detail="This command is not waiting for an initiative roll.",
+                )
+            return _submit_command_locked(
+                CommandRequest(request_id=body.request_id, text=command.raw_text),
+                account,
+                db,
+                roll_id=str(body.roll_id),
+            )
 
 
 @app.get("/api/v1/commands/{request_id}")

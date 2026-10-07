@@ -47,6 +47,7 @@ function activityMessageClass(message, entry) {
   if (entry.type === "location") return "world-text";
   if (entry.type === "enemy") return "enemy-text";
   if (/^(You gain \d+ experience\.|Loot:|No items dropped\.)/i.test(message)) return "reward-text";
+  if (/^(Roll for initiative:|Roll for initiative against|You roll a D20:)/i.test(message)) return "initiative-text";
   if (/\brolls D\d+\b|\bhits you for\b|\bis defeated\b/i.test(message)) return "enemy-text";
   return "player-text";
 }
@@ -153,6 +154,9 @@ export default function App() {
   const [characterError, setCharacterError] = useState("");
   const [characterBusy, setCharacterBusy] = useState(false);
   const [activity, setActivity] = useState([]);
+  const [pendingRollRequestId, setPendingRollRequestId] = useState(null);
+  const [rollBusy, setRollBusy] = useState(false);
+  const [rollAnimation, setRollAnimation] = useState(null);
   const [dialogueBusyKey, setDialogueBusyKey] = useState("");
   const [questBusyId, setQuestBusyId] = useState("");
   const [canEditContent, setCanEditContent] = useState(false);
@@ -261,14 +265,21 @@ export default function App() {
     audioUrlsRef.current.clear();
   }, []);
 
+  useEffect(() => {
+    if (!rollAnimation || rollAnimation.rolling) return undefined;
+    const timer = window.setTimeout(() => setRollAnimation(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [rollAnimation]);
+
   const queueActionSounds = useCallback((actionIds, soundAssignments) => {
     if (!Array.isArray(actionIds) || actionIds.length === 0) return;
     const playSounds = async () => {
       for (const actionId of actionIds) {
         if (!audioEnabledRef.current) return;
+        const isAttack = ["attack", "light_attack", "heavy_attack"].includes(actionId);
         const assetId = soundAssignments?.[actionId];
-        if (!assetId) continue;
-        const source = await getAudioSource(assetId);
+        if (!isAttack && !assetId) continue;
+        const source = isAttack ? "/audio/fight.mp3" : await getAudioSource(assetId);
         if (!audioEnabledRef.current) return;
         const player = new Audio(source);
         player.volume = audioVolumeRef.current;
@@ -285,6 +296,23 @@ export default function App() {
       .then(playSounds, playSounds)
       .catch((error) => setAudioError(`Action sound could not play: ${error.message}`));
   }, [getAudioSource]);
+  const playRollSound = useCallback(() => {
+    const play = async () => {
+      if (!audioEnabledRef.current) return;
+      const player = new Audio("/audio/dice.mp3");
+      player.volume = audioVolumeRef.current;
+      actionAudioRef.current = player;
+      await new Promise((resolve, reject) => {
+        player.addEventListener("ended", resolve, { once: true });
+        player.addEventListener("pause", resolve, { once: true });
+        player.addEventListener("error", () => reject(new Error("The dice sound could not be played.")), { once: true });
+        player.play().catch(reject);
+      });
+    };
+    actionSoundQueueRef.current = actionSoundQueueRef.current
+      .then(play, play)
+      .catch((error) => setAudioError(error.message));
+  }, []);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [peopleBusy, setPeopleBusy] = useState(false);
   const [peopleError, setPeopleError] = useState("");
@@ -473,6 +501,10 @@ export default function App() {
         if (result.status === "queued") continue;
         setActivity((current) => upsertActivity(current, result));
         await refreshWorld(sessionToken);
+        if (result.status === "awaiting_roll") {
+          setPendingRollRequestId(item.request_id);
+          break;
+        }
         const remaining = loadPendingCommands(ownerAccountId).filter((entry) => entry.request_id !== item.request_id);
         sessionStorage.setItem(pendingCommandsKey(ownerAccountId), JSON.stringify(remaining));
       }
@@ -964,7 +996,7 @@ export default function App() {
 
   async function runCommand(text) {
     text = text.trim();
-    if (!text || commandBusy) return;
+    if (!text || commandBusy || pendingRollRequestId) return;
     setCommandBusy(true);
     setNotice("");
     const request = { request_id: crypto.randomUUID(), text };
@@ -977,7 +1009,9 @@ export default function App() {
         method: "POST",
         body: JSON.stringify(request),
       });
-      if (result.status !== "queued") {
+      if (result.status === "awaiting_roll") {
+        setPendingRollRequestId(result.request_id);
+      } else if (result.status !== "queued") {
         removePendingCommand(accountId, request.request_id);
       }
       queueActionSounds(
@@ -1001,6 +1035,39 @@ export default function App() {
       setCommandBusy(false);
     }
 
+  }
+
+  async function rollD20() {
+    if (commandBusy || rollBusy) return;
+    setRollBusy(true);
+    setRollAnimation({ rolling: true, rolls: [] });
+    playRollSound();
+    try {
+      const body = { roll_id: crypto.randomUUID() };
+      if (pendingRollRequestId) body.request_id = pendingRollRequestId;
+      const result = await api("/api/v1/roll", {
+        token,
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const requestId = pendingRollRequestId;
+      if (requestId && result.status !== "awaiting_roll") {
+        removePendingCommand(accountId, requestId);
+        setPendingRollRequestId(null);
+      }
+      setActivity((current) => upsertActivity(current, result));
+      if (result.result?.roll_animation) setRollAnimation(result.result.roll_animation);
+      queueActionSounds(
+        result.result?.action_events,
+        result.result?.snapshot?.action_sounds || snapshot?.action_sounds,
+      );
+      await refreshWorld(token);
+    } catch (error) {
+      setRollAnimation(null);
+      showError(error);
+    } finally {
+      setRollBusy(false);
+    }
   }
 
   async function submitCommand(event) {
@@ -1269,7 +1336,7 @@ export default function App() {
           >
             <div className="activity-stream-content">
               {activity.map((entry) => (
-                <article className="action-result" key={entry.id || entry.request_id}>
+                <article className="action-result" key={entry.id || entry.request_id || entry.roll_id}>
                   {entry.type === "location" && <p className="world-text">{entry.text}</p>}
                   {(entry.result?.messages || []).map((message, messageIndex) => (
                     <p className={activityMessageClass(message, entry)} key={messageIndex}>{message}</p>
@@ -1302,12 +1369,24 @@ export default function App() {
               ))}
             </div>
           </div>
+          {rollAnimation && (
+            <div aria-live="assertive" className={`dice-roll-popup${rollAnimation.rolling ? " rolling" : ""}`} role="status">
+              {rollAnimation.rolling ? <span>Rolling D20…</span> : rollAnimation.rolls.map((roll) => (
+                <span className="dice-roll-result" key={roll.label}>
+                  <strong>{roll.value}</strong>
+                  <small>{roll.label}</small>
+                </span>
+              ))}
+            </div>
+          )}
           <form className="command-compose" onSubmit={submitCommand}>
             <label className="sr-only" htmlFor="command-input">Enter a command</label>
+            {pendingRollRequestId && <p className="initiative-prompt">Roll for initiative to resolve your attack.</p>}
             <div className="command-entry">
               <span aria-hidden="true" className="prompt-mark">›</span>
-              <input autoComplete="off" id="command-input" maxLength={500} onChange={(event) => setCommand(event.target.value)} placeholder="Type 'help' if help is needed" value={command} />
-              <button aria-label="Submit action" className="send-button" disabled={!command.trim() || commandBusy} type="submit">{commandBusy ? "…" : "↗"}</button>
+              <input autoComplete="off" disabled={Boolean(pendingRollRequestId) || commandBusy} id="command-input" maxLength={500} onChange={(event) => setCommand(event.target.value)} placeholder="Type 'help' if help is needed" value={command} />
+              <button aria-label="Roll D20" className="roll-button" disabled={commandBusy || rollBusy} onClick={rollD20} type="button">{rollBusy ? "…" : "Roll"}</button>
+              <button aria-label="Submit action" className="send-button" disabled={!command.trim() || commandBusy || Boolean(pendingRollRequestId)} type="submit">{commandBusy ? "…" : "↗"}</button>
             </div>
           </form>
         </section>

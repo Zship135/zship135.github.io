@@ -907,6 +907,7 @@ def test_combat_uses_only_right_hand_and_enemy_attack_die(client: TestClient, mo
     with api.SessionLocal() as db:
         character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
         character.inventory = {"iron_sword": 1, "wooden_club": 1}
+        character.combat_stats = {**game.PLAYER_BASE_STATS, "speed": 11}
         db.commit()
 
     headers = auth(registered["token"])
@@ -944,6 +945,165 @@ def test_combat_uses_only_right_hand_and_enemy_attack_die(client: TestClient, mo
     enemy = result["snapshot"]["area"]["enemies"][0]
     assert enemy["health"] == 6
     assert enemy["attack_die_sides"] == 2
+
+
+def test_equal_speed_attack_waits_for_player_roll_and_rerolls_ties(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registered = register(client, "initiative-roll@example.com", "Briar", "goblin")
+
+    class SequenceRoll:
+        def __init__(self) -> None:
+            self.values = iter((5, 5, 2, 10, 1))
+
+        def randint(self, minimum: int, maximum: int) -> int:
+            value = next(self.values)
+            assert minimum <= value <= maximum
+            return value
+
+    monkeypatch.setattr(game, "combat_rng", SequenceRoll())
+    headers = auth(registered["token"])
+    request_id = "adf0f265-edca-449a-8ce5-100000000032"
+    submitted = client.post(
+        "/api/v1/commands",
+        headers=headers,
+        json={"request_id": request_id, "text": "attack the forest rat"},
+    ).json()
+
+    assert submitted["status"] == "awaiting_roll"
+    assert submitted["result"]["action_events"] == []
+    assert submitted["result"]["messages"] == ["Roll for initiative against Forest rat."]
+    tied = client.post(
+        "/api/v1/roll",
+        headers=headers,
+        json={
+            "roll_id": "adf0f265-edca-449a-8ce5-100000000033",
+            "request_id": request_id,
+        },
+    ).json()
+    assert tied["status"] == "awaiting_roll"
+    assert "Tie—click Roll to try again." in tied["result"]["messages"][-1]
+    assert tied["result"]["roll_animation"]["is_tie"] is True
+
+    resolved = client.post(
+        "/api/v1/roll",
+        headers=headers,
+        json={
+            "roll_id": "adf0f265-edca-449a-8ce5-100000000034",
+            "request_id": request_id,
+        },
+    ).json()
+    messages = resolved["result"]["messages"]
+    assert resolved["status"] == "completed"
+    assert any("Roll for initiative:\nPlayer: 2\nForest rat: 10" in message for message in messages)
+    assert next(index for index, message in enumerate(messages) if "rolls D2" in message) < next(
+        index for index, message in enumerate(messages) if "You strike Forest rat" in message
+    )
+    assert resolved["result"]["action_events"] == ["attack"]
+
+
+@pytest.mark.parametrize(
+    ("text", "action_id", "expected_order"),
+    [
+        ("quick attack the forest rat", "light_attack", ("strike", "rolls D2")),
+        ("smash the forest rat", "heavy_attack", ("rolls D2", "strike")),
+    ],
+)
+def test_attack_style_speed_modifier_orders_player_and_enemy(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+    action_id: str,
+    expected_order: tuple[str, str],
+) -> None:
+    registered = register(client, f"{action_id}@example.com", "Briar", "goblin")
+
+    class FixedRoll:
+        @staticmethod
+        def randint(_: int, __: int) -> int:
+            return 1
+
+    monkeypatch.setattr(game, "combat_rng", FixedRoll())
+    result = client.post(
+        "/api/v1/commands",
+        headers=auth(registered["token"]),
+        json={"request_id": str(uuid4()), "text": text},
+    ).json()
+    messages = result["result"]["messages"]
+
+    assert result["status"] == "completed"
+    assert result["result"]["action_events"] == [action_id]
+    assert not any(message.startswith("Roll for initiative") for message in messages)
+    assert next(index for index, message in enumerate(messages) if expected_order[0] in message) < next(
+        index for index, message in enumerate(messages) if expected_order[1] in message
+    )
+
+
+def test_faster_enemy_can_defeat_player_before_attack_is_resolved(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registered = register(client, "initiative-defeat@example.com", "Briar", "goblin")
+
+    class SequenceRoll:
+        def __init__(self) -> None:
+            self.values = iter((2, 10, 1))
+
+        def randint(self, minimum: int, maximum: int) -> int:
+            value = next(self.values)
+            assert minimum <= value <= maximum
+            return value
+
+    monkeypatch.setattr(game, "combat_rng", SequenceRoll())
+    with api.SessionLocal() as db:
+        character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
+        character.combat_stats = {**game.PLAYER_BASE_STATS, "health": 1, "speed": 10}
+        db.commit()
+
+    headers = auth(registered["token"])
+    request_id = "adf0f265-edca-449a-8ce5-100000000035"
+    submitted = client.post(
+        "/api/v1/commands",
+        headers=headers,
+        json={"request_id": request_id, "text": "attack the forest rat"},
+    ).json()
+    result = client.post(
+        "/api/v1/roll",
+        headers=headers,
+        json={
+            "roll_id": "adf0f265-edca-449a-8ce5-100000000036",
+            "request_id": request_id,
+        },
+    ).json()
+
+    messages = result["result"]["messages"]
+    assert submitted["status"] == "awaiting_roll"
+    assert result["status"] == "completed"
+    assert any("You are defeated." in message for message in messages)
+    assert any("Your attack is cancelled because you were defeated before acting." == message for message in messages), messages
+    assert not any("You strike Forest rat" in message for message in messages)
+    assert result["result"]["action_events"] == []
+
+
+def test_standalone_roll_returns_a_logged_d20_result(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registered = register(client, "standalone-roll@example.com", "Briar", "goblin")
+
+    class FixedRoll:
+        @staticmethod
+        def randint(_: int, __: int) -> int:
+            return 17
+
+    monkeypatch.setattr(game, "combat_rng", FixedRoll())
+    result = client.post(
+        "/api/v1/roll",
+        headers=auth(registered["token"]),
+        json={"roll_id": "adf0f265-edca-449a-8ce5-100000000037"},
+    ).json()
+
+    assert result["status"] == "completed"
+    assert result["result"]["messages"] == ["You roll a D20: 17."]
+    assert result["result"]["roll_animation"]["rolls"] == [{"label": "Player", "value": 17}]
 
 
 def test_defend_reduces_the_immediate_enemy_response(
@@ -1000,7 +1160,7 @@ def test_defeat_restores_player_and_enemy_at_species_start(client: TestClient, m
             "max_health": 100,
             "attack": 3,
             "defense": 1,
-            "speed": 10,
+            "speed": 9,
         }
         db.commit()
 
@@ -1577,6 +1737,7 @@ def test_slug_defeat_awards_configured_experience_and_loot(
     with api.SessionLocal() as db:
         character = db.scalar(select(Character).where(Character.account_id == player["account_id"]))
         character.area_id = "new_location_2"
+        character.combat_stats = {**game.PLAYER_BASE_STATS, "speed": 11}
         character.combat_state = {"target_id": None, "enemy_health": {}}
         db.commit()
 
