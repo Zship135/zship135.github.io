@@ -13,6 +13,7 @@ export default defineConfig(({ mode }) => {
     `script-src 'self'${devInline}`,
     `style-src 'self'${devInline}`,
     "img-src 'self' data: blob:",
+    "media-src 'self' blob:",
     `connect-src 'self' ${apiOrigin} ${websocketOrigin}${devSocket}`,
     "object-src 'none'",
     "base-uri 'self'",
