@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiBlob, liveUrl } from "./api.js";
 import ContentStudio from "./ContentStudio.jsx";
+import Dice3D from "./Dice3D.jsx";
 import { friendAction } from "./playerProfile.js";
 import {
   EQUIPMENT_SLOT_GROUPS,
@@ -267,7 +268,7 @@ export default function App() {
 
   useEffect(() => {
     if (!rollAnimation || rollAnimation.rolling) return undefined;
-    const timer = window.setTimeout(() => setRollAnimation(null), 1800);
+    const timer = window.setTimeout(() => setRollAnimation(null), 3600);
     return () => window.clearTimeout(timer);
   }, [rollAnimation]);
 
@@ -1370,12 +1371,16 @@ export default function App() {
             </div>
           </div>
           {rollAnimation && (
-            <div aria-live="assertive" className={`dice-roll-popup${rollAnimation.rolling ? " rolling" : ""}`} role="status">
-              {rollAnimation.rolling ? <span>Rolling D20…</span> : rollAnimation.rolls.map((roll) => (
-                <span className="dice-roll-result" key={roll.label}>
-                  <strong>{roll.value}</strong>
-                  <small>{roll.label}</small>
-                </span>
+            <div aria-live="assertive" className="dice-roll-popup" role="status">
+              <span className="sr-only">
+                {rollAnimation.rolling ? "Rolling D20" : rollAnimation.rolls.map((roll) => `${roll.label}: ${roll.value}`).join(", ")}
+              </span>
+              {Array.from({ length: Math.max(1, rollAnimation.rolls.length) }, (_, index) => (
+                <Dice3D
+                  key={index}
+                  label={rollAnimation.rolls[index]?.label}
+                  value={rollAnimation.rolls[index]?.value ?? null}
+                />
               ))}
             </div>
           )}
