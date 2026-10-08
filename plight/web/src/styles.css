@@ -474,3 +474,5 @@ a { color: inherit; text-decoration: none; }
 .shop-offers h3 { margin: 0; font-size: 12px; }
 .shop-offer { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
 .shop-offer small { opacity: .75; }
+.shop-offer-button { display: flex; justify-content: space-between; gap: 12px; text-align: left; }
+.shop-wallet { display: flex; gap: 12px; padding: 4px 0; }

@@ -39,6 +39,8 @@ from plight_server.audio_assets import (
     save_mp3_audio,
 )
 from plight_server.game import (
+    _buy_from_npc,
+    _shop_window,
     _add_currency,
     _currency_text,
     _complete_gathering,
@@ -76,6 +78,7 @@ from plight_server.schemas import (
     CharacterCreateRequest,
     CommandRequest,
     DialogueChoiceRequest,
+    ShopBuyRequest,
     FriendRequestCreate,
     FriendRequestUpdate,
     LoginRequest,
@@ -2538,6 +2541,43 @@ def update_content(
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return {"revision": revision, "saved": "World content is now active."}
+
+
+@app.post("/api/v1/shop/buy")
+def shop_buy(
+    body: ShopBuyRequest,
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "shop_buy", 60, 60)
+    character = _require_character(account)
+    with _character_lock(account.id):
+        db.refresh(character)
+        content = world_content_dict()
+        entities = {entity["id"]: entity for entity in content["entities"]}
+        areas = {location["id"]: location for location in content["locations"]}
+        npc = entities.get(body.npc_id)
+        area = areas.get(character.area_id)
+        item = entities.get(body.item_id)
+        if (
+            npc is None
+            or npc["type"] != "npc"
+            or area is None
+            or body.npc_id not in area["npc_ids"]
+            or character.species not in npc["present_for"]
+            or not npc.get("stock")
+        ):
+            raise HTTPException(status_code=404, detail="That shop is not available here.")
+        if item is None:
+            raise HTTPException(status_code=404, detail="That item is not for sale.")
+        messages = _buy_from_npc(character, npc, item, body.quantity, content, areas, entities)
+        db.commit()
+        return {
+            "messages": messages,
+            "shop": _shop_window(character, npc, entities, content),
+            "snapshot": _snapshot_for_character(character, db),
+        }
 
 
 @app.post("/api/v1/dialogue/choice")

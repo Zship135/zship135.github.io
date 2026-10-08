@@ -112,6 +112,12 @@ class DialogueChoiceRequest(BaseModel):
     choice_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
 
 
+class ShopBuyRequest(BaseModel):
+    npc_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    item_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    quantity: int = Field(default=1, ge=1, le=99)
+
+
 class QuestChoiceRequest(BaseModel):
     step_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     choice_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")

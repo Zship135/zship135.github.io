@@ -1135,6 +1135,34 @@ export default function App() {
     }
   }
 
+  async function buyFromShop(entry, dialogue, offer) {
+    const busyKey = `${entry.request_id}:${dialogue.occurrence_id}`;
+    setDialogueBusyKey(busyKey);
+    setNotice("");
+    try {
+      const result = await api("/api/v1/shop/buy", {
+        token,
+        method: "POST",
+        body: JSON.stringify({ npc_id: dialogue.npc_id, item_id: offer.item_id, quantity: 1 }),
+      });
+      queueActionSounds(["shop_buy"], snapshot?.action_sounds);
+      setSnapshot(result.snapshot);
+      setActivity((current) => current.map((currentEntry) => {
+        if (currentEntry.request_id !== entry.request_id) return currentEntry;
+        const dialogues = (currentEntry.result?.dialogues || []).map((currentDialogue) => (
+          currentDialogue.occurrence_id === dialogue.occurrence_id
+            ? { ...currentDialogue, ...result.shop, occurrence_id: currentDialogue.occurrence_id, notice: result.messages.join(" ") }
+            : currentDialogue
+        ));
+        return { ...currentEntry, result: { ...currentEntry.result, dialogues } };
+      }));
+    } catch (error) {
+      showError(error);
+    } finally {
+      setDialogueBusyKey("");
+    }
+  }
+
   async function runQuestAction(quest, action, body) {
     setQuestBusyId(quest.id);
     setNotice("");
@@ -1454,28 +1482,6 @@ export default function App() {
                 <article className="world-entity npc-entity" key={npc.id}>
                   <strong>{npc.name}</strong><p>{npc.description}</p>
                   <button onClick={() => enterCommand(`talk to ${npc.name}`)} type="button">Talk</button>
-                  {(npc.shop || []).length > 0 && (
-                    <section className="shop-offers" aria-label={`${npc.name} shop`}>
-                      <h3>Shop</h3>
-                      {npc.shop.map((offer) => (
-                        <div className="shop-offer" key={offer.item_id}>
-                          <span>{offer.item_name} · {offer.price_text}</span>
-                          <small>
-                            {offer.remaining > 0
-                              ? `${offer.remaining} left`
-                              : `Sold out${offer.restock_seconds_remaining ? ` · restocks in ${offer.restock_seconds_remaining}s` : ""}`}
-                          </small>
-                          <button
-                            disabled={offer.remaining <= 0}
-                            onClick={() => enterCommand(`buy 1 ${offer.item_name} from ${npc.name}`)}
-                            type="button"
-                          >
-                            Buy
-                          </button>
-                        </div>
-                      ))}
-                    </section>
-                  )}
                   {(npc.quests || []).map((quest) => (
                     <section className="quest-offer" key={quest.id}>
                       <h3>{quest.title}</h3>
@@ -1987,3 +1993,4 @@ function WorldEntityList({ title, entities, renderItem }) {
     </section>
   );
 }
+

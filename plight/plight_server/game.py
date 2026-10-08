@@ -296,6 +296,39 @@ def _buy(
     if len(offers) > 1:
         return [f"Who do you want to buy {offers[0][2]['name']} from: {', '.join(offer[0]['name'] for offer in offers)}?"]
     npc, entry, item = offers[0]
+    return _complete_purchase(character, npc, entry, item, quantity, content, current_time)
+
+
+def _buy_from_npc(
+    character: Any,
+    npc: dict[str, Any],
+    item: dict[str, Any],
+    quantity: int,
+    content: dict[str, Any],
+    areas: dict[str, dict[str, Any]],
+    entities: dict[str, dict[str, Any]],
+    now: float | None = None,
+) -> list[str]:
+    entry = next(
+        (candidate for candidate in npc.get("stock", []) if candidate["item_id"] == item["id"]),
+        None,
+    )
+    if entry is None:
+        return [f"{npc['name']} is not selling {item['name']}."]
+    current_time = time.time() if now is None else now
+    return _complete_purchase(character, npc, entry, item, max(1, quantity), content, current_time)
+
+
+def _complete_purchase(
+    character: Any,
+    npc: dict[str, Any],
+    entry: dict[str, Any],
+    item: dict[str, Any],
+    quantity: int,
+    content: dict[str, Any],
+    current_time: float,
+) -> list[str]:
+    currencies = {currency["id"]: currency for currency in content.get("currencies", [])}
     currency_id = entry.get("currency_id")
     if currency_id not in currencies:
         return [f"{npc['name']} has not set a price for {item['name']}."]
@@ -340,6 +373,56 @@ def _buy(
         f"You buy {_quantity_name(quantity, item['name'])} from {npc['name']} "
         f"for {_currency_text(currencies, currency_id, total)}."
     ]
+
+
+def _shop_window(
+    character: Any,
+    npc: dict[str, Any],
+    entities: dict[str, dict[str, Any]],
+    content: dict[str, Any],
+    now: float | None = None,
+) -> dict[str, Any]:
+    currencies = {currency["id"]: currency for currency in content.get("currencies", [])}
+    return {
+        "kind": "shop",
+        "npc_id": npc["id"],
+        "npc_name": npc["name"],
+        "title": "Shop",
+        "text": f"{npc['name']} shows you their wares.",
+        "choices": [],
+        "offers": _shop_view(
+            character, npc, entities, currencies, time.time() if now is None else now
+        ),
+        "wallet": _wallet_view(character, content),
+    }
+
+
+def _open_shop(
+    character: Any,
+    shop_text: str,
+    content: dict[str, Any],
+    areas: dict[str, dict[str, Any]],
+    entities: dict[str, dict[str, Any]],
+) -> tuple[list[str], dict[str, Any] | None]:
+    area = areas.get(character.area_id)
+    if area is None:
+        return ["You are not in a valid location."], None
+    shopkeepers = [
+        entities[npc_id]
+        for npc_id in area["npc_ids"]
+        if character.species in entities[npc_id]["present_for"]
+        and entities[npc_id].get("stock")
+    ]
+    shop_text = re.sub(r"^(?:from\s+)?(?:the\s+|a\s+|an\s+)?", "", shop_text.strip(), flags=re.I)
+    if shop_text:
+        shopkeepers = _matching_entities(shop_text, shopkeepers)
+        if not shopkeepers:
+            return [f"There is no shop called {shop_text} here."], None
+    if not shopkeepers:
+        return ["Nobody here is selling anything."], None
+    if len(shopkeepers) > 1:
+        return [f"Whose shop do you mean: {', '.join(npc['name'] for npc in shopkeepers)}?"], None
+    return [], _shop_window(character, shopkeepers[0], entities, content)
 
 
 def _luck_bonuses(character: Any, now: float | None = None) -> tuple[int, int]:
@@ -817,12 +900,6 @@ def _snapshot(
         if character.species in entities[entity_id]["present_for"]
     ]
     npcs = visible_entities(visible_npc_ids)
-    currency_map = {currency["id"]: currency for currency in content.get("currencies", [])}
-    snapshot_time = time.time()
-    for npc_view in npcs:
-        npc_view["shop"] = _shop_view(
-            character, entities[npc_view["id"]], entities, currency_map, snapshot_time
-        )
     objects = visible_entities(area["object_ids"])
     resources = visible_entities(area["resource_ids"])
     for resource_view in resources:
@@ -1215,7 +1292,23 @@ def resolve_command(
         elif action_id == "craft":
             messages.extend(_craft(character, args, content, areas, entities))
         elif action_id == "shop_buy":
-            messages.extend(_buy(character, args, content, areas, entities))
+            item_text = _command_subject(args, "item", "subject", "target").strip()
+            shop_text = str(args.get("shop") or "").strip()
+            raw_text = str(occurrence.get("raw_arguments") or "").strip()
+            browsing = (
+                not item_text
+                or bool(re.match(r"from\b", item_text, flags=re.I))
+                or (not args and bool(raw_text))
+            )
+            if browsing:
+                target = shop_text or (raw_text if not item_text else item_text)
+                shop_messages, shop = _open_shop(character, target, content, areas, entities)
+                messages.extend(shop_messages)
+                if shop is not None:
+                    messages.append(f"You browse {shop['npc_name']}'s shop.")
+                    dialogues.append({"occurrence_id": occurrence["occurrence_id"], **shop})
+            else:
+                messages.extend(_buy(character, args, content, areas, entities))
         elif action_id == "shop_sell":
             messages.append("Shopkeepers here do not buy items back.")
         elif action_id == "use_item":

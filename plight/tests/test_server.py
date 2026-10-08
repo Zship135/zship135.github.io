@@ -3497,3 +3497,32 @@ def test_currency_drop_and_per_player_shop_restock(
     assert game._buy(other, args, content, areas, entities, now=120)[0].startswith("You buy")
 
 
+
+
+def test_buy_from_npc_opens_shop_window_and_buys_via_helper(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = _currency_world(tmp_path, monkeypatch)
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    areas = {location["id"]: location for location in content["locations"]}
+    character = SimpleNamespace(
+        account_id="a", id="c", name="Ari", appearance="", combat_state={}, respawn_area_id=None,
+        equipment={"left_hand": "", "right_hand": "fist"}, skills={}, skill_experience={},
+        resource_state={}, gathering_state=None, active_effects=[], experience=0,
+        combat_stats={"health": 100, "max_health": 100, "attack": 3, "defense": 1, "speed": 10},
+        area_id="market", species="human", inventory={}, wallet={"gold": 10}, shop_state={}, quest_state={},
+    )
+    result = game.resolve_command("buy from Trader", character)
+    window = result["dialogues"][0]
+    assert window["kind"] == "shop"
+    assert window["offers"][0]["item_name"] == "Tonic"
+    assert window["offers"][0]["remaining"] == 2
+    assert result["dialogues"][0]["npc_name"] == "Trader"
+    messages = game._buy_from_npc(
+        character, entities["trader"], entities["tonic"], 1, content, areas, entities
+    )
+    assert messages[0].startswith("You buy 1 Tonic")
+    assert game._shop_window(character, entities["trader"], entities, content)["offers"][0]["remaining"] == 1
+
+

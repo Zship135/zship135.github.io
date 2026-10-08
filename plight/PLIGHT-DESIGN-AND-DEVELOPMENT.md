@@ -162,7 +162,7 @@ Recipes can produce items, weapons, or shields and define ingredients, an option
 - Players earn currency from enemy `currency_drops` (chance plus min/max amount, boosted by drop-chance luck effects) and quest `reward_currencies` (granted at turn-in). Gathering does not pay currency, and there is no exchange or death penalty.
 - A shop stock entry has an item, a price, a `currency_id`, a `quantity` and `restock_seconds` (default 300). Entries with no currency cannot be bought. Shops do not buy items back (`sell` replies that they don't).
 - Stock is tracked per player in `Character.shop_state`: buying reduces that player's remaining quantity, and the first purchase starts a restock timer that resets the quantity when it elapses. Other players are unaffected.
-- Players use `buy [quantity] <item> [from <npc>]` or the Buy button in the NPC panel. Deleting a currency removes its drops and rewards and clears the currency on stock entries.
+- Players type `buy from <npc>` (or `shop <npc>`) to open the NPC's shop in a dialogue-style window in the activity stream, with a Buy button per offer that updates stock and wallet in place. `buy [quantity] <item> [from <npc>]` still buys directly (`POST /api/v1/shop/buy` backs the window). Deleting a currency removes its drops and rewards and clears the currency on stock entries.
 
 ### Shops and player marketplace
 
@@ -283,3 +283,4 @@ The initial Speed-based attack initiative decision is implemented: attacks compa
 5. What clock and tick model drives weather, respawns, events, and offline simulation?
 
 The NLP action semantics, starter recipes, and marketplace/direct-trade lifecycle are specified in the companion NLP document. The initial laptop-hosted networking, browser UI, framework, database, transport, and backup decisions are recorded in [NETWORKING-AND-UI-ARCHITECTURE.md](./NETWORKING-AND-UI-ARCHITECTURE.md). Resolve the remaining system-specific questions just before those systems are built, using small prototypes and concrete test cases. The initial priority is to prove that players can express intent in ordinary text and reliably see that intent resolved within a persistent, shared world.
+
