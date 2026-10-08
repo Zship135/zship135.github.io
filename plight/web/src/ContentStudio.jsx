@@ -636,6 +636,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         ambience: [],
         stock: [],
         buy_list: [],
+        weapon_ids: [],
         loot_table: [],
       });
     });
@@ -1389,12 +1390,12 @@ function EntityEditor({ entity, entities, currencies = [], enchantments = [], lo
       )}
       {entity.type === "npc" && (
         <>
-          <EntityPicker title="Equipped weapons" options={weaponOptions} selected={entity.weapon_ids} onToggle={(id, selected) => set("weapon_ids", selected ? [...entity.weapon_ids, id] : entity.weapon_ids.filter((weaponId) => weaponId !== id))} emptyMessage="Create a weapon to equip one." />
+          <EntityPicker title="Equipped weapons" options={weaponOptions} selected={entity.weapon_ids || []} onToggle={(id, selected) => set("weapon_ids", selected ? [...(entity.weapon_ids || []), id] : (entity.weapon_ids || []).filter((weaponId) => weaponId !== id))} emptyMessage="Create a weapon to equip one." />
           <section className="studio-subsection">
             <div className="studio-subsection-heading"><div><h3>Shop stock</h3><p>Items this NPC sells. Stock depletes per player and refills after the restock time. Choose a currency or the item cannot be bought.</p></div><button className="studio-small-button" disabled={stockOptions.length === 0} onClick={() => onChange((current) => {
-              current.stock.push({ item_id: stockOptions[0].id, quantity: 1, price: 1, currency_id: currencies[0]?.id || null, restock_seconds: 300 });
+              (current.stock ||= []).push({ item_id: stockOptions[0].id, quantity: 1, price: 1, currency_id: currencies[0]?.id || null, restock_seconds: 300 });
             })} type="button">Add stock</button></div>
-            {entity.stock.map((entry, index) => (
+            {(entity.stock || []).map((entry, index) => (
               <div className="studio-stock-row" key={`${entry.item_id}-${index}`}>
                 <SelectField label="Item" options={stockOptions} value={entry.item_id} onChange={(value) => setStock(index, "item_id", value)} />
                 <Field label="Quantity" min={0} onChange={(value) => setStock(index, "quantity", value)} type="number" value={entry.quantity} />
@@ -1404,7 +1405,7 @@ function EntityEditor({ entity, entities, currencies = [], enchantments = [], lo
                 <button aria-label="Remove stock item" className="studio-remove-button" onClick={() => onChange((current) => { current.stock.splice(index, 1); })} type="button">×</button>
               </div>
             ))}
-            {entity.stock.length === 0 && <p className="studio-hint">This NPC is not selling anything.</p>}
+            {(entity.stock || []).length === 0 && <p className="studio-hint">This NPC is not selling anything.</p>}
           </section>
           <section className="studio-subsection">
             <div className="studio-subsection-heading"><div><h3>Buys from players</h3><p>Items this NPC purchases. Max per player is how many each player can sell before the reset time refreshes it.</p></div><button className="studio-small-button" disabled={stockOptions.length === 0} onClick={() => onChange((current) => {
