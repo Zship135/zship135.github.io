@@ -11,12 +11,12 @@
 
 | Measure | Result |
 |---|---:|
-| NLP parser tests | 22 passed |
+| NLP parser tests | 23 passed |
 | Focused initiative API tests | 8 passed |
 | Frontend tests | 6 passed |
 | Production frontend build | Passed |
-| Full backend and parser suite | 77 passed, 7 failed |
-| Overall | **CHANGED-WORK TESTS PASS; full suite has unrelated content/fixture failures** |
+| Prior full backend and parser suite | 77 passed, 7 failed (before defense-alias test) |
+| Overall | **CHANGED-WORK TESTS PASS; prior full-suite failures were unrelated content/fixture failures** |
 
 ## Running the inspector with input
 
@@ -82,6 +82,7 @@ python .\plight_nlp_inspector.py --engine rpgnlp "attack the goblin with a sword
 | 19 | Heavy-attack phrase mapping | Powerful/strong/force wording and heavy aliases including `bash`, `slam`, `obliterate`, `smash`, `crush`, `demolish`, `shatter`, `pummel`, `pound`, `batter`, `pulverize`, `maul`, and `wreck` | Canonical action is `heavy_attack`; target remains the enemy, not the force cue. | PASS |
 | 20 | Conflicting attack cues | A command includes both light and heavy cues | Conflicting cues cancel to the normal canonical action `attack`. | PASS |
 | 21 | Normal attack verb aliases | `damage the forest rat`, `slime the forest rat` | Both map to canonical `attack` and retain `forest rat` as the target. | PASS |
+| 22 | Defense verb aliases | `brace for impact`, `evade the attack`, `duck the attack`, `sidestep the attack`, `deflect the attack`, `withstand the blow`, `take cover from the attack` | All map to `defend` without a target; each uses the existing guarded stance damage-reduction behavior. | PASS |
 
 ## Attack initiative integration cases
 
@@ -101,7 +102,7 @@ Focused validation completed on 2026-10-07:
 
 ```text
 python -m pytest -q test_plight_nlp_inspector.py
-22 passed
+23 passed
 
 python -m pytest -q tests\test_server.py -k "combat_uses_only_right_hand_and_enemy_attack_die or equal_speed_attack_waits_for_player_roll_and_rerolls_ties or attack_style_speed_modifier_orders_player_and_enemy or faster_enemy_can_defeat_player_before_attack_is_resolved or standalone_roll_returns_a_logged_d20_result or defeat_restores_player_and_enemy_at_species_start or slug_defeat_awards_configured_experience_and_loot"
 8 passed

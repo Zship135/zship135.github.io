@@ -66,6 +66,22 @@ class LocalParserTests(unittest.TestCase):
         self.assertEqual(occurrence["arguments"]["subject"], "forest rat")
         self.assertNotIn("objects", occurrence["arguments"])
 
+    def test_defense_verbs_map_to_defend_without_a_target(self):
+        examples = (
+            "brace for impact",
+            "evade the attack",
+            "duck the attack",
+            "sidestep the attack",
+            "deflect the attack",
+            "withstand the blow",
+            "take cover from the attack",
+        )
+        for text in examples:
+            with self.subTest(text=text):
+                occurrence = parse_local(text)["occurrences"][0]
+                self.assertEqual(occurrence["action_id"], "defend")
+                self.assertEqual(occurrence["arguments"], {})
+
     def test_equip_extracts_hand_and_item(self):
         result = parse_local("Equip the iron sword in my right hand")
         occurrence = result["occurrences"][0]

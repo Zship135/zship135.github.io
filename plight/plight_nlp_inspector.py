@@ -36,7 +36,10 @@ ACTION_ALIASES: dict[str, tuple[str, ...]] = {
         "bash", "slam", "obliterate", "smash", "crush", "demolish", "shatter",
         "pummel", "pound", "batter", "pulverize", "maul", "wreck",
     ),
-    "defend": ("defend", "block", "parry", "dodge", "guard", "protect"),
+    "defend": (
+        "defend", "block", "parry", "dodge", "guard", "protect",
+        "brace", "evade", "duck", "sidestep", "deflect", "withstand", "take cover",
+    ),
     "wait": ("wait", "rest"),
     "gather": ("gather", "chop", "mine", "harvest", "collect", "forage"),
     "cancel_gather": ("cancel gathering", "cancel gather", "stop gathering"),
@@ -438,7 +441,7 @@ def _extract_arguments(
             args["item"] = _quantity_and_name(item_text)
     elif mention.action_id == "wait" and fragment:
         args["duration"] = _clean_phrase(fragment)
-    elif fragment:
+    elif fragment and mention.action_id != "defend":
         args["subject"] = _clean_phrase(fragment)
 
     modifiers = [
