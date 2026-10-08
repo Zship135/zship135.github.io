@@ -251,6 +251,7 @@ class ContentEntity(ContentModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(max_length=4000)
     attributes: dict[str, Any] = Field(default_factory=dict)
+    interaction_effect: Literal["restore_health", "set_respawn"] | None = None
     attack_die_sides: int | None = Field(default=None, ge=2, le=100)
     respawn_chance_percent: int | None = Field(default=None, ge=0, le=100)
     aggressive_attack_chance_percent: int | None = Field(default=None, ge=0, le=100)
@@ -474,6 +475,10 @@ class WorldContent(BaseModel):
                     raise ValueError(f"Location {location.id} references a missing or non-resource entity.")
 
         for entity in self.entities:
+            if entity.type not in {"furniture", "object"} and entity.interaction_effect is not None:
+                raise ValueError(
+                    f"Interaction effects only apply to furniture and objects ({entity.id})."
+                )
             if entity.type == "npc":
                 if entity.race is None:
                     entity.race = "human"

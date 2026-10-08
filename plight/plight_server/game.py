@@ -418,6 +418,8 @@ def _snapshot(
             "inventory": character.inventory or {},
             "inventory_items": inventory_items,
             "stats": stats,
+            "respawn_area_id": getattr(character, "respawn_area_id", None)
+            or starting_location(character.species),
             "level": level,
             "experience": experience,
             "experience_progress": experience_progress,
@@ -710,6 +712,48 @@ def resolve_command(
             messages.append(_equip(character, entities, args))
         elif action_id == "unequip_item":
             messages.append(_unequip(character, entities, args))
+        elif action_id == "use_item":
+            item = args.get("item")
+            subject = (
+                str(item.get("name", ""))
+                if isinstance(item, dict)
+                else str(args.get("subject") or args.get("target") or item or "")
+            )
+            area = areas[character.area_id]
+            environment_objects = [
+                entities[entity_id]
+                for entity_id in area["object_ids"]
+                if entity_id in entities
+            ]
+            matches = _matching_entities(subject, environment_objects) if subject else []
+            if len(matches) > 1:
+                messages.append(
+                    f"Which object do you mean: {', '.join(entity['name'] for entity in matches)}?"
+                )
+            elif not matches:
+                messages.append(
+                    f"There is no {subject} here to use."
+                    if subject
+                    else "Name an object here to use."
+                )
+            else:
+                target = matches[0]
+                effect = target.get("interaction_effect")
+                if effect == "restore_health":
+                    stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
+                    stats["health"] = stats["max_health"]
+                    character.combat_stats = stats
+                    messages.append(
+                        f"You rest at {target['name']} and restore your health to full "
+                        f"({stats['health']}/{stats['max_health']})."
+                    )
+                elif effect == "set_respawn":
+                    character.respawn_area_id = character.area_id
+                    messages.append(
+                        f"You set {target['name']} in {area['name']} as your respawn point."
+                    )
+                else:
+                    messages.append(f"{target['name']} has no available interaction.")
         elif action_id == "inspect_inventory":
             contents = ", ".join(f"{count} {item}" for item, count in character.inventory.items())
             messages.append(f"You are carrying {contents}." if contents else "Your inventory is empty.")
@@ -1216,12 +1260,27 @@ def enemy_strike(
         f"{incoming_damage} damage ({stats['health']}/{stats['max_health']} health)."
     ]
     if stats["health"] == 0:
+        saved_respawn_area = getattr(character, "respawn_area_id", None)
         starting_area = starting_location(character.species)
-        character.area_id = starting_area
+        respawn_area = (
+            saved_respawn_area
+            if saved_respawn_area in areas
+            else starting_area
+        )
+        stale_respawn = saved_respawn_area is not None and saved_respawn_area not in areas
+        if stale_respawn:
+            character.respawn_area_id = None
+        character.area_id = respawn_area
         stats["health"] = stats["max_health"]
         state["target_id"] = None
+        stale_notice = (
+            "Your saved respawn location is no longer available. "
+            if stale_respawn
+            else ""
+        )
         messages.append(
-            f"You are defeated. You awaken in {areas[starting_area]['name']} with full health."
+            f"You are defeated. {stale_notice}You awaken in {areas[respawn_area]['name']} "
+            "with full health."
         )
     character.combat_stats = stats
     character.combat_state = state

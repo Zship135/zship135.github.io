@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 from time import monotonic, sleep
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
@@ -734,6 +736,126 @@ def test_observe_command_resolves_present_entity_target(client: TestClient) -> N
     assert observed["messages"] == [
         "Forest rat: A wary rat, at home beneath the forest canopy."
     ]
+
+
+def test_environment_interactions_restore_health_and_set_character_respawn(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = json.loads(content_store.WORLD_CONTENT_PATH.read_text(encoding="utf-8"))
+    start_area = next(
+        location for location in document["locations"]
+        if "human" in location["starting_species"]
+    )
+    away_area = next(
+        location for location in document["locations"]
+        if location["id"] != start_area["id"]
+    )
+    start_area["enemy_ids"] = []
+    campfire = {
+        "id": "test_campfire",
+        "type": "furniture",
+        "name": "Test Campfire",
+        "description": "A warm fire.",
+        "attributes": {},
+        "interaction_effect": "restore_health",
+    }
+    bed = {
+        "id": "test_bed",
+        "type": "object",
+        "name": "Test Bed",
+        "description": "A sturdy bed.",
+        "attributes": {},
+        "interaction_effect": "set_respawn",
+    }
+    document["entities"].extend((campfire, bed))
+    start_area["object_ids"] = [campfire["id"], bed["id"]]
+    world_path = tmp_path / "world_content.json"
+    world_path.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", world_path)
+
+    player = register(client, "environment-effects@example.com", "Ember")
+    headers = auth(player["token"])
+    with api.SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == player["account_id"])
+        )
+        character.combat_stats = {
+            **game.PLAYER_BASE_STATS,
+            "health": 23,
+        }
+        db.commit()
+
+    rested = client.post(
+        "/api/v1/commands",
+        headers=headers,
+        json={"request_id": str(uuid4()), "text": "rest at Test Campfire"},
+    ).json()["result"]
+    assert any("restore your health to full (100/100)" in message for message in rested["messages"])
+    assert rested["snapshot"]["character"]["stats"]["health"] == 100
+
+    set_respawn = client.post(
+        "/api/v1/commands",
+        headers=headers,
+        json={"request_id": str(uuid4()), "text": "set my spawn at the Test Bed"},
+    ).json()["result"]
+    assert any("set Test Bed" in message for message in set_respawn["messages"])
+    assert set_respawn["snapshot"]["character"]["respawn_area_id"] == start_area["id"]
+
+    class MinimumRoll:
+        @staticmethod
+        def randint(minimum: int, _: int) -> int:
+            return minimum
+
+    monkeypatch.setattr(game, "combat_rng", MinimumRoll())
+    areas = {
+        location["id"]: {"name": location["name"]}
+        for location in document["locations"]
+    }
+    with api.SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == player["account_id"])
+        )
+        assert character.respawn_area_id == start_area["id"]
+        character.area_id = away_area["id"]
+        character.combat_stats = {
+            **game.PLAYER_BASE_STATS,
+            "health": 1,
+        }
+        messages = game.enemy_strike(
+            character,
+            {
+                "name": "Test Enemy",
+                "attributes": {"attack": 10},
+                "attack_die_sides": 2,
+            },
+            areas,
+        )
+        db.commit()
+        assert character.area_id == start_area["id"], (
+            character.respawn_area_id,
+            areas.keys(),
+            messages,
+        )
+        assert character.respawn_area_id == start_area["id"]
+        assert character.combat_stats["health"] == character.combat_stats["max_health"]
+        assert any(start_area["name"] in message for message in messages)
+
+
+def test_interaction_effect_is_restricted_to_environment_entities() -> None:
+    document = content_store.read_world_content()[0].model_dump(mode="json")
+    furniture = next(entity for entity in document["entities"] if entity["type"] == "furniture")
+    furniture["interaction_effect"] = "restore_health"
+    valid_world = content_store.WorldContent.model_validate(document)
+    assert next(
+        entity for entity in valid_world.entities if entity.id == furniture["id"]
+    ).interaction_effect == "restore_health"
+
+    enemy = next(entity for entity in document["entities"] if entity["type"] == "enemy")
+    enemy["interaction_effect"] = "set_respawn"
+    with pytest.raises(ValueError, match="Interaction effects only apply to furniture and objects"):
+        content_store.WorldContent.model_validate(document)
 
 
 def test_observe_without_target_describes_area_and_missing_target_fails(

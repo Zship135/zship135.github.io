@@ -1538,6 +1538,20 @@ export default function App() {
               ]} renderItem={(entity) => (
                 <article className="world-entity" key={entity.id}>
                   <strong>{entity.name}</strong><p>{entity.description}</p>
+                  {entity.interaction_effect && (
+                    <button
+                      onClick={() => enterCommand(
+                        entity.interaction_effect === "restore_health"
+                          ? `rest at ${entity.name}`
+                          : `set my spawn at ${entity.name}`,
+                      )}
+                      type="button"
+                    >
+                      {entity.interaction_effect === "restore_health"
+                        ? "Rest and restore health"
+                        : "Set respawn point here"}
+                    </button>
+                  )}
                 </article>
               )} />
             </div>

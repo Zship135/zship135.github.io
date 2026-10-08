@@ -70,6 +70,7 @@ class Character(Base):
     name_key: Mapped[str] = mapped_column(String(64))
     species: Mapped[str] = mapped_column(String(16))
     area_id: Mapped[str] = mapped_column(String(32))
+    respawn_area_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     appearance: Mapped[dict[str, str]] = mapped_column(
         JSON, default=dict, server_default=text("'{}'")
     )

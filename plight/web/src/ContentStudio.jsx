@@ -566,6 +566,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         name: `New ${CATEGORY_NAMES[type].toLowerCase().replace(/s$/, "")}`,
         description: "",
         attributes: { ...defaultAttributes },
+        ...(type === "furniture" || type === "object" ? { interaction_effect: null } : {}),
         ...(type === "enemy" ? {
           attack_die_sides: 2,
           respawn_chance_percent: 0,
@@ -1108,12 +1109,27 @@ function EntityEditor({ entity, entities, locations, lootItems, onChange, onLoca
         <span className="studio-kind-tag">{entity.type.toUpperCase()}</span>
       </div>
       {["furniture", "object"].includes(entity.type) && (
-        <SelectField
-          label="Environment object type"
-          options={[{ id: "furniture", name: "Furniture" }, { id: "object", name: "Other object" }]}
-          value={entity.type}
-          onChange={(value) => set("type", value)}
-        />
+        <>
+          <SelectField
+            label="Environment object type"
+            options={[{ id: "furniture", name: "Furniture" }, { id: "object", name: "Other object" }]}
+            value={entity.type}
+            onChange={(value) => set("type", value)}
+          />
+          <p className="studio-hint">
+            Crafting stations remain usable by being in the location. An interaction effect is triggered when a player uses this object.
+          </p>
+          <SelectField
+            emptyLabel="No interaction effect"
+            label="Interaction effect"
+            options={[
+              { id: "restore_health", name: "Restore health fully" },
+              { id: "set_respawn", name: "Set respawn point to this location" },
+            ]}
+            value={entity.interaction_effect}
+            onChange={(value) => set("interaction_effect", value)}
+          />
+        </>
       )}
       <Field label="Name" value={entity.name} onChange={(value) => set("name", value)} />
       <TextAreaField label="Description" value={entity.description} onChange={(value) => set("description", value)} />

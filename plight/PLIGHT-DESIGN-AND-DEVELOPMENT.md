@@ -130,6 +130,12 @@ The live combat implementation uses immediate action-response combat and the par
 - Passive enemies never attack or join a fight. Neutral enemies retaliate when attacked and may join an active fight. Aggressive enemies attack the acting member during combat; outside combat, each aggressive enemy instance independently rolls for each online player every 15 seconds using its Content Studio-configured 0–100% hit chance. The default chance is 0%, which disables these attacks.
 - After each action exchange, every living, unengaged neutral or aggressive enemy assigned to the same area makes an independent join roll. Its chance is 10% for neutral or 20% for aggressive, plus 5 percentage points for each other active fighter, capped at 60%. A bystander retries after later action exchanges until it joins or the encounter ends. A successful join is announced immediately, but that enemy first attacks after the next combat action. Location spawn limits still cap the total living population. Helpful NPC combatants are deferred until their combat stats and behavior are separately designed.
 
+### Environment interactions
+
+- Furniture and objects may have one optional Content Studio interaction effect: fully restore the character's health, or save the current location as that character's respawn point.
+- Players may activate an effect by using the object in its location; beds set persistent, per-character respawn locations, and a valid bed location overrides the species starting location after defeat. If the saved location was removed, the character falls back to their species start.
+- Effects have no cooldown and may be used during combat. World authors manage the risk through placement. Crafting stations continue to work by presence alone.
+
 ### Rewards and scope
 
 - When an enemy is defeated, each party member who is online and in that area at the moment of defeat receives an independent XP and loot roll as if they had defeated it. The party does not copy one member's identical drop to everyone.
