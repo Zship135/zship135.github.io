@@ -326,6 +326,7 @@ export default function App() {
   const [commandBusy, setCommandBusy] = useState(false);
   const [inventoryView, setInventoryView] = useState(null);
   const [notice, setNotice] = useState("");
+  const commandInputRef = useRef(null);
   const socketRef = useRef(null);
   const activityScrollRef = useRef(null);
   const followActivityRef = useRef(true);
@@ -1074,11 +1075,15 @@ export default function App() {
   async function submitCommand(event) {
     event.preventDefault();
     await runCommand(command);
+    requestAnimationFrame(() => {
+      const input = commandInputRef.current;
+      if (input && !input.disabled) input.focus();
+    });
   }
 
   function enterCommand(text) {
     setCommand(text);
-    document.getElementById("command-input")?.focus();
+    commandInputRef.current?.focus();
   }
 
   function toggleAudio() {
@@ -1389,7 +1394,7 @@ export default function App() {
             {pendingRollRequestId && <p className="initiative-prompt">Roll for initiative to resolve your attack.</p>}
             <div className="command-entry">
               <span aria-hidden="true" className="prompt-mark">›</span>
-              <input autoComplete="off" disabled={Boolean(pendingRollRequestId) || commandBusy} id="command-input" maxLength={500} onChange={(event) => setCommand(event.target.value)} placeholder="Type 'help' if help is needed" value={command} />
+              <input autoComplete="off" disabled={Boolean(pendingRollRequestId) || commandBusy} id="command-input" maxLength={500} onChange={(event) => setCommand(event.target.value)} placeholder="Type 'help' if help is needed" ref={commandInputRef} value={command} />
               <button aria-label="Roll D20" className="roll-button" disabled={commandBusy || rollBusy} onClick={rollD20} type="button">{rollBusy ? "…" : "Roll"}</button>
               <button aria-label="Submit action" className="send-button" disabled={!command.trim() || commandBusy || Boolean(pendingRollRequestId)} type="submit">{commandBusy ? "…" : "↗"}</button>
             </div>
