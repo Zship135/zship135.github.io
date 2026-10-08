@@ -28,6 +28,7 @@ ACTION_ALIASES: dict[str, tuple[str, ...]] = {
     "light_attack": (
         "light attack", "quick attack", "fast attack", "attack quickly", "attack fast",
         "quickly attack", "poke", "prod", "tap", "flick", "nip",
+        "jab", "peck", "nick", "graze", "scratch", "nibble", "prick", "swipe", "sting",
     ),
     "heavy_attack": (
         "heavy attack", "powerful attack", "strong attack", "attack with force",
