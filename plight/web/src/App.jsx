@@ -325,6 +325,7 @@ export default function App() {
   const [command, setCommand] = useState("");
   const [commandBusy, setCommandBusy] = useState(false);
   const [inventoryView, setInventoryView] = useState(null);
+  const [mapOpen, setMapOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const commandInputRef = useRef(null);
   const socketRef = useRef(null);
@@ -999,6 +1000,11 @@ export default function App() {
   async function runCommand(text) {
     text = text.trim();
     if (!text || commandBusy || pendingRollRequestId) return;
+    if (snapshot?.character?.has_map && /^(?:open|view|check|show|unfold|look at|read)\s+(?:the\s+|my\s+)?(?:world\s+)?map$/i.test(text)) {
+      setCommand("");
+      setMapOpen(true);
+      return;
+    }
     setCommandBusy(true);
     setNotice("");
     const request = { request_id: crypto.randomUUID(), text };
@@ -1330,6 +1336,7 @@ export default function App() {
         <a className="wordmark" href="#world">PLIGHT</a>
         <div className="topbar-right">
           <button className="text-button" onClick={() => setInventoryView("all")} type="button">Inventory</button>
+          {snapshot?.character?.has_map && <button className="text-button" onClick={() => setMapOpen(true)} type="button">Map</button>}
           <button className="text-button" onClick={openPeople} type="button">Party & friends</button>
           <button className="text-button" onClick={openOwnProfile} type="button">My profile</button>
           {canEditContent && <button className="text-button studio-nav-trigger" onClick={() => setStudioMode(true)} type="button">Content studio</button>}
@@ -1516,7 +1523,7 @@ export default function App() {
                   const direction = typeof exit === "string" ? exit : exit.direction;
                   const destination = snapshot?.area?.exit_destinations?.[direction];
                   return (
-                    <div className={`world-exit ${exit.accessible === false ? "locked" : ""}`} key={direction}>
+                    <div className={`world-exit ${exit.accessible === false ? "locked" : ""} ${exit.on_quest_path ? "quest-path" : ""}`} key={direction}>
                       <button
                         aria-label={exit.reason || `Travel ${direction}${destination ? ` to ${destination}` : ""}`}
                         onClick={() => enterCommand(`travel ${direction}`)}
@@ -1525,6 +1532,7 @@ export default function App() {
                       >
                         {direction}{destination ? ` → ${destination}` : ""}
                         {exit.accessible === false ? " · SEALED" : ""}
+                        {exit.on_quest_path ? " · ★ quest" : ""}
                       </button>
                     </div>
                   );
@@ -1682,6 +1690,10 @@ export default function App() {
           />
         </aside>
       </main>
+
+      {mapOpen && snapshot?.world_map && (
+        <WorldMapDialog onClose={() => setMapOpen(false)} questPath={snapshot.quest_path} worldMap={snapshot.world_map} />
+      )}
 
       {inventoryView && (
         <InventoryDialog
@@ -1967,6 +1979,61 @@ function equipmentName(world, slot) {
  return itemId
    ? formatEquipmentItem(itemId, world?.character?.inventory_items || [])
    : "Empty";
+}
+
+function WorldMapDialog({ onClose, questPath, worldMap }) {
+  const locations = worldMap.locations;
+  const byId = Object.fromEntries(locations.map((location) => [location.id, location]));
+  const routeIds = questPath?.route || [];
+  const routeEdges = new Set(routeIds.slice(1).map((id, index) => `${routeIds[index]}>${id}`));
+  const xs = locations.map((location) => location.x);
+  const ys = locations.map((location) => location.y);
+  const minX = Math.min(...xs) - 10;
+  const minY = Math.min(...ys) - 10;
+  const width = Math.max(40, Math.max(...xs) - minX + 10);
+  const height = Math.max(40, Math.max(...ys) - minY + 10);
+  const edges = locations.flatMap((location) => Object.values(location.exits)
+    .filter((destination) => byId[destination])
+    .map((destination) => ({ from: location, to: byId[destination] })));
+  return (
+    <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section aria-labelledby="world-map-title" aria-modal="true" className="inventory-dialog world-map-dialog" role="dialog">
+        <button aria-label="Close map" className="dialog-close" onClick={onClose} type="button">×</button>
+        <p className="eyebrow">MAP</p>
+        <h2 id="world-map-title">World map</h2>
+        {questPath && (
+          <p className="world-map-quest">
+            ★ {questPath.quest_title}: {questPath.label}
+            {routeIds.length > 1 ? ` (${routeIds.length - 1} step${routeIds.length === 2 ? "" : "s"} away)` : ""}
+          </p>
+        )}
+        <svg className="world-map-svg" role="img" aria-label="Known locations" viewBox={`${minX} ${minY} ${width} ${height}`}>
+          {edges.map(({ from, to }) => {
+            const onRoute = routeEdges.has(`${from.id}>${to.id}`) || routeEdges.has(`${to.id}>${from.id}`);
+            return (
+              <line className={onRoute ? "map-edge route" : "map-edge"} key={`${from.id}-${to.id}`} x1={from.x} x2={to.x} y1={from.y} y2={to.y} />
+            );
+          })}
+          {locations.map((location) => {
+            const classes = [
+              "map-node",
+              location.visited ? "visited" : "unvisited",
+              location.id === worldMap.current_id ? "current" : "",
+              routeIds.includes(location.id) ? "route" : "",
+              questPath?.destination_ids?.includes(location.id) ? "destination" : "",
+            ].join(" ");
+            return (
+              <g className={classes} key={location.id}>
+                <circle cx={location.x} cy={location.y} r="2.4" />
+                <text x={location.x} y={location.y + 6}>{location.name}</text>
+              </g>
+            );
+          })}
+        </svg>
+        <p className="studio-hint">Dim locations are adjacent areas you have not visited yet. Gold marks your current location.</p>
+      </section>
+    </div>
+  );
 }
 
 function InventoryDialog({ busy, onClose, onEquip, onUnequip, onUse, onSelectView, snapshot, view }) {

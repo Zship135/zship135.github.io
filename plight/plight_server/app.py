@@ -45,6 +45,7 @@ from plight_server.game import (
     _add_currency,
     _currency_text,
     _complete_gathering,
+    apply_damage_over_time,
     award_enemy_defeat,
     award_experience,
     attack_initiative_relation,
@@ -631,6 +632,11 @@ def _run_gathering_completion_tick() -> None:
             messages = _complete_gathering(character, content, current_time)
             if messages:
                 notifications[character.account_id] = messages
+        entities = {entity["id"]: entity for entity in content["entities"]}
+        for character in characters:
+            curse_messages = apply_damage_over_time(character, entities, current_time)
+            if curse_messages:
+                notifications.setdefault(character.account_id, []).extend(curse_messages)
         if db.new or db.dirty:
             db.commit()
     for account_id, messages in notifications.items():
@@ -871,9 +877,14 @@ def _run_enemy_aggression_tick() -> None:
                 attack_times[spawn["id"]] = now.isoformat()
                 if chance < 100 and _enemy_aggression_rng.random() * 100 >= chance:
                     continue
+                spawn_health = spawn["health"]
                 messages.extend(
-                    enemy_strike(character, enemy, areas, entities=entities)
+                    enemy_strike(character, enemy, areas, entities=entities, spawn=spawn)
                 )
+                if spawn["health"] != spawn_health:
+                    row = db.get(EnemySpawn, spawn["id"])
+                    if row is not None:
+                        row.health = spawn["health"]
                 if character.area_id != location_id:
                     break
             attack_times = {
@@ -1155,6 +1166,7 @@ def _run_combat_round_tick(now: datetime | None = None) -> None:
                             areas,
                             consume_defending=False,
                             entities=entities,
+                            spawn=spawn,
                         )
                         round_messages[fighter.account_id].extend(messages)
                         if fighter.area_id != encounter.location_id:
@@ -3162,7 +3174,7 @@ def _submit_command_locked(
                     if spawn is None or not spawn["is_alive"] or enemy is None:
                         continue
                     strike_messages = enemy_strike(
-                        character, enemy, areas, entities=entities
+                        character, enemy, areas, entities=entities, spawn=spawn
                     )
                     result["messages"].extend(strike_messages)
                     if character.area_id != location_id or any(
@@ -3328,6 +3340,7 @@ def _submit_command_locked(
                         areas,
                         consume_defending=False,
                         entities=entities,
+                        spawn=spawn,
                     )
                 )
                 if character.area_id != location_id:

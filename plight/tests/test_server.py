@@ -3555,3 +3555,160 @@ def test_players_sell_to_vendor_with_per_player_capacity(
     with pytest.raises(ValueError):
         bad = dict(trader, buy_list=[{"item_id": "nope", "price": 1, "quantity": 1, "currency_id": "gold"}])
         content_store.WorldContent.model_validate({**content, "entities": [bad if e["id"] == "trader" else e for e in content["entities"]]})
+
+def _enchant_world(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    def loc(i: str, x: int, exits: dict[str, str], **extra: Any) -> dict[str, Any]:
+        return {
+            "id": i, "name": i.title(), "description": "d", "position": {"x": x, "y": 0},
+            "exits": exits, **extra,
+        }
+
+    world = content_store.WorldContent.model_validate(
+        {
+            "locations": [
+                loc("a", 0, {"east": "b"}, starting_species=["human", "goblin"], npc_ids=["giver"]),
+                loc("b", 1, {"west": "a", "east": "c"}),
+                loc("c", 2, {"west": "b", "east": "d"}),
+                loc("d", 3, {"west": "c"}),
+            ],
+            "enchantments": [
+                {"id": "might", "name": "Might", "effects": [
+                    {"type": "stat_modifier", "stat": "attack", "mode": "flat", "amount": 4},
+                    {"type": "stat_modifier", "stat": "defense", "mode": "percent", "amount": -50},
+                    {"type": "life_steal", "percent": 50},
+                    {"type": "thorns", "amount": 5},
+                ]},
+                {"id": "doom", "name": "Doom", "kind": "curse", "effects": [
+                    {"type": "cursed_binding"},
+                    {"type": "damage_over_time", "amount": 10, "interval_seconds": 5},
+                ]},
+                {"id": "pathfinder", "name": "Pathfinder", "effects": [{"type": "quest_path"}]},
+                {"id": "lucky", "name": "Lucky", "effects": [
+                    {"type": "luck", "drop_chance_bonus_percent": 10}
+                ]},
+            ],
+            "entities": [
+                {"id": "sword", "type": "weapon", "name": "Sword", "description": "x",
+                 "attributes": {"damage": 2}, "enchantment_ids": ["might", "doom"]},
+                {"id": "map", "type": "item", "name": "Old Map", "description": "x",
+                 "is_map": True, "enchantment_ids": ["pathfinder", "lucky"]},
+                {"id": "giver", "type": "npc", "name": "Giver", "description": "x"},
+            ],
+            "quests": [
+                {"id": "q", "title": "Go far", "description": "d", "giver_npc_id": "giver",
+                 "start_step_id": "s", "steps": [
+                    {"id": "s", "title": "Walk", "description": "d",
+                     "objectives": [{"id": "o", "type": "visit", "target_id": "d", "quantity": 1}],
+                     "choices": [{"id": "done", "text": "Done"}]}]},
+            ],
+        }
+    )
+    path = tmp_path / "world_content.json"
+    path.write_text(world.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", path)
+    return world.model_dump(mode="json")
+
+
+def _enchant_character(**extra: Any) -> SimpleNamespace:
+    values: dict[str, Any] = dict(
+        account_id="a", id="c", name="Ari", appearance="", combat_state={}, respawn_area_id=None,
+        equipment={"left_hand": "", "right_hand": "fist"}, skills={}, skill_experience={},
+        resource_state={}, gathering_state=None, active_effects=[], experience=0, wallet={},
+        shop_state={}, visited_areas=[], area_id="a", species="human", inventory={}, quest_state={},
+        combat_stats={"health": 50, "max_health": 100, "attack": 3, "defense": 10, "speed": 10},
+    )
+    values.update(extra)
+    return SimpleNamespace(**values)
+
+
+def test_enchantment_validation_rejects_missing_reference() -> None:
+    with pytest.raises(ValueError):
+        content_store.WorldContent.model_validate(
+            {
+                "locations": [],
+                "entities": [
+                    {"id": "x", "type": "item", "name": "X", "description": "x",
+                     "enchantment_ids": ["nope"]}
+                ],
+            }
+        )
+
+
+def test_enchantments_apply_when_equipped_or_carried(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = _enchant_world(tmp_path, monkeypatch)
+    entities = {e["id"]: e for e in content["entities"]}
+    character = _enchant_character(inventory={"sword": 1, "map": 1})
+    assert game._effective_stats(character, entities)["attack"] == 3
+    assert game._luck_bonuses(character, entities=entities) == (10, 0)
+    character.equipment = {"left_hand": "", "right_hand": "sword"}
+    stats = game._effective_stats(character, entities)
+    assert (stats["attack"], stats["defense"]) == (7, 5)
+    character.inventory = {"sword": 1}
+    assert game._luck_bonuses(character, entities=entities) == (0, 0)
+
+
+def test_cursed_binding_blocks_unequip_and_replace(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = _enchant_world(tmp_path, monkeypatch)
+    entities = {e["id"]: e for e in content["entities"]}
+    character = _enchant_character(
+        inventory={"sword": 1}, equipment={"left_hand": "", "right_hand": "sword"}
+    )
+    assert "cannot unequip" in game._unequip(character, entities, {"slot": "right_hand"})
+    assert character.equipment["right_hand"] == "sword"
+    assert "cannot replace" in game._equip(
+        character, entities, {"item": {"name": "fist"}, "slot": "right_hand"}
+    ) or character.equipment["right_hand"] == "fist"
+
+
+def test_damage_over_time_is_non_lethal_and_timed(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = _enchant_world(tmp_path, monkeypatch)
+    entities = {e["id"]: e for e in content["entities"]}
+    character = _enchant_character(
+        inventory={"sword": 1}, equipment={"left_hand": "", "right_hand": "sword"}
+    )
+    assert game.apply_damage_over_time(character, entities, 100.0) == []
+    assert game.apply_damage_over_time(character, entities, 102.0) == []
+    assert game.apply_damage_over_time(character, entities, 105.0) == ["Doom drains 10 health."]
+    assert character.combat_stats["health"] == 40
+    for tick in range(110, 160, 5):
+        game.apply_damage_over_time(character, entities, float(tick))
+    assert character.combat_stats["health"] == 1
+
+
+def test_life_steal_heals_and_thorns_wound_but_do_not_kill(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = _enchant_world(tmp_path, monkeypatch)
+    entities = {e["id"]: e for e in content["entities"]}
+    enemy = {"id": "rat", "name": "Rat", "attack_die_sides": 2, "attributes": {"attack": 20}}
+    character = _enchant_character(
+        inventory={"sword": 1}, equipment={"left_hand": "", "right_hand": "sword"}
+    )
+    spawn = {"id": "s1", "health": 4, "is_alive": True}
+    game.enemy_strike(character, enemy, {}, entities=entities, spawn=spawn)
+    assert spawn["health"] == 1
+
+
+def test_map_visibility_and_quest_path(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = _enchant_world(tmp_path, monkeypatch)
+    character = _enchant_character(
+        inventory={"map": 1}, quest_state={"q": {"status": "active", "current_step_id": "s"}},
+    )
+    game.mark_visited(character, "a")
+    snap = game._snapshot(character, content)
+    assert snap["character"]["has_map"] is True
+    assert [item["id"] for item in snap["world_map"]["locations"]] == ["a", "b"]
+    assert snap["quest_path"]["route"] == ["a", "b", "c", "d"]
+    assert snap["quest_path"]["next_direction"] == "east"
+    assert [d["on_quest_path"] for d in snap["area"]["exit_details"]] == [True]
+    character.inventory = {}
+    plain = game._snapshot(character, content)
+    assert plain["world_map"] is None and plain["quest_path"] is None

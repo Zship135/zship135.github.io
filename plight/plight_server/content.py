@@ -374,6 +374,75 @@ class ItemUseConfig(ContentModel):
         return self
 
 
+class EnchantStatEffect(ContentModel):
+    type: Literal["stat_modifier"]
+    stat: Literal["attack", "defense", "speed", "max_health"]
+    mode: Literal["flat", "percent"] = "flat"
+    amount: int = Field(ge=-500, le=500)
+
+    @model_validator(mode="after")
+    def validate_amount(self) -> EnchantStatEffect:
+        if self.amount == 0:
+            raise ValueError("A stat modifier cannot be zero.")
+        return self
+
+
+class EnchantLuckEffect(ContentModel):
+    type: Literal["luck"]
+    drop_chance_bonus_percent: int = Field(default=0, ge=0, le=1_000)
+    gathering_yield_bonus_percent: int = Field(default=0, ge=0, le=1_000)
+
+    @model_validator(mode="after")
+    def validate_bonus(self) -> EnchantLuckEffect:
+        if self.drop_chance_bonus_percent == self.gathering_yield_bonus_percent == 0:
+            raise ValueError("A luck enchantment must boost at least one reward chance or yield.")
+        return self
+
+
+class EnchantQuestPathEffect(ContentModel):
+    type: Literal["quest_path"]
+
+
+class EnchantDamageOverTimeEffect(ContentModel):
+    type: Literal["damage_over_time"]
+    amount: int = Field(default=1, ge=1, le=1_000)
+    interval_seconds: int = Field(default=15, ge=5, le=3_600)
+
+
+class EnchantLifeStealEffect(ContentModel):
+    type: Literal["life_steal"]
+    percent: int = Field(default=10, ge=1, le=100)
+
+
+class EnchantThornsEffect(ContentModel):
+    type: Literal["thorns"]
+    amount: int = Field(default=1, ge=1, le=1_000)
+
+
+class EnchantCursedBindingEffect(ContentModel):
+    type: Literal["cursed_binding"]
+
+
+EnchantmentEffect = Annotated[
+    EnchantStatEffect
+    | EnchantLuckEffect
+    | EnchantQuestPathEffect
+    | EnchantDamageOverTimeEffect
+    | EnchantLifeStealEffect
+    | EnchantThornsEffect
+    | EnchantCursedBindingEffect,
+    Field(discriminator="type"),
+]
+
+
+class Enchantment(ContentModel):
+    id: str = Field(pattern=_SLUG.pattern)
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    kind: Literal["enchantment", "curse"] = "enchantment"
+    effects: list[EnchantmentEffect] = Field(min_length=1, max_length=20)
+
+
 class ResourceGathering(ContentModel):
     skill: GatheringSkill
     skill_level: int = Field(default=1, ge=1, le=100)
@@ -414,6 +483,8 @@ class ContentEntity(ContentModel):
     weapon_ids: list[str] = Field(default_factory=list, max_length=50)
     loot_table: list[LootDrop] = Field(default_factory=list, max_length=100)
     currency_drops: list[CurrencyDrop] = Field(default_factory=list, max_length=20)
+    enchantment_ids: list[str] = Field(default_factory=list, max_length=10)
+    is_map: bool = False
 
     @field_validator("ambience")
     @classmethod
@@ -568,6 +639,7 @@ class WorldContent(BaseModel):
     recipes: list[ContentRecipe] = Field(default_factory=list, max_length=2000)
     quests: list[Quest] = Field(default_factory=list, max_length=2000)
     currencies: list[Currency] = Field(default_factory=list, max_length=100)
+    enchantments: list[Enchantment] = Field(default_factory=list, max_length=500)
 
     @field_validator("action_sounds")
     @classmethod
@@ -592,6 +664,7 @@ class WorldContent(BaseModel):
         recipes = unique_ids(self.recipes, "Recipe")
         quests = unique_ids(self.quests, "Quest")
         currencies = unique_ids(self.currencies, "Currency")
+        enchantments = unique_ids(self.enchantments, "Enchantment")
         entity_types = {entity_id: entity.type for entity_id, entity in entities.items()}
 
         starting_species = {
@@ -635,6 +708,14 @@ class WorldContent(BaseModel):
                 )
             if entity.type != "item" and entity.item_use is not None:
                 raise ValueError(f"Item effects only apply to regular items ({entity.id}).")
+            if entity.type not in {"item", "weapon", "shield"} and (
+                entity.enchantment_ids or entity.is_map
+            ):
+                raise ValueError(f"Only items, weapons, and shields can be enchanted or be maps ({entity.id}).")
+            if len(set(entity.enchantment_ids)) != len(entity.enchantment_ids) or any(
+                enchantment_id not in enchantments for enchantment_id in entity.enchantment_ids
+            ):
+                raise ValueError(f"Entity {entity.id} has a duplicate or missing enchantment.")
             if entity.type != "resource" and entity.gathering is not None:
                 raise ValueError(f"Gathering settings only apply to resources ({entity.id}).")
             if entity.item_use is not None:
@@ -817,3 +898,20 @@ def starting_location(species: str) -> str:
         if species in location.starting_species:
             return location.id
     raise ValueError(f"No starting location is configured for {species}.")
+
+
+_LIBRARY_CACHE: dict[str, Any] = {"key": None, "value": ({}, {})}
+
+
+def enchantment_library() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Return (enchantments, entities) by id, cached until the world file changes."""
+    stat = WORLD_CONTENT_PATH.stat()
+    key = (str(WORLD_CONTENT_PATH), stat.st_mtime_ns, stat.st_size)
+    if _LIBRARY_CACHE["key"] != key:
+        data = world_content_dict()
+        _LIBRARY_CACHE["value"] = (
+            {item["id"]: item for item in data["enchantments"]},
+            {item["id"]: item for item in data["entities"]},
+        )
+        _LIBRARY_CACHE["key"] = key
+    return _LIBRARY_CACHE["value"]

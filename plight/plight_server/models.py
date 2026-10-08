@@ -108,6 +108,9 @@ class Character(Base):
     wallet: Mapped[dict[str, int]] = mapped_column(
         JSON, default=dict, server_default=text("'{}'")
     )
+    visited_areas: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
+    )
     shop_state: Mapped[dict[str, Any]] = mapped_column(
         JSON, default=dict, server_default=text("'{}'")
     )

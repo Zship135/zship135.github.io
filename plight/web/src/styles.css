@@ -477,3 +477,17 @@ a { color: inherit; text-decoration: none; }
 .shop-offer-button { display: flex; justify-content: space-between; gap: 12px; text-align: left; }
 .shop-wallet { display: flex; gap: 12px; padding: 4px 0; }
 .shop-section-label { margin: 10px 0 4px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .7; }
+
+.world-exit.quest-path button { border-color: #e0b84a; color: #f3d77a; box-shadow: 0 0 8px rgba(224, 184, 74, 0.45); }
+.world-map-dialog { width: min(720px, 94vw); }
+.world-map-svg { width: 100%; max-height: 60vh; background: rgba(0, 0, 0, 0.35); border-radius: 8px; }
+.world-map-quest { color: #f3d77a; margin: 0 0 0.5rem; }
+.map-edge { stroke: #5a6270; stroke-width: 0.6; }
+.map-edge.route { stroke: #e0b84a; stroke-width: 1.2; }
+.map-node circle { fill: #8793a6; }
+.map-node.unvisited circle { fill: #3c4350; }
+.map-node.route circle { fill: #c9a23c; }
+.map-node.destination circle { fill: #ff7a45; }
+.map-node.current circle { fill: #ffd65c; stroke: #fff; stroke-width: 0.6; }
+.map-node text { fill: #d8dde6; font-size: 2.6px; text-anchor: middle; }
+.map-node.unvisited text { fill: #7d8696; }

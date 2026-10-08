@@ -164,6 +164,13 @@ Recipes can produce items, weapons, or shields and define ingredients, an option
 - Stock is tracked per player in `Character.shop_state`: buying reduces that player's remaining quantity, and the first purchase starts a restock timer that resets the quantity when it elapses. Other players are unaffected.
 - Players type `buy from <npc>` (or `shop <npc>`) to open the NPC's shop in a dialogue-style window in the activity stream, with a Buy button per offer that updates stock and wallet in place. `buy [quantity] <item> [from <npc>]` still buys directly (`POST /api/v1/shop/buy` backs the window). Deleting a currency removes its drops and rewards and clears the currency on stock entries.
 
+### Enchantments, curses, and maps (implemented)
+
+Content Studio has an **Enchantments** library. Each entry is an enchantment or a curse with one or more effects: stat changes (attack, defense, speed, max health; flat or percent; negative for penalties), luck (drop chance and gathering yield), quest path, damage over time, life steal, thorns, and a cursed binding that stops the item being unequipped or replaced. Items, weapons, and shields can carry any number of enchantments. They are active while a weapon or shield is equipped, or while a regular item is carried.
+
+Damage over time never kills (it stops at 1 health). Thorns wound an attacking enemy but never finish it, and life steal heals a percentage of melee damage dealt. Effects from several items stack by summing.
+
+Any item, weapon, or shield can be marked as a **map item**. Carrying one adds a Map button (or typing "open map") that shows the world map: locations the character has visited plus their adjacent locations. A `quest_path` enchantment, active from any source, draws the shortest route to the first active quest's objective on the map and marks the next exit with a star in the Exits list. Visited locations are stored in `Character.visited_areas`.
 ### Shops and player marketplace
 
 - NPC shops buy and sell goods.

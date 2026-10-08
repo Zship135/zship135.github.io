@@ -18,6 +18,7 @@ const NAVIGATION = [
   ["environment", "Furniture / objects"],
   ["resources", "Resources"],
   ["currencies", "Currencies"],
+  ["enchantments", "Enchantments"],
 ];
 
 const ACTION_SOUND_OPTIONS = [
@@ -420,11 +421,13 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   const recipes = content?.recipes || [];
   const quests = content?.quests || [];
   const currencies = content?.currencies || [];
+  const enchantments = content?.enchantments || [];
+  const currentEnchantment = tab === "enchantments" ? enchantments.find((item) => item.id === selectedId) : null;
   const currentCurrency = tab === "currencies" ? currencies.find((currency) => currency.id === selectedId) : null;
   const currentLocation = content?.locations.find((location) => location.id === selectedId);
   const currentRecipe = recipes.find((recipe) => recipe.id === selectedId);
   const currentQuest = quests.find((quest) => quest.id === selectedId);
-  const currentEntity = ["enemies", "npcs", "items", "weapons", "environment", "resources"].includes(tab)
+  const currentEntity = ["enemies", "npcs", "items", "weapons", "shields", "environment", "resources"].includes(tab)
     ? (content?.entities || []).find((entity) => entity.id === selectedId)
     : null;
   const currentActionSound = tab === "audio"
@@ -440,6 +443,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
     ? ACTION_SOUND_OPTIONS
     : tab === "locations"
       ? content?.locations || []
+        : tab === "enchantments"
+          ? enchantments
         : tab === "currencies"
           ? currencies
           : tab === "recipes"
@@ -475,6 +480,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         ? content.locations
         : nextTab === "map"
           ? content.locations
+          : nextTab === "enchantments"
+            ? content.enchantments || []
           : nextTab === "currencies"
             ? content.currencies || []
             : nextTab === "recipes"
@@ -558,6 +565,17 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
       setSelectedId(id);
       return;
     }
+    if (tab === "enchantments") {
+      const id = makeId("new_enchantment", new Set(enchantments.map((item) => item.id)));
+      updateContent((next) => {
+        next.enchantments = [...(next.enchantments || []), {
+          id, name: "New enchantment", description: "", kind: "enchantment",
+          effects: [{ type: "stat_modifier", stat: "attack", mode: "flat", amount: 1 }],
+        }];
+      });
+      setSelectedId(id);
+      return;
+    }
     if (tab === "currencies") {
       const id = makeId("new_currency", new Set(currencies.map((currency) => currency.id)));
       updateContent((next) => {
@@ -601,6 +619,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         attributes: { ...defaultAttributes },
         ...(type === "furniture" || type === "object" ? { interaction_effect: null } : {}),
         ...(type === "item" ? { item_use: null } : {}),
+        ...(["item", "weapon", "shield"].includes(type) ? { enchantment_ids: [], is_map: false } : {}),
         ...(type === "resource" ? { gathering: null } : {}),
         ...(type === "enemy" ? {
           attack_die_sides: 2,
@@ -624,10 +643,15 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   }
 
   function deleteEntry() {
-    const name = currentLocation?.name || currentRecipe?.name || currentQuest?.title || currentEntity?.name || currentCurrency?.name;
+    const name = currentLocation?.name || currentRecipe?.name || currentQuest?.title || currentEntity?.name || currentCurrency?.name || currentEnchantment?.name;
     if (!name || !window.confirm(`Delete "${name}"? References to this content will be removed.`)) return;
     updateContent((next) => {
-      if (tab === "currencies") {
+      if (tab === "enchantments") {
+        next.enchantments = (next.enchantments || []).filter((item) => item.id !== selectedId);
+        for (const entity of next.entities) {
+          if (entity.enchantment_ids) entity.enchantment_ids = entity.enchantment_ids.filter((id) => id !== selectedId);
+        }
+      } else if (tab === "currencies") {
         next.currencies = (next.currencies || []).filter((currency) => currency.id !== selectedId);
         for (const entity of next.entities) {
           if (entity.currency_drops) entity.currency_drops = entity.currency_drops.filter((drop) => drop.currency_id !== selectedId);
@@ -813,7 +837,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
             {NAVIGATION.map(([id, label]) => (
               <button aria-current={tab === id ? "page" : undefined} className={tab === id ? "active" : ""} key={id} onClick={() => changeTab(id)} type="button">
                 <span>{label}</span>
-                <small>{id === "map" || id === "locations" ? content.locations.length : id === "audio" ? Object.keys(content.action_sounds || {}).length : id === "recipes" ? content.recipes.length : id === "currencies" ? currencies.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
+                <small>{id === "map" || id === "locations" ? content.locations.length : id === "audio" ? Object.keys(content.action_sounds || {}).length : id === "recipes" ? content.recipes.length : id === "currencies" ? currencies.length : id === "enchantments" ? enchantments.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
               </button>
             ))}
             <div className="studio-nav-note">
@@ -898,6 +922,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       locations={content.locations}
                       entities={content.entities}
                       currencies={currencies}
+                      enchantments={enchantments}
                       lootItems={eligibleItems}
                       onChange={updateEntity}
                       onLocationToggle={(locationId, relationField, checked) => updateContent((next) => {
@@ -907,6 +932,15 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                         location[relationField] = checked
                           ? [...values, selectedId]
                           : values.filter((id) => id !== selectedId);
+                      })}
+                    />
+                  )}
+                  {currentEnchantment && tab === "enchantments" && (
+                    <EnchantmentEditor
+                      enchantment={currentEnchantment}
+                      onChange={(field, value) => updateContent((next) => {
+                        const item = next.enchantments.find((entry) => entry.id === selectedId);
+                        if (item) item[field] = value;
                       })}
                     />
                   )}
@@ -944,7 +978,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       })}
                     />
                   )}
-                  {!currentLocation && !currentEntity && !currentRecipe && !currentQuest && !currentCurrency && <div className="studio-empty-detail">Select an entry or create a new one.</div>}
+                  {!currentLocation && !currentEntity && !currentRecipe && !currentQuest && !currentCurrency && !currentEnchantment && <div className="studio-empty-detail">Select an entry or create a new one.</div>}
                 </div>
               </div>
             )}
@@ -1127,7 +1161,7 @@ function ActionSoundEditor({
   );
 }
 
-function EntityEditor({ entity, entities, currencies = [], locations, lootItems, onChange, onLocationToggle }) {
+function EntityEditor({ entity, entities, currencies = [], enchantments = [], locations, lootItems, onChange, onLocationToggle }) {
   const relationField = {
     enemy: "enemy_ids",
     npc: "npc_ids",
@@ -1301,6 +1335,35 @@ function EntityEditor({ entity, entities, currencies = [], locations, lootItems,
           {Object.keys(entity.attributes).length === 0 && <p className="studio-hint">No attributes. Add stats such as health, speed, damage, or value.</p>}
         </div>
       </section>
+      {["item", "weapon", "shield"].includes(entity.type) && (
+        <section className="studio-subsection">
+          <h3>Enchantments and curses</h3>
+          <p className="studio-hint">
+            {entity.type === "item"
+              ? "Active while a player carries this item."
+              : "Active while a player has this equipped."}
+          </p>
+          <label className="studio-field studio-inline-check">
+            <span>Map item (lets the holder open the world map)</span>
+            <input checked={Boolean(entity.is_map)} onChange={(event) => set("is_map", event.target.checked)} type="checkbox" />
+          </label>
+          {enchantments.map((item) => (
+            <label className="studio-field studio-inline-check" key={item.id}>
+              <span>{item.name}{item.kind === "curse" ? " (curse)" : ""}</span>
+              <input
+                checked={(entity.enchantment_ids || []).includes(item.id)}
+                onChange={(event) => onChange((current) => {
+                  const ids = new Set(current.enchantment_ids || []);
+                  if (event.target.checked) ids.add(item.id); else ids.delete(item.id);
+                  current.enchantment_ids = [...ids];
+                })}
+                type="checkbox"
+              />
+            </label>
+          ))}
+          {enchantments.length === 0 && <p className="studio-hint">Create enchantments in the Enchantments section first.</p>}
+        </section>
+      )}
       {entity.type === "item" && (
         <ItemUseEditor itemUse={entity.item_use} locations={locations} onChange={(value) => set("item_use", value)} />
       )}
@@ -2019,6 +2082,116 @@ function QuestEditor({ quest, npcs, entities, currencies = [], locations, onChan
         {currencies.length === 0 && <p className="studio-hint">Create a currency in the Currencies section first.</p>}
       </section>
       <p className="studio-hint">To gate a passage, select this quest as the exit requirement in the destination location's editor.</p>
+    </div>
+  );
+}
+
+const ENCHANTMENT_EFFECT_DEFAULTS = {
+  stat_modifier: { type: "stat_modifier", stat: "attack", mode: "flat", amount: 1 },
+  luck: { type: "luck", drop_chance_bonus_percent: 10, gathering_yield_bonus_percent: 0 },
+  quest_path: { type: "quest_path" },
+  damage_over_time: { type: "damage_over_time", amount: 1, interval_seconds: 15 },
+  life_steal: { type: "life_steal", percent: 10 },
+  thorns: { type: "thorns", amount: 1 },
+  cursed_binding: { type: "cursed_binding" },
+};
+
+function EnchantmentEditor({ enchantment, onChange }) {
+  const effects = enchantment.effects || [];
+  function updateEffect(index, field, value) {
+    onChange("effects", effects.map((effect, i) => (i === index ? { ...effect, [field]: value } : effect)));
+  }
+  return (
+    <div className="studio-form">
+      <div className="studio-form-heading"><p className="eyebrow">ENCHANTMENT</p><h2>{enchantment.name}</h2></div>
+      <Field label="Name" onChange={(value) => onChange("name", value)} value={enchantment.name} />
+      <TextAreaField label="Description" onChange={(value) => onChange("description", value)} rows={3} value={enchantment.description || ""} />
+      <SelectField
+        label="Kind"
+        options={[{ id: "enchantment", name: "Enchantment (beneficial)" }, { id: "curse", name: "Curse (harmful)" }]}
+        value={enchantment.kind}
+        onChange={(value) => onChange("kind", value)}
+      />
+      <section className="studio-subsection">
+        <div className="studio-subsection-heading">
+          <div><h3>Effects</h3><p>Negative amounts make penalties. Damage over time never kills; it stops at 1 health.</p></div>
+          <button
+            className="studio-small-button"
+            disabled={effects.length >= 20}
+            onClick={() => onChange("effects", [...effects, { ...ENCHANTMENT_EFFECT_DEFAULTS.stat_modifier }])}
+            type="button"
+          >
+            Add effect
+          </button>
+        </div>
+        {effects.map((effect, index) => (
+          <section className="studio-effect-card" key={`${effect.type}-${index}`}>
+            <div className="studio-subsection-heading">
+              <strong>Effect {index + 1}</strong>
+              <button
+                aria-label={`Remove effect ${index + 1}`}
+                className="studio-remove-button"
+                disabled={effects.length <= 1}
+                onClick={() => onChange("effects", effects.filter((_, i) => i !== index))}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <SelectField
+              label="Effect type"
+              options={[
+                { id: "stat_modifier", name: "Change a stat" },
+                { id: "luck", name: "Luck (drops / gathering)" },
+                { id: "quest_path", name: "Highlight path to active quest" },
+                { id: "damage_over_time", name: "Damage over time" },
+                { id: "life_steal", name: "Life steal" },
+                { id: "thorns", name: "Thorns" },
+                { id: "cursed_binding", name: "Cannot be unequipped" },
+              ]}
+              value={effect.type}
+              onChange={(type) => onChange("effects", effects.map((current, i) => (i === index ? { ...ENCHANTMENT_EFFECT_DEFAULTS[type] } : current)))}
+            />
+            {effect.type === "stat_modifier" && (
+              <div className="studio-two-fields">
+                <SelectField
+                  label="Stat"
+                  options={["attack", "defense", "speed", "max_health"].map((id) => ({ id, name: id.replace("_", " ") }))}
+                  value={effect.stat}
+                  onChange={(value) => updateEffect(index, "stat", value)}
+                />
+                <SelectField
+                  label="Mode"
+                  options={[{ id: "flat", name: "Flat" }, { id: "percent", name: "Percent" }]}
+                  value={effect.mode}
+                  onChange={(value) => updateEffect(index, "mode", value)}
+                />
+                <Field label="Amount (negative for a penalty)" max={500} min={-500} onChange={(value) => updateEffect(index, "amount", value)} type="number" value={effect.amount} />
+              </div>
+            )}
+            {effect.type === "luck" && (
+              <div className="studio-two-fields">
+                <Field label="Drop chance bonus (%)" max={1000} min={0} onChange={(value) => updateEffect(index, "drop_chance_bonus_percent", value)} type="number" value={effect.drop_chance_bonus_percent} />
+                <Field label="Gathering yield bonus (%)" max={1000} min={0} onChange={(value) => updateEffect(index, "gathering_yield_bonus_percent", value)} type="number" value={effect.gathering_yield_bonus_percent} />
+              </div>
+            )}
+            {effect.type === "damage_over_time" && (
+              <div className="studio-two-fields">
+                <Field label="Damage per tick" max={1000} min={1} onChange={(value) => updateEffect(index, "amount", value)} type="number" value={effect.amount} />
+                <Field label="Seconds between ticks" max={3600} min={5} onChange={(value) => updateEffect(index, "interval_seconds", value)} type="number" value={effect.interval_seconds} />
+              </div>
+            )}
+            {effect.type === "life_steal" && (
+              <Field label="Percent of damage dealt returned as health" max={100} min={1} onChange={(value) => updateEffect(index, "percent", value)} type="number" value={effect.percent} />
+            )}
+            {effect.type === "thorns" && (
+              <Field label="Damage reflected when hit" max={1000} min={1} onChange={(value) => updateEffect(index, "amount", value)} type="number" value={effect.amount} />
+            )}
+            {effect.type === "quest_path" && <p className="studio-hint">Shows the route to the active quest objective on the world map and highlights the next exit.</p>}
+            {effect.type === "cursed_binding" && <p className="studio-hint">The equipped item cannot be removed or replaced.</p>}
+          </section>
+        ))}
+      </section>
     </div>
   );
 }

@@ -8,7 +8,11 @@ import re
 import time
 from typing import Any
 
-from plight_server.content import starting_location, world_content_dict
+from plight_server.content import (
+    enchantment_library,
+    starting_location,
+    world_content_dict,
+)
 from plight_nlp_inspector import evaluate_expression, parse_local
 
 PLAYER_BASE_STATS = {
@@ -593,7 +597,71 @@ def _open_shop(
     return [], _shop_window(character, shopkeepers[0], entities, content)
 
 
-def _luck_bonuses(character: Any, now: float | None = None) -> tuple[int, int]:
+def _active_enchantments(
+    character: Any,
+    entities: dict[str, dict[str, Any]] | None = None,
+    enchantments: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Enchantments from equipped weapon/shield and carried regular items."""
+    if entities is None or enchantments is None:
+        try:
+            library, library_entities = enchantment_library()
+        except (OSError, ValueError):
+            return []
+        enchantments = library if enchantments is None else enchantments
+        entities = library_entities if entities is None else entities
+    equipment = {**DEFAULT_EQUIPMENT, **(getattr(character, "equipment", None) or {})}
+    sources: list[dict[str, Any]] = []
+    for slot, item_type in (("left_hand", "shield"), ("right_hand", "weapon")):
+        item = entities.get(equipment.get(slot) or "")
+        if item is not None and item.get("type") == item_type:
+            sources.append(item)
+    for item_id, quantity in (getattr(character, "inventory", None) or {}).items():
+        item = entities.get(item_id)
+        if item is not None and item.get("type") == "item" and quantity > 0:
+            sources.append(item)
+    active = []
+    for item in sources:
+        for enchantment_id in item.get("enchantment_ids") or []:
+            enchantment = enchantments.get(enchantment_id)
+            if enchantment is not None:
+                active.append(enchantment)
+    return active
+
+
+def _enchantment_effects(
+    character: Any,
+    entities: dict[str, dict[str, Any]] | None = None,
+    effect_type: str | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        effect
+        for enchantment in _active_enchantments(character, entities)
+        for effect in enchantment["effects"]
+        if effect_type is None or effect["type"] == effect_type
+    ]
+
+
+def _is_cursed_binding(item_id: str, entities: dict[str, dict[str, Any]]) -> bool:
+    item = entities.get(item_id)
+    if item is None:
+        return False
+    try:
+        library, _ = enchantment_library()
+    except (OSError, ValueError):
+        return False
+    return any(
+        effect["type"] == "cursed_binding"
+        for enchantment_id in item.get("enchantment_ids") or []
+        for effect in (library.get(enchantment_id) or {}).get("effects", [])
+    )
+
+
+def _luck_bonuses(
+    character: Any,
+    now: float | None = None,
+    entities: dict[str, dict[str, Any]] | None = None,
+) -> tuple[int, int]:
     drop_chance = 0
     gathering_yield = 0
     for effect in _live_effects(character, now):
@@ -605,7 +673,10 @@ def _luck_bonuses(character: Any, now: float | None = None) -> tuple[int, int]:
                 gathering_yield,
                 int(effect.get("gathering_yield_bonus_percent", 0)),
             )
-    return drop_chance, gathering_yield
+    for effect in _enchantment_effects(character, entities, "luck"):
+        drop_chance += effect["drop_chance_bonus_percent"]
+        gathering_yield += effect["gathering_yield_bonus_percent"]
+    return max(0, drop_chance), max(0, gathering_yield)
 
 
 def _effective_stats(
@@ -636,7 +707,58 @@ def _effective_stats(
         defense = (shield.get("attributes") or {}).get("defense", 0)
         if isinstance(defense, int) and not isinstance(defense, bool) and defense > 0:
             stats["defense"] += defense
+    deltas = {"attack": 0, "defense": 0, "speed": 0, "max_health": 0}
+    base = dict(stats)
+    for effect in _enchantment_effects(character, entities, "stat_modifier"):
+        amount = effect["amount"]
+        if effect["mode"] == "percent":
+            magnitude = ceil(base[effect["stat"]] * abs(amount) / 100)
+            amount = magnitude if amount > 0 else -magnitude
+        deltas[effect["stat"]] += amount
+    for stat, delta in deltas.items():
+        if delta:
+            stats[stat] = max(1 if stat == "max_health" else 0, stats[stat] + delta)
+    stats["health"] = min(stats["health"], stats["max_health"])
     return stats
+
+
+def apply_damage_over_time(
+    character: Any,
+    entities: dict[str, dict[str, Any]],
+    now: float,
+) -> list[str]:
+    """Apply due damage-over-time curses; never lethal (leaves 1 health)."""
+    effects = [
+        (enchantment, index, effect)
+        for enchantment in _active_enchantments(character, entities)
+        for index, effect in enumerate(enchantment["effects"])
+        if effect["type"] == "damage_over_time"
+    ]
+    state = dict(character.combat_state or {})
+    timers = dict(state.get("dot_at") or {})
+    live_keys = set()
+    messages: list[str] = []
+    for enchantment, index, effect in effects:
+        key = f"{enchantment['id']}:{index}"
+        live_keys.add(key)
+        last = timers.get(key)
+        if not isinstance(last, (int, float)):
+            timers[key] = now
+            continue
+        if now - last < effect["interval_seconds"]:
+            continue
+        timers[key] = now
+        stats = _effective_stats(character, entities)
+        damage = min(effect["amount"], stats["health"] - 1)
+        if damage <= 0:
+            continue
+        _set_current_health(character, stats["health"] - damage)
+        messages.append(f"{enchantment['name']} drains {damage} health.")
+    timers = {key: value for key, value in timers.items() if key in live_keys}
+    if timers != (state.get("dot_at") or {}):
+        state["dot_at"] = timers
+        character.combat_state = state
+    return messages
 
 
 def _set_current_health(character: Any, health: int) -> None:
@@ -922,6 +1044,186 @@ def _active_effect_views(character: Any, now: float | None = None) -> list[dict[
     ]
 
 
+def mark_visited(character: Any, area_id: str) -> None:
+    visited = list(getattr(character, "visited_areas", None) or [])
+    if area_id not in visited:
+        character.visited_areas = [*visited, area_id]
+
+
+def _has_map(character: Any, entities: dict[str, dict[str, Any]]) -> bool:
+    return any(
+        quantity > 0
+        and entities.get(item_id, {}).get("is_map")
+        and entities[item_id]["type"] in {"item", "weapon", "shield"}
+        for item_id, quantity in (getattr(character, "inventory", None) or {}).items()
+    )
+
+
+def _objective_locations(
+    objective: dict[str, Any],
+    quest: dict[str, Any],
+    character: Any,
+    areas: dict[str, dict[str, Any]],
+    entities: dict[str, dict[str, Any]],
+) -> set[str]:
+    target_id = objective["target_id"]
+    kind = objective["type"]
+    if kind == "visit":
+        return {target_id} if target_id in areas else set()
+    found = set()
+    for area_id, area in areas.items():
+        if kind == "talk" and target_id in area["npc_ids"]:
+            found.add(area_id)
+        elif kind == "kill" and target_id in area["enemy_ids"]:
+            found.add(area_id)
+        elif kind == "collect":
+            sources = [
+                entities[entity_id]
+                for key in ("enemy_ids", "resource_ids", "npc_ids")
+                for entity_id in area[key]
+                if entity_id in entities
+            ]
+            for source in sources:
+                drops = [
+                    *(source.get("loot_table") or []),
+                    *((source.get("gathering") or {}).get("loot_table") or []),
+                    *(source.get("stock") or []),
+                ]
+                if source["id"] == target_id or any(d["item_id"] == target_id for d in drops):
+                    found.add(area_id)
+    if not found and kind == "collect":
+        found = _npc_locations(quest["giver_npc_id"], areas)
+    return found
+
+
+def _npc_locations(npc_id: str, areas: dict[str, dict[str, Any]]) -> set[str]:
+    return {area_id for area_id, area in areas.items() if npc_id in area["npc_ids"]}
+
+
+def _route(
+    start: str,
+    goals: set[str],
+    areas: dict[str, dict[str, Any]],
+    blocked: set[tuple[str, str]],
+) -> list[str] | None:
+    previous: dict[str, str | None] = {start: None}
+    queue = [start]
+    for current in queue:
+        if current in goals:
+            path = []
+            node: str | None = current
+            while node is not None:
+                path.append(node)
+                node = previous[node]
+            return path[::-1]
+        for direction in ("north", "south", "east", "west"):
+            destination = areas[current]["exits"].get(direction)
+            if (
+                destination is not None
+                and destination not in previous
+                and (current, direction) not in blocked
+            ):
+                previous[destination] = current
+                queue.append(destination)
+    return None
+
+
+def _quest_path(
+    character: Any,
+    content: dict[str, Any],
+    areas: dict[str, dict[str, Any]],
+    entities: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    quests = {quest["id"]: quest for quest in content.get("quests", [])}
+    quest_state = getattr(character, "quest_state", None) or {}
+    for quest in content.get("quests", []):
+        if quest_state.get(quest["id"], {}).get("status") != "active":
+            continue
+        view = _quest_view(character, quest, entities, areas)
+        if view["can_turn_in"]:
+            goals = _npc_locations(quest["giver_npc_id"], areas)
+            label = f"Turn in {view['title']} to {view['giver_name']}"
+        elif view["can_choose"]:
+            return {
+                "quest_id": quest["id"],
+                "quest_title": view["title"],
+                "label": "Choose your next step in the quest tracker",
+                "destination_ids": [],
+                "route": [character.area_id],
+                "next_direction": None,
+            }
+        else:
+            pending = [o for o in view["objectives"] if o["current"] < o["required"]]
+            step = next(
+                (s for s in quest["steps"] if s["id"] == view["current_step_id"]), None
+            )
+            raw = {o["id"]: o for o in (step["objectives"] if step else [])}
+            goals = set()
+            for objective in pending:
+                goals |= _objective_locations(raw[objective["id"]], quest, character, areas, entities)
+            label = ", ".join(
+                f"{o['type']} {o['target_name']}" for o in pending
+            ) or view["title"]
+        if not goals:
+            continue
+        locked = set()
+        for area_id, area in areas.items():
+            for direction, quest_id in (area.get("exit_requirements") or {}).items():
+                if _exit_lock_reason(
+                    character, quest_id, areas[area["exits"][direction]]["name"], quests, entities, areas
+                ):
+                    locked.add((area_id, direction))
+        route = _route(character.area_id, goals, areas, locked) or _route(
+            character.area_id, goals, areas, set()
+        )
+        if route is None:
+            continue
+        next_direction = None
+        if len(route) > 1:
+            next_direction = next(
+                direction
+                for direction, destination in areas[route[0]]["exits"].items()
+                if destination == route[1]
+            )
+        return {
+            "quest_id": quest["id"],
+            "quest_title": view["title"],
+            "label": label,
+            "destination_ids": sorted(goals),
+            "route": route,
+            "next_direction": next_direction,
+        }
+    return None
+
+
+def _world_map(
+    character: Any, areas: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    visited = {*(getattr(character, "visited_areas", None) or []), character.area_id}
+    visited &= set(areas)
+    shown = set(visited)
+    for area_id in visited:
+        shown.update(areas[area_id]["exits"].values())
+    return {
+        "current_id": character.area_id,
+        "locations": [
+            {
+                "id": area_id,
+                "name": areas[area_id]["name"],
+                "x": areas[area_id]["position"]["x"],
+                "y": areas[area_id]["position"]["y"],
+                "visited": area_id in visited,
+                "exits": {
+                    direction: destination
+                    for direction, destination in areas[area_id]["exits"].items()
+                    if destination in shown
+                },
+            }
+            for area_id in sorted(shown)
+        ],
+    }
+
+
 def _snapshot(
     character: Any,
     content: dict[str, Any],
@@ -1017,6 +1319,18 @@ def _snapshot(
 
     exits = area["exits"]
     exit_details = []
+    enchantment_map = {item["id"]: item for item in content.get("enchantments", [])}
+    active_enchantments = _active_enchantments(character, entities, enchantment_map)
+    quest_path = (
+        _quest_path(character, content, areas, entities)
+        if any(
+            effect["type"] == "quest_path"
+            for enchantment in active_enchantments
+            for effect in enchantment["effects"]
+        )
+        else None
+    )
+    has_map = _has_map(character, entities)
     for direction in ("north", "south", "east", "west"):
         destination_id = exits.get(direction)
         if destination_id is None:
@@ -1030,6 +1344,7 @@ def _snapshot(
         )
         exit_details.append(
             {
+                "on_quest_path": direction == (quest_path or {}).get("next_direction"),
                 "direction": direction,
                 "destination_id": destination_id,
                 "destination_name": destination_name,
@@ -1123,6 +1438,16 @@ def _snapshot(
             or starting_location(character.species),
             "level": level,
             "wallet": _wallet_view(character, content),
+            "enchantments": [
+                {
+                    "id": item["id"],
+                    "name": item["name"],
+                    "kind": item["kind"],
+                    "description": item["description"],
+                }
+                for item in active_enchantments
+            ],
+            "has_map": has_map,
             "experience": experience,
             "experience_progress": experience_progress,
             "experience_to_next_level": experience_to_next_level,
@@ -1153,6 +1478,8 @@ def _snapshot(
         ],
         "action_sounds": content.get("action_sounds", {}),
         "atmosphere": atmosphere_data,
+        "quest_path": quest_path,
+        "world_map": _world_map(character, areas) if has_map else None,
     }
 
 
@@ -1281,6 +1608,12 @@ def resolve_command(
                 inventory_view = inventory_subjects[normalized_subject]
                 messages.append("You check your inventory and equipment.")
                 continue
+            if normalized_subject in {"map", "world map"}:
+                if _has_map(character, entities):
+                    messages.append("You unfold your map.")
+                else:
+                    messages.append("You are not carrying a map.")
+                continue
             if normalized_subject == "self":
                 messages.append("You look over your character profile.")
                 profile_account_ids.append(character.account_id)
@@ -1373,6 +1706,7 @@ def resolve_command(
                         messages.append(reason)
                         continue
                 character.area_id = destination
+                mark_visited(character, destination)
                 _record_quest_event(character, content, "visit", destination)
                 combat_state = dict(character.combat_state or {})
                 combat_state["target_id"] = None
@@ -1875,6 +2209,7 @@ def _use_item(
                     target.gathering_state = None
                     effects.append("stop gathering")
                 target.area_id = destination
+                mark_visited(target, destination)
                 effects.append(f"travel to {areas[destination]['name']}")
             if target.account_id == character.account_id:
                 actor_effects = effects
@@ -2228,6 +2563,8 @@ def _equip(
     if slot not in item_slots:
         return f"{item['name']} cannot be equipped in your {slot.replace('_', ' ')}."
     equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
+    if _is_cursed_binding(equipment.get(slot) or "", entities):
+        return f"The curse on your {entities[equipment[slot]]['name']} binds it to you; you cannot replace it."
     if equipment["left_hand"] == "fist":
         equipment["left_hand"] = ""
     equipment[slot] = item["id"]
@@ -2269,6 +2606,8 @@ def _unequip(
     previous = equipment[slot]
     if not previous or (previous == "fist" and slot not in {"left_hand", "right_hand"}):
         return f"Nothing is equipped in your {slot.replace('_', ' ')}."
+    if _is_cursed_binding(previous, entities):
+        return f"The curse on {entities[previous]['name']} binds it to you; you cannot unequip it."
     equipment[slot] = "fist" if slot == "right_hand" else ""
     character.equipment = equipment
     previous_name = entities.get(previous, {}).get("name", "Fist" if previous == "fist" else previous)
@@ -2392,6 +2731,19 @@ def _attack(
             f"You strike {target['name']} with your {hand.replace('_', ' ')} {weapon_name} "
             f"for {damage} damage ({enemy_hp}/{max_enemy_health} health)."
         )
+        steal_percent = sum(
+            effect["percent"]
+            for effect in _enchantment_effects(character, entities, "life_steal")
+        )
+        if steal_percent > 0:
+            current = _effective_stats(character, entities)
+            healed = min(
+                current["max_health"] - current["health"],
+                max(1, damage * steal_percent // 100),
+            )
+            if healed > 0:
+                _set_current_health(character, current["health"] + healed)
+                messages.append(f"Your enchantments drain {healed} health from {target['name']}.")
         if enemy_hp == 0:
             break
 
@@ -2413,7 +2765,9 @@ def _attack(
     if enemy.get("behavior", "neutral") == "passive":
         messages.append(f"{target['name']} does not fight back.")
         return messages
-    messages.extend(enemy_strike(character, enemy, areas, entities=entities))
+    messages.extend(
+        enemy_strike(character, enemy, areas, entities=entities, spawn=spawn)
+    )
     if not is_spawn_instance and character.area_id != area["id"]:
         state = dict(character.combat_state or {})
         state["enemy_health"] = dict(state.get("enemy_health", {}))
@@ -2429,6 +2783,7 @@ def enemy_strike(
     *,
     consume_defending: bool = True,
     entities: dict[str, dict[str, Any]] | None = None,
+    spawn: dict[str, Any] | None = None,
 ) -> list[str]:
     stats = _effective_stats(character, entities)
     die_sides = enemy["attack_die_sides"]
@@ -2482,6 +2837,13 @@ def enemy_strike(
         f"{incoming_damage} damage ({displayed_health}/{stats['max_health']} health)."
     ]
     messages.extend(shield_messages)
+    thorns = sum(
+        effect["amount"] for effect in _enchantment_effects(character, entities, "thorns")
+    )
+    if thorns > 0 and incoming_damage > 0 and spawn is not None and spawn["health"] > 1:
+        reflected = min(thorns, spawn["health"] - 1)
+        spawn["health"] -= reflected
+        messages.append(f"Thorns wound {enemy['name']} for {reflected} damage.")
     if stats["health"] == 0:
         saved_respawn_area = getattr(character, "respawn_area_id", None)
         starting_area = starting_location(character.species)
@@ -2494,6 +2856,7 @@ def enemy_strike(
         if stale_respawn:
             character.respawn_area_id = None
         character.area_id = respawn_area
+        mark_visited(character, respawn_area)
         character.gathering_state = None
         stats["health"] = stats["max_health"]
         _set_current_health(character, stats["health"])
