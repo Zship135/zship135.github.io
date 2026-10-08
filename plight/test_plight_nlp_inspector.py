@@ -20,6 +20,8 @@ class LocalParserTests(unittest.TestCase):
     def test_attack_style_phrases_map_to_canonical_actions(self):
         examples = {
             "attack the forest rat": "attack",
+            "damage the forest rat": "attack",
+            "slime the forest rat": "attack",
             "hit the forest rat": "attack",
             "slash the forest rat": "attack",
             "shoot the forest rat": "attack",

@@ -81,6 +81,7 @@ python .\plight_nlp_inspector.py --engine rpgnlp "attack the goblin with a sword
 | 18 | Light-attack phrase mapping | Quick/fast attack wording, “attack quickly,” and light aliases such as `poke` | Canonical action is `light_attack`; target remains the enemy, not the speed cue. | PASS |
 | 19 | Heavy-attack phrase mapping | Powerful/strong/force wording and heavy aliases including `bash`, `slam`, `obliterate`, and `smash` | Canonical action is `heavy_attack`; target remains the enemy, not the force cue. | PASS |
 | 20 | Conflicting attack cues | A command includes both light and heavy cues | Conflicting cues cancel to the normal canonical action `attack`. | PASS |
+| 21 | Normal attack verb aliases | `damage the forest rat`, `slime the forest rat` | Both map to canonical `attack` and retain `forest rat` as the target. | PASS |
 
 ## Attack initiative integration cases
 

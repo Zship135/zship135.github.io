@@ -24,7 +24,7 @@ ACTION_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "talk": ("talk", "speak", "say", "tell", "ask", "whisper", "shout", "chat"),
     "travel": ("travel", "go", "walk", "run", "move", "head", "travel to", "sprint"),
-    "attack": ("attack", "hit", "strike", "slash", "stab", "shoot", "kick", "fight"),
+    "attack": ("attack", "hit", "strike", "slash", "stab", "shoot", "kick", "fight", "damage", "slime"),
     "light_attack": (
         "light attack", "quick attack", "fast attack", "attack quickly", "attack fast",
         "quickly attack", "poke", "prod", "tap", "flick", "nip",
