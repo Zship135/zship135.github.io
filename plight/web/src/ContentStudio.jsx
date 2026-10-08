@@ -17,6 +17,7 @@ const NAVIGATION = [
   ["quests", "Quests"],
   ["environment", "Furniture / objects"],
   ["resources", "Resources"],
+  ["currencies", "Currencies"],
 ];
 
 const ACTION_SOUND_OPTIONS = [
@@ -418,6 +419,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   );
   const recipes = content?.recipes || [];
   const quests = content?.quests || [];
+  const currencies = content?.currencies || [];
+  const currentCurrency = tab === "currencies" ? currencies.find((currency) => currency.id === selectedId) : null;
   const currentLocation = content?.locations.find((location) => location.id === selectedId);
   const currentRecipe = recipes.find((recipe) => recipe.id === selectedId);
   const currentQuest = quests.find((quest) => quest.id === selectedId);
@@ -437,8 +440,10 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
     ? ACTION_SOUND_OPTIONS
     : tab === "locations"
       ? content?.locations || []
-      : tab === "recipes"
-        ? recipes
+        : tab === "currencies"
+          ? currencies
+          : tab === "recipes"
+          ? recipes
         : tab === "quests"
           ? quests
           : visibleEntities;
@@ -470,7 +475,9 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         ? content.locations
         : nextTab === "map"
           ? content.locations
-          : nextTab === "recipes"
+          : nextTab === "currencies"
+            ? content.currencies || []
+            : nextTab === "recipes"
             ? content.recipes
             : nextTab === "quests"
               ? content.quests
@@ -545,7 +552,16 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
           }],
           reward_experience: 50,
           reward_items: [],
+          reward_currencies: [],
         });
+      });
+      setSelectedId(id);
+      return;
+    }
+    if (tab === "currencies") {
+      const id = makeId("new_currency", new Set(currencies.map((currency) => currency.id)));
+      updateContent((next) => {
+        next.currencies = [...(next.currencies || []), { id, name: "New currency", symbol: "", description: "" }];
       });
       setSelectedId(id);
       return;
@@ -591,6 +607,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
           respawn_chance_percent: 0,
           aggressive_attack_chance_percent: 0,
           behavior: "neutral",
+          currency_drops: [],
         } : {}),
         ...(type === "npc" ? {
           race: "human",
@@ -607,10 +624,21 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   }
 
   function deleteEntry() {
-    const name = currentLocation?.name || currentRecipe?.name || currentQuest?.title || currentEntity?.name;
+    const name = currentLocation?.name || currentRecipe?.name || currentQuest?.title || currentEntity?.name || currentCurrency?.name;
     if (!name || !window.confirm(`Delete "${name}"? References to this content will be removed.`)) return;
     updateContent((next) => {
-      if (tab === "locations") {
+      if (tab === "currencies") {
+        next.currencies = (next.currencies || []).filter((currency) => currency.id !== selectedId);
+        for (const entity of next.entities) {
+          if (entity.currency_drops) entity.currency_drops = entity.currency_drops.filter((drop) => drop.currency_id !== selectedId);
+          for (const entry of entity.stock || []) {
+            if (entry.currency_id === selectedId) entry.currency_id = null;
+          }
+        }
+        for (const quest of next.quests) {
+          if (quest.reward_currencies) quest.reward_currencies = quest.reward_currencies.filter((reward) => reward.currency_id !== selectedId);
+        }
+      } else if (tab === "locations") {
         const removedQuestIds = next.quests
           .filter((quest) => quest.steps.some((step) => step.objectives.some(
             (objective) => objective.type === "visit" && objective.target_id === selectedId,
@@ -781,7 +809,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
             {NAVIGATION.map(([id, label]) => (
               <button aria-current={tab === id ? "page" : undefined} className={tab === id ? "active" : ""} key={id} onClick={() => changeTab(id)} type="button">
                 <span>{label}</span>
-                <small>{id === "map" || id === "locations" ? content.locations.length : id === "audio" ? Object.keys(content.action_sounds || {}).length : id === "recipes" ? content.recipes.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
+                <small>{id === "map" || id === "locations" ? content.locations.length : id === "audio" ? Object.keys(content.action_sounds || {}).length : id === "recipes" ? content.recipes.length : id === "currencies" ? currencies.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
               </button>
             ))}
             <div className="studio-nav-note">
@@ -827,7 +855,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                     ))}
                     {currentEntries.length === 0 && <p className="studio-empty">Nothing here yet. Use + to create one.</p>}
                   </div>
-                  {(currentLocation || currentRecipe || currentQuest || currentEntity) && (
+                  {(currentLocation || currentRecipe || currentQuest || currentEntity || currentCurrency) && (
                     <button className="studio-delete-button" onClick={deleteEntry} type="button">Delete selected</button>
                   )}
                 </aside>
@@ -865,6 +893,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       entity={currentEntity}
                       locations={content.locations}
                       entities={content.entities}
+                      currencies={currencies}
                       lootItems={eligibleItems}
                       onChange={updateEntity}
                       onLocationToggle={(locationId, relationField, checked) => updateContent((next) => {
@@ -874,6 +903,15 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                         location[relationField] = checked
                           ? [...values, selectedId]
                           : values.filter((id) => id !== selectedId);
+                      })}
+                    />
+                  )}
+                  {currentCurrency && tab === "currencies" && (
+                    <CurrencyEditor
+                      currency={currentCurrency}
+                      onChange={(field, value) => updateContent((next) => {
+                        const currency = next.currencies.find((item) => item.id === selectedId);
+                        if (currency) currency[field] = value;
                       })}
                     />
                   )}
@@ -894,6 +932,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       quest={currentQuest}
                       npcs={content.entities.filter((entity) => entity.type === "npc")}
                       entities={content.entities}
+                      currencies={currencies}
                       locations={content.locations}
                       onChange={(field, value) => updateContent((next) => {
                         const quest = next.quests.find((item) => item.id === selectedId);
@@ -901,7 +940,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       })}
                     />
                   )}
-                  {!currentLocation && !currentEntity && !currentRecipe && !currentQuest && <div className="studio-empty-detail">Select an entry or create a new one.</div>}
+                  {!currentLocation && !currentEntity && !currentRecipe && !currentQuest && !currentCurrency && <div className="studio-empty-detail">Select an entry or create a new one.</div>}
                 </div>
               </div>
             )}
@@ -1084,7 +1123,7 @@ function ActionSoundEditor({
   );
 }
 
-function EntityEditor({ entity, entities, locations, lootItems, onChange, onLocationToggle }) {
+function EntityEditor({ entity, entities, currencies = [], locations, lootItems, onChange, onLocationToggle }) {
   const relationField = {
     enemy: "enemy_ids",
     npc: "npc_ids",
@@ -1265,7 +1304,10 @@ function EntityEditor({ entity, entities, locations, lootItems, onChange, onLoca
         <ResourceGatheringEditor gathering={entity.gathering} items={lootItems} onChange={(value) => set("gathering", value)} />
       )}
       {entity.type === "enemy" && (
-        <LootTableEditor entries={entity.loot_table || []} items={lootItems} onChange={(value) => set("loot_table", value)} />
+        <>
+          <LootTableEditor entries={entity.loot_table || []} items={lootItems} onChange={(value) => set("loot_table", value)} />
+          <CurrencyDropEditor entries={entity.currency_drops || []} currencies={currencies} onChange={(value) => set("currency_drops", value)} />
+        </>
       )}
       {relationField && (
         <EntityPicker
@@ -1279,14 +1321,16 @@ function EntityEditor({ entity, entities, locations, lootItems, onChange, onLoca
         <>
           <EntityPicker title="Equipped weapons" options={weaponOptions} selected={entity.weapon_ids} onToggle={(id, selected) => set("weapon_ids", selected ? [...entity.weapon_ids, id] : entity.weapon_ids.filter((weaponId) => weaponId !== id))} emptyMessage="Create a weapon to equip one." />
           <section className="studio-subsection">
-            <div className="studio-subsection-heading"><div><h3>Shop stock</h3><p>Items this NPC offers for sale.</p></div><button className="studio-small-button" disabled={stockOptions.length === 0} onClick={() => onChange((current) => {
-              current.stock.push({ item_id: stockOptions[0].id, quantity: 1, price: 1 });
+            <div className="studio-subsection-heading"><div><h3>Shop stock</h3><p>Items this NPC sells. Stock depletes per player and refills after the restock time. Choose a currency or the item cannot be bought.</p></div><button className="studio-small-button" disabled={stockOptions.length === 0} onClick={() => onChange((current) => {
+              current.stock.push({ item_id: stockOptions[0].id, quantity: 1, price: 1, currency_id: currencies[0]?.id || null, restock_seconds: 300 });
             })} type="button">Add stock</button></div>
             {entity.stock.map((entry, index) => (
               <div className="studio-stock-row" key={`${entry.item_id}-${index}`}>
                 <SelectField label="Item" options={stockOptions} value={entry.item_id} onChange={(value) => setStock(index, "item_id", value)} />
                 <Field label="Quantity" min={0} onChange={(value) => setStock(index, "quantity", value)} type="number" value={entry.quantity} />
                 <Field label="Price" min={0} onChange={(value) => setStock(index, "price", value)} type="number" value={entry.price} />
+                <SelectField emptyLabel="Choose currency" label="Currency" options={currencies} value={entry.currency_id} onChange={(value) => setStock(index, "currency_id", value)} />
+                <Field label="Restock (seconds)" min={1} onChange={(value) => setStock(index, "restock_seconds", value)} type="number" value={entry.restock_seconds ?? 300} />
                 <button aria-label="Remove stock item" className="studio-remove-button" onClick={() => onChange((current) => { current.stock.splice(index, 1); })} type="button">×</button>
               </div>
             ))}
@@ -1627,7 +1671,7 @@ function LootTableEditor({
   );
 }
 
-function QuestEditor({ quest, npcs, entities, locations, onChange }) {
+function QuestEditor({ quest, npcs, entities, currencies = [], locations, onChange }) {
   function set(field, value) {
     onChange((current, next) => { current[field] = next; }, value);
   }
@@ -1911,8 +1955,94 @@ function QuestEditor({ quest, npcs, entities, locations, onChange }) {
           </div>
         ))}
       </section>
+      <section className="studio-subsection">
+        <div className="studio-subsection-heading">
+          <div><h3>Currency rewards</h3><p>Currency added to the player's wallet at final turn-in.</p></div>
+          <button
+            className="studio-small-button"
+            disabled={currencies.length === 0 || (quest.reward_currencies || []).length >= 20}
+            onClick={() => onChange((current) => {
+              current.reward_currencies ||= [];
+              current.reward_currencies.push({ currency_id: currencies[0].id, amount: 1 });
+            })}
+            type="button"
+          >
+            Add currency reward
+          </button>
+        </div>
+        {(quest.reward_currencies || []).map((reward, index) => (
+          <div className="studio-quest-objective" key={`${reward.currency_id}-${index}`}>
+            <SelectField
+              label="Currency"
+              options={currencies}
+              value={reward.currency_id}
+              onChange={(value) => onChange((current) => { current.reward_currencies[index].currency_id = value; })}
+            />
+            <Field
+              label="Amount"
+              min={1}
+              onChange={(value) => onChange((current) => { current.reward_currencies[index].amount = value; })}
+              type="number"
+              value={reward.amount}
+            />
+            <button
+              aria-label="Remove currency reward"
+              className="studio-remove-button"
+              onClick={() => onChange((current) => { current.reward_currencies.splice(index, 1); })}
+              type="button"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        {currencies.length === 0 && <p className="studio-hint">Create a currency in the Currencies section first.</p>}
+      </section>
       <p className="studio-hint">To gate a passage, select this quest as the exit requirement in the destination location's editor.</p>
     </div>
+  );
+}
+
+function CurrencyEditor({ currency, onChange }) {
+  return (
+    <div className="studio-form">
+      <div className="studio-form-heading"><p className="eyebrow">CURRENCY</p><h2>{currency.name}</h2></div>
+      <Field label="Name" onChange={(value) => onChange("name", value)} value={currency.name} />
+      <Field label="Symbol (shown next to amounts, e.g. g or $)" onChange={(value) => onChange("symbol", value.slice(0, 8))} value={currency.symbol || ""} />
+      <TextAreaField label="Description" onChange={(value) => onChange("description", value)} rows={3} value={currency.description || ""} />
+      <p className="studio-hint">Players earn this from enemy drops and quest rewards, and spend it at NPC shops. Wallets start empty.</p>
+    </div>
+  );
+}
+
+function CurrencyDropEditor({ entries, currencies, onChange }) {
+  function update(index, field, value) {
+    onChange(entries.map((entry, entryIndex) => (entryIndex === index ? { ...entry, [field]: value } : entry)));
+  }
+  return (
+    <section className="studio-subsection">
+      <div className="studio-subsection-heading">
+        <div><h3>Currency drops</h3><p>Currency added to the wallet of the player who defeats this enemy.</p></div>
+        <button
+          className="studio-small-button"
+          disabled={currencies.length === 0 || entries.length >= 20}
+          onClick={() => onChange([...entries, { currency_id: currencies[0].id, chance: 1, minimum_amount: 1, maximum_amount: 1 }])}
+          type="button"
+        >
+          Add currency drop
+        </button>
+      </div>
+      {entries.map((entry, index) => (
+        <div className="studio-loot-row" key={`${entry.currency_id}-${index}`}>
+          <SelectField label="Currency" options={currencies} value={entry.currency_id} onChange={(value) => update(index, "currency_id", value)} />
+          <Field label="Chance (%)" max={100} min={0} onChange={(value) => update(index, "chance", value / 100)} step={0.1} type="number" value={Number((entry.chance * 100).toFixed(1))} />
+          <Field label="Minimum amount" min={1} onChange={(value) => update(index, "minimum_amount", value)} type="number" value={entry.minimum_amount} />
+          <Field label="Maximum amount" min={1} onChange={(value) => update(index, "maximum_amount", value)} type="number" value={entry.maximum_amount} />
+          <button aria-label="Remove currency drop" className="studio-remove-button" onClick={() => onChange(entries.filter((_, entryIndex) => entryIndex !== index))} type="button">×</button>
+        </div>
+      ))}
+      {entries.length === 0 && <p className="studio-hint">This enemy does not drop currency.</p>}
+      {currencies.length === 0 && <p className="studio-hint">Create a currency in the Currencies section first.</p>}
+    </section>
   );
 }
 

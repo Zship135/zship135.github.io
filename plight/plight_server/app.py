@@ -39,6 +39,8 @@ from plight_server.audio_assets import (
     save_mp3_audio,
 )
 from plight_server.game import (
+    _add_currency,
+    _currency_text,
     _complete_gathering,
     award_enemy_defeat,
     award_experience,
@@ -2311,6 +2313,14 @@ def turn_in_quest(
             item_id = reward["item_id"]
             inventory[item_id] = inventory.get(item_id, 0) + reward["quantity"]
         character.inventory = inventory
+        currency_map = {c["id"]: c for c in content.get("currencies", [])}
+        currency_messages = []
+        for reward in quest.get("reward_currencies", []):
+            if reward["currency_id"] in currency_map:
+                _add_currency(character, reward["currency_id"], reward["amount"])
+                currency_messages.append(
+                    f"Reward: {_currency_text(currency_map, reward['currency_id'], reward['amount'])}."
+                )
         state[quest_id] = {
             **quest_state,
             "status": "completed",
@@ -2325,6 +2335,7 @@ def turn_in_quest(
             f"Reward: {reward['quantity']} {entities[reward['item_id']]['name']}."
             for reward in quest.get("reward_items", [])
         )
+        messages.extend(currency_messages)
         messages.extend(award_experience(character, quest["reward_experience"]))
         db.commit()
         _publish(

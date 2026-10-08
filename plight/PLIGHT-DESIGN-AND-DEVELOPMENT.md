@@ -156,6 +156,14 @@ Starting a gather locks the character into the timed action. `stop` cancels with
 
 Recipes can produce items, weapons, or shields and define ingredients, an optional station, and an optional skill/level requirement. Crafting is immediate after validation, requires the station to be present in the current location, consumes the required ingredients, creates the authored quantity, and awards the recipe proficiency's XP. Existing recipes without a skill requirement remain valid.
 
+### Currencies and NPC shops (implemented)
+
+- Currencies are authored in Content Studio's **Currencies** section (name, optional symbol such as `g`, description). Each character keeps a separate wallet balance per currency (`Character.wallet`); wallets start empty and are not inventory items.
+- Players earn currency from enemy `currency_drops` (chance plus min/max amount, boosted by drop-chance luck effects) and quest `reward_currencies` (granted at turn-in). Gathering does not pay currency, and there is no exchange or death penalty.
+- A shop stock entry has an item, a price, a `currency_id`, a `quantity` and `restock_seconds` (default 300). Entries with no currency cannot be bought. Shops do not buy items back (`sell` replies that they don't).
+- Stock is tracked per player in `Character.shop_state`: buying reduces that player's remaining quantity, and the first purchase starts a restock timer that resets the quantity when it elapses. Other players are unaffected.
+- Players use `buy [quantity] <item> [from <npc>]` or the Buy button in the NPC panel. Deleting a currency removes its drops and rewards and clears the currency on stock entries.
+
 ### Shops and player marketplace
 
 - NPC shops buy and sell goods.

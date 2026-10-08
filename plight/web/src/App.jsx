@@ -47,7 +47,7 @@ function upsertActivity(current, entry) {
 function activityMessageClass(message, entry) {
   if (entry.type === "location") return "world-text";
   if (entry.type === "enemy") return "enemy-text";
-  if (/^(You gain \d+ experience\.|Loot:|No items dropped\.)/i.test(message)) return "reward-text";
+  if (/^(You gain \d+ experience\.|Loot:|Currency:|Reward:|No items dropped\.)/i.test(message)) return "reward-text";
   if (/^(Roll for initiative:|Roll for initiative against|You roll a D20:)/i.test(message)) return "initiative-text";
   if (/\brolls D\d+\b|\bhits you for\b|\bis defeated\b/i.test(message)) return "enemy-text";
   return "player-text";
@@ -1414,6 +1414,11 @@ export default function App() {
                 <span>ATK {snapshot?.character?.stats?.attack ?? "—"}</span>
                 <span>DEF {snapshot?.character?.stats?.defense ?? "—"}</span>
                 <span>SPD {snapshot?.character?.stats?.speed ?? "—"}</span>
+                {(snapshot?.character?.wallet || []).map((currency) => (
+                  <span className="wallet-balance" key={currency.currency_id} title={currency.name}>
+                    {currency.symbol ? `${currency.symbol}${currency.amount.toLocaleString()}` : `${currency.amount.toLocaleString()} ${currency.name}`}
+                  </span>
+                ))}
               </div>
               <TimedActivityPanel
                 busy={commandBusy}
@@ -1449,6 +1454,28 @@ export default function App() {
                 <article className="world-entity npc-entity" key={npc.id}>
                   <strong>{npc.name}</strong><p>{npc.description}</p>
                   <button onClick={() => enterCommand(`talk to ${npc.name}`)} type="button">Talk</button>
+                  {(npc.shop || []).length > 0 && (
+                    <section className="shop-offers" aria-label={`${npc.name} shop`}>
+                      <h3>Shop</h3>
+                      {npc.shop.map((offer) => (
+                        <div className="shop-offer" key={offer.item_id}>
+                          <span>{offer.item_name} · {offer.price_text}</span>
+                          <small>
+                            {offer.remaining > 0
+                              ? `${offer.remaining} left`
+                              : `Sold out${offer.restock_seconds_remaining ? ` · restocks in ${offer.restock_seconds_remaining}s` : ""}`}
+                          </small>
+                          <button
+                            disabled={offer.remaining <= 0}
+                            onClick={() => enterCommand(`buy 1 ${offer.item_name} from ${npc.name}`)}
+                            type="button"
+                          >
+                            Buy
+                          </button>
+                        </div>
+                      ))}
+                    </section>
+                  )}
                   {(npc.quests || []).map((quest) => (
                     <section className="quest-offer" key={quest.id}>
                       <h3>{quest.title}</h3>
@@ -1483,6 +1510,10 @@ export default function App() {
                         <p className="quest-complete">
                           Completed · {quest.reward_experience} XP
                           {(quest.reward_items || []).map((reward) => ` · ${reward.quantity} ${reward.item_name}`).join("")}
+                          {(quest.reward_currencies || []).map((reward) => {
+                            const currency = (snapshot?.character?.wallet || []).find((entry) => entry.currency_id === reward.currency_id);
+                            return ` · ${currency?.symbol ? `${currency.symbol}${reward.amount}` : `${reward.amount} ${currency?.name || reward.currency_id}`}`;
+                          }).join("")}
                         </p>
                       )}
                     </section>

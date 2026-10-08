@@ -3392,3 +3392,108 @@ def test_level_thresholds_grant_health_and_attack_increases() -> None:
     assert character.experience == 300
     assert character.combat_stats["attack"] == 5
     assert character.combat_stats["max_health"] == 120
+
+
+def _currency_world(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    world = content_store.WorldContent.model_validate(
+        {
+            "currencies": [{"id": "gold", "name": "Gold", "symbol": "g"}],
+            "locations": [
+                {
+                    "id": "market",
+                    "name": "Market",
+                    "description": "A market.",
+                    "position": {"x": 50, "y": 50},
+                    "starting_species": ["human", "goblin"],
+                    "enemy_ids": ["rat"],
+                    "npc_ids": ["trader"],
+                }
+            ],
+            "entities": [
+                {"id": "tonic", "type": "item", "name": "Tonic", "description": "Tasty."},
+                {
+                    "id": "trader",
+                    "type": "npc",
+                    "name": "Trader",
+                    "description": "Sells.",
+                    "present_for": ["human"],
+                    "stock": [
+                        {
+                            "item_id": "tonic",
+                            "price": 5,
+                            "quantity": 2,
+                            "currency_id": "gold",
+                            "restock_seconds": 60,
+                        }
+                    ],
+                },
+                {
+                    "id": "rat",
+                    "type": "enemy",
+                    "name": "Rat",
+                    "description": "Squeak.", "attributes": {"health": 3, "attack": 1, "defense": 0},
+                    "currency_drops": [
+                        {"currency_id": "gold", "chance": 1, "minimum_amount": 3, "maximum_amount": 3}
+                    ],
+                },
+            ],
+        }
+    )
+    world_path = tmp_path / "world_content.json"
+    world_path.write_text(world.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", world_path)
+    return world.model_dump(mode="json")
+
+
+def test_currency_validation_rejects_unknown_references() -> None:
+    with pytest.raises(ValueError):
+        content_store.WorldContent.model_validate(
+            {
+                "locations": [],
+                "entities": [
+                    {
+                        "id": "rat",
+                        "type": "enemy",
+                        "name": "Rat",
+                        "description": "x",
+                        "currency_drops": [
+                            {"currency_id": "nope", "chance": 1, "minimum_amount": 1, "maximum_amount": 1}
+                        ],
+                    }
+                ],
+            }
+        )
+
+
+def test_currency_drop_and_per_player_shop_restock(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = _currency_world(tmp_path, monkeypatch)
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    areas = {location["id"]: location for location in content["locations"]}
+    character = SimpleNamespace(
+        area_id="market", species="human", inventory={}, wallet={}, shop_state={}, quest_state={}
+    )
+    messages = game._reward_enemy_defeat(character, entities["rat"], entities, content)
+    assert "Currency: g3." in messages
+    assert "No items dropped." not in messages
+    assert character.wallet == {"gold": 3}
+
+    args = {"item": {"name": "tonic", "quantity": 1}}
+    assert "need" in game._buy(character, args, content, areas, entities, now=100)[0]
+    character.wallet = {"gold": 12}
+    assert game._buy(character, args, content, areas, entities, now=100)[0].startswith("You buy 1 Tonic")
+    assert character.wallet == {"gold": 7}
+    assert game._buy(character, args, content, areas, entities, now=110)[0].startswith("You buy")
+    assert character.wallet == {"gold": 2}
+    assert "out of Tonic" in game._buy(character, args, content, areas, entities, now=120)[0]
+    character.wallet = {"gold": 50}
+    assert game._buy(character, args, content, areas, entities, now=161)[0].startswith("You buy")
+    assert character.inventory == {"tonic": 3}
+    other = SimpleNamespace(
+        area_id="market", species="human", inventory={}, wallet={"gold": 5}, shop_state={}, quest_state={}
+    )
+    assert game._buy(other, args, content, areas, entities, now=120)[0].startswith("You buy")
+
+

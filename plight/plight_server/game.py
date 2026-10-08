@@ -166,6 +166,182 @@ def _apply_timed_effect(
     character.active_effects = active
 
 
+def _currency_text(currencies: dict[str, dict[str, Any]], currency_id: str, amount: int) -> str:
+    currency = currencies.get(currency_id, {})
+    symbol = currency.get("symbol") or ""
+    if symbol:
+        return f"{symbol}{amount:,}"
+    return f"{amount:,} {currency.get('name', currency_id.replace('_', ' ').title())}"
+
+
+def _add_currency(character: Any, currency_id: str, amount: int) -> None:
+    wallet = dict(getattr(character, "wallet", None) or {})
+    wallet[currency_id] = int(wallet.get(currency_id, 0)) + amount
+    character.wallet = wallet
+
+
+def _wallet_view(character: Any, content: dict[str, Any]) -> list[dict[str, Any]]:
+    wallet = getattr(character, "wallet", None) or {}
+    return [
+        {
+            "currency_id": currency["id"],
+            "name": currency["name"],
+            "symbol": currency.get("symbol", ""),
+            "amount": max(0, int(wallet.get(currency["id"], 0))),
+        }
+        for currency in content.get("currencies", [])
+    ]
+
+
+def _stock_state(
+    character: Any,
+    npc_id: str,
+    entry: dict[str, Any],
+    now: float,
+) -> tuple[int, int]:
+    state = ((getattr(character, "shop_state", None) or {}).get(npc_id) or {}).get(
+        entry["item_id"]
+    ) or {}
+    restock_at = state.get("restock_at")
+    if isinstance(restock_at, (int, float)) and restock_at > now:
+        purchased = max(0, int(state.get("purchased", 0)))
+        return max(0, entry["quantity"] - purchased), max(0, ceil(restock_at - now))
+    return entry["quantity"], 0
+
+
+def _shop_view(
+    character: Any,
+    npc: dict[str, Any],
+    entities: dict[str, dict[str, Any]],
+    currencies: dict[str, dict[str, Any]],
+    now: float,
+) -> list[dict[str, Any]]:
+    shop = []
+    for entry in npc.get("stock", []):
+        item = entities.get(entry["item_id"])
+        if item is None or entry.get("currency_id") not in currencies:
+            continue
+        remaining, restock_in = _stock_state(character, npc["id"], entry, now)
+        shop.append(
+            {
+                "item_id": entry["item_id"],
+                "item_name": item["name"],
+                "currency_id": entry["currency_id"],
+                "price": entry["price"],
+                "price_text": _currency_text(currencies, entry["currency_id"], entry["price"]),
+                "remaining": remaining,
+                "capacity": entry["quantity"],
+                "restock_seconds_remaining": restock_in,
+            }
+        )
+    return shop
+
+
+def _buy(
+    character: Any,
+    arguments: dict[str, Any],
+    content: dict[str, Any],
+    areas: dict[str, dict[str, Any]],
+    entities: dict[str, dict[str, Any]],
+    now: float | None = None,
+) -> list[str]:
+    current_time = time.time() if now is None else now
+    currencies = {currency["id"]: currency for currency in content.get("currencies", [])}
+    area = areas.get(character.area_id)
+    if area is None:
+        return ["You are not in a valid location."]
+    item_value = arguments.get("item")
+    quantity = 1
+    if isinstance(item_value, dict):
+        quantity = int(item_value.get("quantity") or 1)
+    if arguments.get("quantity"):
+        quantity = int(arguments["quantity"])
+    item_text = _command_subject(arguments, "item", "subject", "target")
+    shop_text = str(arguments.get("shop") or "")
+    parts = re.split(r"\s+from\s+", item_text, maxsplit=1, flags=re.I)
+    item_text = parts[0]
+    if len(parts) == 2 and not shop_text:
+        shop_text = parts[1]
+    shop_text = re.sub(r"^(?:the|a|an)\s+", "", shop_text.strip(), flags=re.I)
+    if "from" in shop_text.casefold().split():
+        shop_text = re.split(r"\s+from\s+", shop_text, maxsplit=1, flags=re.I)[-1]
+    if not item_text:
+        return ["Name what you would like to buy."]
+    quantity = max(1, quantity)
+    shopkeepers = [
+        entities[npc_id]
+        for npc_id in area["npc_ids"]
+        if character.species in entities[npc_id]["present_for"]
+        and entities[npc_id].get("stock")
+    ]
+    if shop_text:
+        shopkeepers = _matching_entities(shop_text, shopkeepers)
+    if not shopkeepers:
+        return [f"There is no shop called {shop_text} here." if shop_text else "Nobody here is selling anything."]
+    offers = []
+    for npc in shopkeepers:
+        for entry in npc["stock"]:
+            item = entities.get(entry["item_id"])
+            if item is not None and _matching_entities(item_text, [item]):
+                offers.append((npc, entry, item))
+    exact = [
+        offer for offer in offers
+        if _normalize_npc_name(offer[2]["name"]) == _normalize_npc_name(item_text)
+    ]
+    offers = exact or offers
+    if not offers:
+        return [f"Nobody here is selling {item_text}."]
+    if len({offer[2]["id"] for offer in offers}) > 1:
+        return [f"Which item do you mean: {', '.join(sorted({offer[2]['name'] for offer in offers}))}?"]
+    if len(offers) > 1:
+        return [f"Who do you want to buy {offers[0][2]['name']} from: {', '.join(offer[0]['name'] for offer in offers)}?"]
+    npc, entry, item = offers[0]
+    currency_id = entry.get("currency_id")
+    if currency_id not in currencies:
+        return [f"{npc['name']} has not set a price for {item['name']}."]
+    remaining, restock_in = _stock_state(character, npc["id"], entry, current_time)
+    if remaining == 0:
+        return [
+            f"{npc['name']} is out of {item['name']} for you"
+            + (f"; more arrives in {_duration_text(restock_in)}." if restock_in else ".")
+        ]
+    if quantity > remaining:
+        return [f"{npc['name']} only has {remaining} {item['name']} left for you."]
+    total = entry["price"] * quantity
+    wallet = dict(getattr(character, "wallet", None) or {})
+    balance = int(wallet.get(currency_id, 0))
+    if balance < total:
+        return [
+            f"You need {_currency_text(currencies, currency_id, total)} but only have "
+            f"{_currency_text(currencies, currency_id, balance)}."
+        ]
+    wallet[currency_id] = balance - total
+    character.wallet = wallet
+    inventory = dict(character.inventory or {})
+    inventory[item["id"]] = inventory.get(item["id"], 0) + quantity
+    character.inventory = inventory
+    shop_state = {k: dict(v) for k, v in (getattr(character, "shop_state", None) or {}).items()}
+    npc_state = dict(shop_state.get(npc["id"]) or {})
+    previous = npc_state.get(item["id"]) or {}
+    still_restocking = (
+        isinstance(previous.get("restock_at"), (int, float))
+        and previous["restock_at"] > current_time
+    )
+    npc_state[item["id"]] = {
+        "purchased": (int(previous.get("purchased", 0)) if still_restocking else 0) + quantity,
+        "restock_at": previous["restock_at"]
+        if still_restocking
+        else current_time + entry["restock_seconds"],
+    }
+    shop_state[npc["id"]] = npc_state
+    character.shop_state = shop_state
+    _record_quest_event(character, content, "collect", item["id"], quantity)
+    return [
+        f"You buy {_quantity_name(quantity, item['name'])} from {npc['name']} "
+        f"for {_currency_text(currencies, currency_id, total)}."
+    ]
+
+
 def _luck_bonuses(character: Any, now: float | None = None) -> tuple[int, int]:
     drop_chance = 0
     gathering_yield = 0
@@ -336,6 +512,7 @@ def _quest_view(
             }
             for reward in quest.get("reward_items", [])
         ],
+        "reward_currencies": list(quest.get("reward_currencies", [])),
         "can_turn_in": status == "active" and saved_state.get("ready_to_turn_in", False),
     }
 
@@ -640,6 +817,12 @@ def _snapshot(
         if character.species in entities[entity_id]["present_for"]
     ]
     npcs = visible_entities(visible_npc_ids)
+    currency_map = {currency["id"]: currency for currency in content.get("currencies", [])}
+    snapshot_time = time.time()
+    for npc_view in npcs:
+        npc_view["shop"] = _shop_view(
+            character, entities[npc_view["id"]], entities, currency_map, snapshot_time
+        )
     objects = visible_entities(area["object_ids"])
     resources = visible_entities(area["resource_ids"])
     for resource_view in resources:
@@ -694,6 +877,7 @@ def _snapshot(
             "respawn_area_id": getattr(character, "respawn_area_id", None)
             or starting_location(character.species),
             "level": level,
+            "wallet": _wallet_view(character, content),
             "experience": experience,
             "experience_progress": experience_progress,
             "experience_to_next_level": experience_to_next_level,
@@ -1030,6 +1214,10 @@ def resolve_command(
             messages.append(_cancel_gathering(character))
         elif action_id == "craft":
             messages.extend(_craft(character, args, content, areas, entities))
+        elif action_id == "shop_buy":
+            messages.extend(_buy(character, args, content, areas, entities))
+        elif action_id == "shop_sell":
+            messages.append("Shopkeepers here do not buy items back.")
         elif action_id == "use_item":
             item = args.get("item")
             subject = (
@@ -1566,7 +1754,21 @@ def _reward_enemy_defeat(
         messages.append(
             f"Loot: {quantity} {item_name}{'' if quantity == 1 else 's'}."
         )
-    if not dropped_items:
+    currencies = {
+        currency["id"]: currency for currency in (content or {}).get("currencies", [])
+    }
+    dropped_currency = False
+    for drop in enemy.get("currency_drops", []):
+        if drop["currency_id"] not in currencies:
+            continue
+        chance = min(1.0, drop["chance"] * (1 + drop_chance_bonus / 100))
+        if combat_rng.random() >= chance:
+            continue
+        amount = combat_rng.randint(drop["minimum_amount"], drop["maximum_amount"])
+        _add_currency(character, drop["currency_id"], amount)
+        dropped_currency = True
+        messages.append(f"Currency: {_currency_text(currencies, drop['currency_id'], amount)}.")
+    if not dropped_items and not dropped_currency:
         messages.append("No items dropped.")
     character.inventory = inventory
     return messages

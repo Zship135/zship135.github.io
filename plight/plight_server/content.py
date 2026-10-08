@@ -202,10 +202,37 @@ class ContentLocation(ContentModel):
         return [line.strip() for line in lines]
 
 
+class Currency(ContentModel):
+    id: str = Field(pattern=_SLUG.pattern)
+    name: str = Field(min_length=1, max_length=100)
+    symbol: str = Field(default="", max_length=8)
+    description: str = Field(default="", max_length=1000)
+
+
+class CurrencyAmount(ContentModel):
+    currency_id: str = Field(pattern=_SLUG.pattern)
+    amount: int = Field(ge=1, le=1_000_000_000)
+
+
+class CurrencyDrop(ContentModel):
+    currency_id: str = Field(pattern=_SLUG.pattern)
+    chance: float = Field(ge=0, le=1)
+    minimum_amount: int = Field(default=1, ge=1, le=1_000_000_000)
+    maximum_amount: int = Field(default=1, ge=1, le=1_000_000_000)
+
+    @model_validator(mode="after")
+    def validate_amount_range(self) -> CurrencyDrop:
+        if self.maximum_amount < self.minimum_amount:
+            raise ValueError("Maximum currency amount must be at least the minimum.")
+        return self
+
+
 class StockEntry(ContentModel):
     item_id: str = Field(pattern=_SLUG.pattern)
     quantity: int = Field(ge=0, le=1_000_000)
     price: int = Field(ge=0, le=1_000_000_000)
+    currency_id: str | None = Field(default=None, pattern=_SLUG.pattern)
+    restock_seconds: int = Field(default=300, ge=1, le=604_800)
 
 
 class DialogueChoice(ContentModel):
@@ -382,6 +409,7 @@ class ContentEntity(ContentModel):
     stock: list[StockEntry] = Field(default_factory=list, max_length=100)
     weapon_ids: list[str] = Field(default_factory=list, max_length=50)
     loot_table: list[LootDrop] = Field(default_factory=list, max_length=100)
+    currency_drops: list[CurrencyDrop] = Field(default_factory=list, max_length=20)
 
     @field_validator("ambience")
     @classmethod
@@ -442,6 +470,7 @@ class Quest(ContentModel):
     steps: list[QuestStep] = Field(min_length=1, max_length=100)
     reward_experience: int = Field(default=0, ge=0, le=1_000_000)
     reward_items: list[QuestRewardItem] = Field(default_factory=list, max_length=20)
+    reward_currencies: list[CurrencyAmount] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="before")
     @classmethod
@@ -534,6 +563,7 @@ class WorldContent(BaseModel):
     entities: list[ContentEntity] = Field(default_factory=list, max_length=2000)
     recipes: list[ContentRecipe] = Field(default_factory=list, max_length=2000)
     quests: list[Quest] = Field(default_factory=list, max_length=2000)
+    currencies: list[Currency] = Field(default_factory=list, max_length=100)
 
     @field_validator("action_sounds")
     @classmethod
@@ -557,6 +587,7 @@ class WorldContent(BaseModel):
         entities = unique_ids(self.entities, "Entity")
         recipes = unique_ids(self.recipes, "Recipe")
         quests = unique_ids(self.quests, "Quest")
+        currencies = unique_ids(self.currencies, "Currency")
         entity_types = {entity_id: entity.type for entity_id, entity in entities.items()}
 
         starting_species = {
@@ -651,6 +682,8 @@ class WorldContent(BaseModel):
                         "item", "weapon", "shield", "resource"
                     }:
                         raise ValueError(f"Enemy {entity.id} has loot referencing a missing or invalid item.")
+                if any(drop.currency_id not in currencies for drop in entity.currency_drops):
+                    raise ValueError(f"Enemy {entity.id} has a currency drop referencing a missing currency.")
             elif (
                 entity.attack_die_sides is not None
                 or entity.respawn_chance_percent is not None
@@ -658,7 +691,7 @@ class WorldContent(BaseModel):
                 or entity.behavior is not None
             ):
                 raise ValueError(f"Enemy combat settings only apply to enemies ({entity.id}).")
-            elif entity.loot_table:
+            elif entity.loot_table or entity.currency_drops:
                 raise ValueError(f"Loot tables only apply to enemies ({entity.id}).")
             if entity.type == "weapon":
                 damage = entity.attributes.get("damage", 0)
@@ -681,6 +714,11 @@ class WorldContent(BaseModel):
                 for entry in entity.stock
             ):
                 raise ValueError(f"NPC {entity.id} has stock referencing a missing or invalid item.")
+            if any(
+                entry.currency_id is not None and entry.currency_id not in currencies
+                for entry in entity.stock
+            ):
+                raise ValueError(f"NPC {entity.id} has stock priced in a missing currency.")
 
         for recipe in self.recipes:
             if entity_types.get(recipe.output_item_id) not in {"item", "weapon", "shield"}:
@@ -722,6 +760,8 @@ class WorldContent(BaseModel):
                 for reward in quest.reward_items
             ):
                 raise ValueError(f"Quest {quest.id} has a missing or invalid reward item.")
+            if any(reward.currency_id not in currencies for reward in quest.reward_currencies):
+                raise ValueError(f"Quest {quest.id} has a reward in a missing currency.")
         return self
 
 
