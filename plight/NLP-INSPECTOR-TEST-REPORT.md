@@ -79,7 +79,7 @@ python .\plight_nlp_inspector.py --engine rpgnlp "attack the goblin with a sword
 | 16 | Inventory menu mapping | `observe my inventory`, `look in my inventory`, `what am I carrying?`, and armor/hands/weapons subjects | Each phrase maps to canonical `observe` with the normalized inventory-view subject. | PASS |
 | 17 | Unequip extraction | `unequip my right hand`, `take off the iron sword` | Both map to canonical `unequip_item` with the equipment slot or item argument. | PASS |
 | 18 | Light-attack phrase mapping | Quick/fast attack wording, “attack quickly,” and light aliases such as `poke` | Canonical action is `light_attack`; target remains the enemy, not the speed cue. | PASS |
-| 19 | Heavy-attack phrase mapping | Powerful/strong/force wording and heavy aliases including `bash`, `slam`, `obliterate`, and `smash` | Canonical action is `heavy_attack`; target remains the enemy, not the force cue. | PASS |
+| 19 | Heavy-attack phrase mapping | Powerful/strong/force wording and heavy aliases including `bash`, `slam`, `obliterate`, `smash`, `crush`, `demolish`, `shatter`, `pummel`, `pound`, `batter`, `pulverize`, `maul`, and `wreck` | Canonical action is `heavy_attack`; target remains the enemy, not the force cue. | PASS |
 | 20 | Conflicting attack cues | A command includes both light and heavy cues | Conflicting cues cancel to the normal canonical action `attack`. | PASS |
 | 21 | Normal attack verb aliases | `damage the forest rat`, `slime the forest rat` | Both map to canonical `attack` and retain `forest rat` as the target. | PASS |
 

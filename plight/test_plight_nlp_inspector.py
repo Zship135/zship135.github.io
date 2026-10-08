@@ -38,6 +38,12 @@ class LocalParserTests(unittest.TestCase):
             "slam the forest rat": "heavy_attack",
             "obliterate the forest rat": "heavy_attack",
             "smash the forest rat": "heavy_attack",
+            "pummel the forest rat": "heavy_attack",
+            "pound the forest rat": "heavy_attack",
+            "batter the forest rat": "heavy_attack",
+            "pulverize the forest rat": "heavy_attack",
+            "maul the forest rat": "heavy_attack",
+            "wreck the forest rat": "heavy_attack",
         }
         for text, action_id in examples.items():
             with self.subTest(text=text):
