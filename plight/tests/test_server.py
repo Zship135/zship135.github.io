@@ -4,7 +4,7 @@ import json
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
-from time import monotonic, sleep
+from time import monotonic, sleep, time
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -927,7 +927,8 @@ def test_observe_inventory_phrases_open_canonical_menu_views(client: TestClient)
                 "name": "Iron sword",
                 "quantity": 1,
                 "type": "weapon",
-                "equipable_slots": ["left_hand", "right_hand"],
+                "equipable_slots": ["right_hand"],
+                "can_use": False,
             },
             {
                 "id": "wood",
@@ -935,6 +936,7 @@ def test_observe_inventory_phrases_open_canonical_menu_views(client: TestClient)
                 "quantity": 2,
                 "type": "item",
                 "equipable_slots": [],
+                "can_use": False,
             },
         ]
 
@@ -957,15 +959,15 @@ def test_equip_unequip_validate_ownership_slot_and_item_definition(client: TestC
         assert response.status_code == 200, response.text
         return response.json()["result"]
 
-    equipped = command("equip the iron sword in my left hand", "adf0f265-edca-449a-8ce5-100000000041")
-    assert equipped["interpretation"]["occurrences"][0]["action_id"] == "equip_item"
-    assert equipped["messages"] == ["You equip Iron sword in your left hand."]
-    assert equipped["snapshot"]["character"]["equipment"]["left_hand"] == "iron_sword"
+    left_hand = command("equip the iron sword in my left hand", "adf0f265-edca-449a-8ce5-100000000041")
+    assert left_hand["interpretation"]["occurrences"][0]["action_id"] == "equip_item"
+    assert left_hand["messages"] == ["Iron sword cannot be equipped in your left hand."]
+    assert left_hand["snapshot"]["character"]["equipment"]["left_hand"] == ""
     persisted_snapshot = client.get("/api/v1/world/snapshot", headers=headers).json()
-    assert persisted_snapshot["character"]["equipment"]["left_hand"] == "iron_sword"
+    assert persisted_snapshot["character"]["equipment"]["left_hand"] == ""
     with api.SessionLocal() as db:
         character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
-        assert character.equipment["left_hand"] == "iron_sword"
+        assert character.equipment["left_hand"] == "fist"
 
     non_owned = command("equip wooden club in my right hand", "adf0f265-edca-449a-8ce5-100000000042")
     assert non_owned["messages"] == ["You are not carrying a Wooden club."]
@@ -981,18 +983,19 @@ def test_equip_unequip_validate_ownership_slot_and_item_definition(client: TestC
     unknown_slot = command("equip iron sword in my backpack", "adf0f265-edca-449a-8ce5-100000000048")
     assert "Choose an equipment slot:" in unknown_slot["messages"][0]
 
+    command("equip iron sword in my right hand", "adf0f265-edca-449a-8ce5-100000000046")
     named_unequip = command("unequip the iron sword", "adf0f265-edca-449a-8ce5-100000000045")
     assert named_unequip["interpretation"]["occurrences"][0]["action_id"] == "unequip_item"
-    assert named_unequip["messages"] == ["You unequip Iron sword from your left hand."]
-    command("equip iron sword in my right hand", "adf0f265-edca-449a-8ce5-100000000046")
-    unequipped = command("unequip from my right hand", "adf0f265-edca-449a-8ce5-100000000047")
+    assert named_unequip["messages"] == ["You unequip Iron sword from your right hand."]
+    command("equip iron sword in my right hand", "adf0f265-edca-449a-8ce5-100000000047")
+    unequipped = command("unequip from my right hand", "adf0f265-edca-449a-8ce5-100000000049")
     assert unequipped["interpretation"]["occurrences"][0]["action_id"] == "unequip_item"
     assert unequipped["messages"] == ["You unequip Iron sword from your right hand."]
     assert unequipped["snapshot"]["character"]["equipment"]["right_hand"] == "fist"
 
     with api.SessionLocal() as db:
         character = db.scalar(select(Character).where(Character.account_id == registered["account_id"]))
-        assert character.equipment["left_hand"] == "fist"
+        assert character.equipment["left_hand"] == ""
         assert character.equipment["right_hand"] == "fist"
         assert character.inventory == {"iron_sword": 1, "wood": 1}
 
@@ -1011,10 +1014,7 @@ def test_existing_two_hand_equipment_is_completed_with_empty_slots() -> None:
         combat_state = {}
 
     result = game.snapshot(LegacyCharacter())
-    assert result["character"]["equipment"] == {
-        **game.DEFAULT_EQUIPMENT,
-        "left_hand": "iron_sword",
-    }
+    assert result["character"]["equipment"] == game.DEFAULT_EQUIPMENT
 
 
 def test_combat_uses_only_right_hand_and_enemy_attack_die(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1052,7 +1052,7 @@ def test_combat_uses_only_right_hand_and_enemy_attack_die(client: TestClient, mo
         assert attacked.status_code == 200
         assert attacked.json()["status"] == "completed"
 
-    assert "equip Iron sword in your left hand" in left_equipped.json()["result"]["messages"][0]
+    assert "cannot be equipped in your left hand" in left_equipped.json()["result"]["messages"][0]
     assert "equip Wooden club in your right hand" in equipped.json()["result"]["messages"][0]
     result = attacked.json()["result"]
     assert any("right hand Wooden club for 6 damage" in message for message in result["messages"]), result["messages"]
@@ -1060,7 +1060,6 @@ def test_combat_uses_only_right_hand_and_enemy_attack_die(client: TestClient, mo
     assert any("rolls D2 (1) and hits you for 2 damage" in message for message in result["messages"])
     assert result["snapshot"]["character"]["equipment"] == {
         **game.DEFAULT_EQUIPMENT,
-        "left_hand": "iron_sword",
         "right_hand": "wooden_club",
     }
     assert result["snapshot"]["character"]["stats"]["health"] == 98
@@ -1589,7 +1588,7 @@ def test_observe_player_opens_profile_only_for_same_area_player(client: TestClie
         character = db.scalar(select(Character).where(Character.account_id == observed["account_id"]))
         character.area_id = "human_city"
         character.inventory = {"iron_sword": 1, "wood": 8}
-        character.equipment = {"left_hand": "iron_sword", "right_hand": "fist"}
+        character.equipment = {"left_hand": "fist", "right_hand": "iron_sword"}
         db.commit()
 
     result = client.post(
@@ -1599,7 +1598,7 @@ def test_observe_player_opens_profile_only_for_same_area_player(client: TestClie
     ).json()["result"]
     assert result["messages"] == ["You observe Sable."]
     assert result["profile_account_ids"] == [observed["account_id"]]
-    assert result["observed_player_equipment"][observed["account_id"]]["left_hand"] == "Iron sword"
+    assert result["observed_player_equipment"][observed["account_id"]]["right_hand"] == "Iron sword"
     assert "inventory" not in result["observed_player_equipment"][observed["account_id"]]
 
     with api.SessionLocal() as db:
@@ -1981,6 +1980,642 @@ def test_enemy_spawn_settings_default_to_safe_values(
     assert world.entities[0].respawn_chance_percent == 0
     assert world.entities[0].aggressive_attack_chance_percent == 0
     assert world.locations[0].enemy_spawn_limit == 1
+
+
+def _write_gathering_world(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> content_store.WorldContent:
+    world = content_store.WorldContent.model_validate(
+        {
+            "locations": [
+                {
+                    "id": "test_room",
+                    "name": "Test room",
+                    "description": "A test room.",
+                    "position": {"x": 50, "y": 50},
+                    "starting_species": ["human", "goblin"],
+                    "enemy_ids": [],
+                    "object_ids": ["test_workbench"],
+                    "resource_ids": ["blueberry_bush"],
+                },
+                {
+                    "id": "other_room",
+                    "name": "Other room",
+                    "description": "Another test room.",
+                    "position": {"x": 70, "y": 50},
+                    "starting_species": [],
+                    "enemy_ids": [],
+                },
+            ],
+            "entities": [
+                {
+                    "id": "blueberry",
+                    "type": "item",
+                    "name": "Blueberry",
+                    "description": "A ripe berry.",
+                },
+                {
+                    "id": "party_tonic",
+                    "type": "item",
+                    "name": "Party tonic",
+                    "description": "A test potion.",
+                    "item_use": {
+                        "target_scope": "party",
+                        "consume_on_use": True,
+                        "effects": [
+                            {"type": "heal", "mode": "fixed", "amount": 20},
+                            {
+                                "type": "stat_buff",
+                                "stat": "attack",
+                                "mode": "flat",
+                                "amount": 2,
+                                "duration_seconds": 60,
+                            },
+                            {
+                                "type": "luck",
+                                "drop_chance_bonus_percent": 25,
+                                "gathering_yield_bonus_percent": 50,
+                                "duration_seconds": 60,
+                            },
+                            {"type": "teleport", "destination_area_id": "other_room"},
+                        ],
+                    },
+                },
+                {
+                    "id": "raw_material",
+                    "type": "resource",
+                    "name": "Raw material",
+                    "description": "A crafting ingredient.",
+                },
+                {
+                    "id": "crafted_ring",
+                    "type": "item",
+                    "name": "Crafted ring",
+                    "description": "A test recipe output.",
+                },
+                {
+                    "id": "test_hatchet",
+                    "type": "weapon",
+                    "name": "Test hatchet",
+                    "description": "A small gathering tool.",
+                    "attributes": {"damage": 1, "harvest_power": 2},
+                },
+                {
+                    "id": "test_buckler",
+                    "type": "shield",
+                    "name": "Test buckler",
+                    "description": "A small shield.",
+                    "attributes": {"defense": 5},
+                },
+                {
+                    "id": "test_workbench",
+                    "type": "furniture",
+                    "name": "Test workbench",
+                    "description": "A crafting station.",
+                },
+                {
+                    "id": "blueberry_bush",
+                    "type": "resource",
+                    "name": "Blueberry bush",
+                    "description": "A bush full of berries.",
+                    "gathering": {
+                        "skill": "foraging",
+                        "skill_level": 1,
+                        "health": 1,
+                        "tool_stat": "harvest_power",
+                        "minimum_tool_power": 2,
+                        "respawn_seconds": 60,
+                        "loot_table": [
+                            {
+                                "item_id": "blueberry",
+                                "chance": 1,
+                                "minimum_quantity": 1,
+                                "maximum_quantity": 1,
+                            }
+                        ],
+                    },
+                },
+            ],
+            "recipes": [
+                {
+                    "id": "test_ring_recipe",
+                    "name": "Crafted ring",
+                    "output_item_id": "crafted_ring",
+                    "output_quantity": 2,
+                    "ingredients": [{"item_id": "raw_material", "quantity": 2}],
+                    "station_id": "test_workbench",
+                    "skill": "woodworking",
+                    "skill_level": 1,
+                }
+            ],
+        }
+    )
+    world_path = tmp_path / "world_content.json"
+    world_path.write_text(world.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", world_path)
+    return world
+
+
+def test_party_item_effects_heal_buff_boost_loot_and_teleport(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _write_gathering_world(tmp_path, monkeypatch)
+    content = world.model_dump(mode="json")
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    areas = {location["id"]: location for location in content["locations"]}
+    actor = SimpleNamespace(
+        account_id="actor",
+        name="Ari",
+        area_id="test_room",
+        inventory={"party_tonic": 1},
+        combat_stats={"health": 50, "max_health": 100, "attack": 3, "defense": 1, "speed": 10},
+        equipment={"left_hand": "", "right_hand": "fist"},
+        active_effects=[],
+    )
+    party_member = SimpleNamespace(
+        account_id="party-member",
+        name="Bea",
+        area_id="test_room",
+        inventory={},
+        combat_stats={"health": 60, "max_health": 100, "attack": 4, "defense": 1, "speed": 10},
+        equipment={"left_hand": "", "right_hand": "fist"},
+        active_effects=[],
+    )
+
+    messages, recipient_messages = game._use_item(
+        actor,
+        "party tonic",
+        content,
+        areas,
+        entities,
+        [actor, party_member],
+        now=100,
+    )
+
+    assert actor.inventory == {}
+    assert actor.combat_stats["health"] == 70
+    assert party_member.combat_stats["health"] == 80
+    assert actor.area_id == party_member.area_id == "other_room"
+    assert game._effective_stats(actor, entities, now=101)["attack"] == 5
+    assert game._luck_bonuses(actor, now=101) == (25, 50)
+    assert "party-member" in recipient_messages
+    assert any("reach you and 1 online party member here" in message for message in messages)
+
+
+def test_item_gather_and_craft_actions_resolve_through_commands(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_gathering_world(tmp_path, monkeypatch)
+    player = register(client, "item-gather-craft@example.com", "Ari")
+    headers = auth(player["token"])
+    with api.SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == player["account_id"])
+        )
+        character.area_id = "test_room"
+        character.inventory = {
+            "party_tonic": 1,
+            "raw_material": 2,
+            "test_hatchet": 1,
+        }
+        character.equipment = {"left_hand": "", "right_hand": "test_hatchet"}
+        character.combat_stats = {
+            **game.PLAYER_BASE_STATS,
+            "health": 50,
+        }
+        db.commit()
+
+    def command(text: str) -> dict[str, Any]:
+        response = client.post(
+            "/api/v1/commands",
+            headers=headers,
+            json={"request_id": str(uuid4()), "text": text},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["result"]
+
+    used = command("use party tonic")
+    assert used["snapshot"]["character"]["area_id"] == "other_room"
+    assert used["snapshot"]["character"]["stats"]["health"] == 70
+    assert any("You use Party tonic" in message for message in used["messages"])
+
+    with api.SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == player["account_id"])
+        )
+        character.area_id = "test_room"
+        character.inventory = {"raw_material": 2, "test_hatchet": 1}
+        db.commit()
+
+    crafted = command("craft a crafted ring")
+    assert crafted["snapshot"]["character"]["inventory_items"]
+    assert any("You craft 2 Crafted rings." in message for message in crafted["messages"])
+
+    with api.SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == player["account_id"])
+        )
+        character.inventory = {"test_hatchet": 1}
+        db.commit()
+    started = command("gather the blueberry bush")
+    assert started["snapshot"]["character"]["gathering"]["resource_id"] == "blueberry_bush"
+    cancelled = command("stop")
+    assert cancelled["snapshot"]["character"]["gathering"] is None
+    assert cancelled["messages"] == [
+        "You stop gathering Blueberry bush. Nothing is collected."
+    ]
+
+
+def test_party_splash_reaches_only_online_party_members_in_the_same_location(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_gathering_world(tmp_path, monkeypatch)
+    leader = register(client, "party-splash-leader@example.com", "Ari")
+    member = register(client, "party-splash-member@example.com", "Bea")
+    outsider = register(client, "party-splash-outsider@example.com", "Cy")
+    leader_headers = auth(leader["token"])
+    member_headers = auth(member["token"])
+    outsider_headers = auth(outsider["token"])
+    created = client.post("/api/v1/party", headers=leader_headers)
+    assert created.status_code == 201
+    invited = client.post(
+        "/api/v1/party/invitations",
+        headers=leader_headers,
+        json={"recipient_account_id": member["account_id"]},
+    )
+    assert invited.status_code == 201
+    invite_id = client.get("/api/v1/party", headers=member_headers).json()[
+        "incoming_invitations"
+    ][0]["invite_id"]
+    accepted = client.patch(
+        f"/api/v1/party/invitations/{invite_id}",
+        headers=member_headers,
+        json={"status": "accepted"},
+    )
+    assert accepted.status_code == 200
+    with api.SessionLocal() as db:
+        for account_id in (leader["account_id"], member["account_id"], outsider["account_id"]):
+            character = db.scalar(
+                select(Character).where(Character.account_id == account_id)
+            )
+            character.area_id = "test_room"
+            character.combat_stats = {
+                **game.PLAYER_BASE_STATS,
+                "health": 50,
+            }
+        leader_character = db.scalar(
+            select(Character).where(Character.account_id == leader["account_id"])
+        )
+        leader_character.inventory = {"party_tonic": 1}
+        db.commit()
+
+    with live_as(client, leader):
+        with live_as(client, member) as member_socket:
+            with live_as(client, outsider):
+                response = client.post(
+                    "/api/v1/commands",
+                    headers=leader_headers,
+                    json={"request_id": str(uuid4()), "text": "use party tonic"},
+                )
+                assert response.status_code == 200, response.text
+                event = member_socket.receive_json()
+                assert event["type"] == "world.updated"
+                assert any(
+                    "receive the effects of Ari's Party tonic" in message
+                    for message in event["payload"]["messages"]
+                )
+
+    with api.SessionLocal() as db:
+        leader_character = db.scalar(
+            select(Character).where(Character.account_id == leader["account_id"])
+        )
+        member_character = db.scalar(
+            select(Character).where(Character.account_id == member["account_id"])
+        )
+        outsider_character = db.scalar(
+            select(Character).where(Character.account_id == outsider["account_id"])
+        )
+        assert leader_character.combat_stats["health"] == 70
+        assert member_character.combat_stats["health"] == 70
+        assert leader_character.area_id == member_character.area_id == "other_room"
+        assert outsider_character.combat_stats["health"] == 50
+        assert outsider_character.area_id == "test_room"
+
+
+def test_gathering_uses_tool_duration_and_per_player_respawn(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _write_gathering_world(tmp_path, monkeypatch)
+    content = world.model_dump(mode="json")
+    areas = {location["id"]: location for location in content["locations"]}
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    character = SimpleNamespace(
+        area_id="test_room",
+        inventory={},
+        equipment={"left_hand": "", "right_hand": "test_hatchet"},
+        skills={"foraging": 1},
+        skill_experience={},
+        resource_state={},
+        gathering_state=None,
+        active_effects=[],
+        quest_state={},
+        experience=0,
+        combat_stats={"health": 100, "max_health": 100, "attack": 3, "defense": 1, "speed": 10},
+    )
+
+    started = game._start_gathering(
+        character,
+        {"resource": "blueberry bush"},
+        areas,
+        entities,
+        now=100,
+    )
+    assert character.gathering_state["duration_seconds"] == 20
+    assert "20 seconds" in started[0]
+    assert game._cancel_gathering(character).startswith("You stop gathering")
+    assert character.resource_state == {}
+
+    game._start_gathering(
+        character,
+        {"resource": "blueberry bush"},
+        areas,
+        entities,
+        now=200,
+    )
+    character.gathering_state["completes_at"] = 200
+    current_time = time()
+    game._apply_timed_effect(
+        character,
+        {
+            "type": "luck",
+            "drop_chance_bonus_percent": 50,
+            "gathering_yield_bonus_percent": 50,
+            "duration_seconds": 60,
+        },
+        now=current_time,
+    )
+
+    class FixedRoll:
+        @staticmethod
+        def randint(minimum: int, _: int) -> int:
+            return minimum
+
+        @staticmethod
+        def random() -> float:
+            return 0.8
+
+    monkeypatch.setattr(game, "combat_rng", FixedRoll())
+    messages = game._complete_gathering(character, content, now=current_time + 1)
+    assert character.inventory == {"blueberry": 2}
+    assert character.resource_state["test_room:blueberry_bush"]["health"] == 0
+    assert character.skills["foraging"] == 1
+    assert character.skill_experience["foraging"] == 10
+    assert any("You gather 2 Blueberries." in message for message in messages)
+    rewards = game._reward_enemy_defeat(
+        character,
+        {
+            "id": "test_rat",
+            "type": "enemy",
+            "name": "Test rat",
+            "attributes": {"health": 1, "experience": 0},
+            "loot_table": [
+                {
+                    "item_id": "blueberry",
+                    "chance": 0.6,
+                    "minimum_quantity": 1,
+                    "maximum_quantity": 1,
+                }
+            ],
+        },
+        entities,
+        content,
+    )
+    assert character.inventory == {"blueberry": 3}
+    assert any("Loot: 1 Blueberry." in message for message in rewards)
+
+    other_character = SimpleNamespace(
+        area_id="test_room",
+        inventory={},
+        equipment={"left_hand": "", "right_hand": "test_hatchet"},
+        skills={"foraging": 1},
+        skill_experience={},
+        resource_state={},
+        gathering_state=None,
+        active_effects=[],
+    )
+    assert game._resource_status(
+        other_character, "test_room", entities["blueberry_bush"], now=current_time + 2
+    )["available"]
+    assert not game._resource_status(
+        character, "test_room", entities["blueberry_bush"], now=current_time + 2
+    )["available"]
+
+
+def test_gathering_tick_completes_and_disconnect_cancels(
+    client: TestClient,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _write_gathering_world(tmp_path, monkeypatch)
+    player = register(client, "gathering-tick@example.com", "Ari")
+    current_time = time()
+    with api.SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == player["account_id"])
+        )
+        character.area_id = "test_room"
+        character.gathering_state = {
+            "resource_id": "blueberry_bush",
+            "resource_name": "Blueberry bush",
+            "location_id": "test_room",
+            "skill": "foraging",
+            "duration_seconds": 1,
+            "started_at": current_time - 2,
+            "completes_at": current_time - 1,
+        }
+        character.inventory = {}
+        db.commit()
+
+    monkeypatch.setattr(
+        api.live_hub,
+        "active_account_ids",
+        lambda: {player["account_id"]},
+    )
+
+    class FixedRoll:
+        @staticmethod
+        def random() -> float:
+            return 0
+
+        @staticmethod
+        def randint(minimum: int, _: int) -> int:
+            return minimum
+
+    monkeypatch.setattr(game, "combat_rng", FixedRoll())
+    api._run_gathering_completion_tick()
+    with api.SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == player["account_id"])
+        )
+        assert character.gathering_state is None
+        assert character.inventory == {"blueberry": 1}
+        character.gathering_state = {
+            "resource_id": "blueberry_bush",
+            "resource_name": "Blueberry bush",
+            "location_id": "test_room",
+            "skill": "foraging",
+            "duration_seconds": 10,
+            "started_at": current_time,
+            "completes_at": current_time + 10,
+        }
+        character.resource_state = {}
+        db.commit()
+
+    monkeypatch.setattr(api.live_hub, "active_account_ids", lambda: set())
+    api._cleanup_party_after_disconnect(player["account_id"])
+    with api.SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == player["account_id"])
+        )
+        assert character.gathering_state is None
+        assert character.resource_state == {}
+
+
+def test_recipe_crafting_consumes_ingredients_and_awards_skill_xp(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _write_gathering_world(tmp_path, monkeypatch)
+    content = world.model_dump(mode="json")
+    areas = {location["id"]: location for location in content["locations"]}
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    character = SimpleNamespace(
+        area_id="test_room",
+        inventory={"raw_material": 2},
+        skills={"woodworking": 1},
+        skill_experience={},
+        quest_state={},
+    )
+
+    messages = game._craft(
+        character,
+        {"product": "crafted ring"},
+        content,
+        areas,
+        entities,
+    )
+
+    assert character.inventory == {"crafted_ring": 2}
+    assert character.skill_experience["woodworking"] == 10
+    assert messages[0] == "You craft 2 Crafted rings."
+
+
+def test_shield_equipment_and_timed_absorption_affect_enemy_damage(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _write_gathering_world(tmp_path, monkeypatch)
+    entities = {entity.id: entity.model_dump(mode="json") for entity in world.entities}
+    character = SimpleNamespace(
+        area_id="test_room",
+        combat_stats={"health": 100, "max_health": 100, "attack": 3, "defense": 1, "speed": 10},
+        equipment={"left_hand": "test_buckler", "right_hand": "fist"},
+        active_effects=[],
+        combat_state={},
+        species="human",
+        respawn_area_id=None,
+        gathering_state=None,
+    )
+    now = time()
+    game._apply_timed_effect(
+        character,
+        {"type": "shield", "mode": "damage_reduction", "amount": 2, "duration_seconds": 60},
+        now=now,
+    )
+    game._apply_timed_effect(
+        character,
+        {"type": "shield", "mode": "damage_pool", "amount": 2, "duration_seconds": 60},
+        now=now,
+    )
+
+    class FixedRoll:
+        @staticmethod
+        def randint(minimum: int, _: int) -> int:
+            return minimum
+
+    monkeypatch.setattr(game, "combat_rng", FixedRoll())
+    messages = game.enemy_strike(
+        character,
+        {"name": "Test rat", "attributes": {"attack": 10}, "attack_die_sides": 2},
+        {"test_room": {"name": "Test room"}},
+        entities=entities,
+    )
+
+    assert game._effective_stats(character, entities, now=now + 1)["defense"] == 6
+    assert character.combat_stats["health"] == 99
+    assert any("absorbs 2 damage" in message for message in messages)
+
+
+def test_temporary_health_is_extra_hp_and_absorbs_damage_before_regular_health(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _write_gathering_world(tmp_path, monkeypatch)
+    entities = {entity.id: entity.model_dump(mode="json") for entity in world.entities}
+    character = SimpleNamespace(
+        account_id=1,
+        id=1,
+        name="Shield Tester",
+        species="human",
+        area_id="test_room",
+        appearance={},
+        inventory={},
+        combat_stats={"health": 100, "max_health": 100, "attack": 3, "defense": 1, "speed": 10},
+        equipment={"left_hand": "", "right_hand": "fist"},
+        active_effects=[],
+        combat_state={},
+        skills={},
+        skill_experience={},
+        experience=0,
+        quest_state={},
+        gathering_state=None,
+        respawn_area_id=None,
+    )
+    game._apply_timed_effect(
+        character,
+        {"type": "shield", "mode": "temporary_health", "amount": 5, "duration_seconds": 60},
+    )
+
+    before_strike = game._snapshot(character, world.model_dump(mode="json"))
+    assert before_strike["character"]["stats"]["health"] == 105
+    assert before_strike["character"]["stats"]["max_health"] == 100
+    assert before_strike["character"]["active_effects"][0]["remaining"] == 5
+
+    class FixedRoll:
+        @staticmethod
+        def randint(minimum: int, _: int) -> int:
+            return minimum
+
+    monkeypatch.setattr(game, "combat_rng", FixedRoll())
+    messages = game.enemy_strike(
+        character,
+        {"name": "Test rat", "attributes": {"attack": 1}, "attack_die_sides": 2},
+        {"test_room": {"name": "Test room"}},
+        entities=entities,
+    )
+
+    after_strike = game._snapshot(character, world.model_dump(mode="json"))
+    assert character.combat_stats["health"] == 100
+    assert after_strike["character"]["stats"]["health"] == 104
+    assert character.active_effects[0]["remaining"] == 4
+    assert any("temporary health absorbs 1 damage" in message for message in messages)
 
 
 def test_enemy_spawn_tick_obeys_scoped_location_cap_and_allows_duplicates(

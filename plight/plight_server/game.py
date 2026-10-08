@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from itertools import product
+from math import ceil
 import random
 import re
+import time
 from typing import Any
 
 from plight_server.content import starting_location, world_content_dict
@@ -35,11 +37,187 @@ EQUIPMENT_SLOTS = (
     "right_hand",
 )
 DEFAULT_EQUIPMENT = {
-    **{slot: "" for slot in EQUIPMENT_SLOTS if slot not in {"left_hand", "right_hand"}},
-    "left_hand": "fist",
+    **{slot: "" for slot in EQUIPMENT_SLOTS},
     "right_hand": "fist",
 }
-EQUIPMENT_TYPE_SLOTS = {"weapon": {"left_hand", "right_hand"}}
+EQUIPMENT_TYPE_SLOTS = {"weapon": {"right_hand"}, "shield": {"left_hand"}}
+SKILL_NAMES = (
+    "felling",
+    "foraging",
+    "gouging",
+    "fishing",
+    "herbology",
+    "alchemy",
+    "fletching",
+    "smithing",
+    "lapidary",
+    "woodworking",
+)
+GATHERING_SKILLS = frozenset({"felling", "foraging", "gouging", "fishing", "herbology"})
+SKILL_LABELS = {
+    "felling": "Felling",
+    "foraging": "Foraging",
+    "gouging": "Gouging",
+    "fishing": "Fishing",
+    "herbology": "Herbology",
+    "alchemy": "Alchemy",
+    "fletching": "Fletching",
+    "smithing": "Smithing",
+    "lapidary": "Lapidary",
+    "woodworking": "Woodworking",
+}
+
+
+def _skill_levels(character: Any) -> dict[str, int]:
+    values = dict(getattr(character, "skills", None) or {})
+    return {
+        skill: max(1, int(values.get(skill, 1)))
+        for skill in SKILL_NAMES
+    }
+
+
+def _award_skill_experience(
+    character: Any,
+    skill: str,
+    required_level: int = 1,
+) -> list[str]:
+    if skill not in SKILL_NAMES:
+        return []
+    levels = _skill_levels(character)
+    experience = dict(getattr(character, "skill_experience", None) or {})
+    amount = max(10, required_level * 10)
+    experience[skill] = max(0, int(experience.get(skill, 0))) + amount
+    messages = [f"You gain {amount} {SKILL_LABELS[skill]} experience."]
+    while experience[skill] >= levels[skill] * 100:
+        experience[skill] -= levels[skill] * 100
+        levels[skill] += 1
+        messages.append(
+            f"Your {SKILL_LABELS[skill]} reaches level {levels[skill]}."
+        )
+    character.skills = levels
+    character.skill_experience = experience
+    return messages
+
+
+def _skill_progress(character: Any) -> list[dict[str, Any]]:
+    levels = _skill_levels(character)
+    experience = dict(getattr(character, "skill_experience", None) or {})
+    return [
+        {
+            "id": skill,
+            "name": SKILL_LABELS[skill],
+            "level": levels[skill],
+            "experience": max(0, int(experience.get(skill, 0))),
+            "experience_to_next_level": levels[skill] * 100,
+        }
+        for skill in SKILL_NAMES
+    ]
+
+
+def _live_effects(character: Any, now: float | None = None) -> list[dict[str, Any]]:
+    current_time = time.time() if now is None else now
+    return [
+        effect
+        for effect in (getattr(character, "active_effects", None) or [])
+        if isinstance(effect, dict)
+        and isinstance(effect.get("expires_at"), (int, float))
+        and effect["expires_at"] > current_time
+    ]
+
+
+def _temporary_health(character: Any, now: float | None = None) -> int:
+    return sum(
+        max(0, int(effect.get("remaining", effect.get("amount", 0))))
+        for effect in _live_effects(character, now)
+        if effect.get("type") == "shield" and effect.get("mode") == "temporary_health"
+    )
+
+
+def _timed_effect_key(effect: dict[str, Any]) -> tuple[str, str]:
+    kind = str(effect.get("type", ""))
+    return kind, str(effect.get("stat") or effect.get("mode") or kind)
+
+
+def _apply_timed_effect(
+    character: Any,
+    effect: dict[str, Any],
+    now: float | None = None,
+) -> None:
+    current_time = time.time() if now is None else now
+    expires_at = current_time + int(effect["duration_seconds"])
+    key = _timed_effect_key(effect)
+    active = [
+        existing
+        for existing in _live_effects(character, current_time)
+        if _timed_effect_key(existing) != key
+    ]
+    active.append(
+        {
+            **effect,
+            "expires_at": expires_at,
+            **(
+                {"remaining": int(effect["amount"])}
+                if effect.get("type") == "shield"
+                and effect.get("mode") in {"damage_pool", "temporary_health"}
+                else {}
+            ),
+        }
+    )
+    character.active_effects = active
+
+
+def _luck_bonuses(character: Any, now: float | None = None) -> tuple[int, int]:
+    drop_chance = 0
+    gathering_yield = 0
+    for effect in _live_effects(character, now):
+        if effect.get("type") == "luck":
+            drop_chance = max(
+                drop_chance, int(effect.get("drop_chance_bonus_percent", 0))
+            )
+            gathering_yield = max(
+                gathering_yield,
+                int(effect.get("gathering_yield_bonus_percent", 0)),
+            )
+    return drop_chance, gathering_yield
+
+
+def _effective_stats(
+    character: Any,
+    entities: dict[str, dict[str, Any]] | None = None,
+    now: float | None = None,
+) -> dict[str, int]:
+    stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
+    for effect in _live_effects(character, now):
+        if effect.get("type") != "stat_buff":
+            continue
+        stat = effect.get("stat")
+        if stat not in {"attack", "defense", "speed"}:
+            continue
+        amount = int(effect.get("amount", 0))
+        bonus = amount if effect.get("mode") == "flat" else ceil(stats[stat] * amount / 100)
+        stats[stat] += bonus
+    equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
+    if (entities or {}).get(equipment["left_hand"], {}).get("type") != "shield":
+        equipment["left_hand"] = ""
+    if equipment["right_hand"] != "fist" and (entities or {}).get(
+        equipment["right_hand"], {}
+    ).get("type") != "weapon":
+        equipment["right_hand"] = "fist"
+    shield_id = equipment.get("left_hand")
+    shield = (entities or {}).get(shield_id or "")
+    if shield is not None and shield.get("type") == "shield":
+        defense = (shield.get("attributes") or {}).get("defense", 0)
+        if isinstance(defense, int) and not isinstance(defense, bool) and defense > 0:
+            stats["defense"] += defense
+    return stats
+
+
+def _set_current_health(character: Any, health: int) -> None:
+    stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
+    stats["health"] = health
+    character.combat_stats = stats
+
+
 combat_rng = random.SystemRandom()
 
 
@@ -187,6 +365,7 @@ def _record_quest_event(
     content: dict[str, Any],
     event_type: str,
     target_id: str,
+    quantity: int = 1,
 ) -> None:
     state = dict(getattr(character, "quest_state", None) or {})
     changed = False
@@ -213,7 +392,7 @@ def _record_quest_event(
         for objective in matching:
             step_progress[objective["id"]] = min(
                 objective["quantity"],
-                step_progress.get(objective["id"], 0) + 1,
+                step_progress.get(objective["id"], 0) + quantity,
             )
         state[quest["id"]] = {**quest_state, "progress": progress}
         changed = True
@@ -262,6 +441,59 @@ def _exit_lock_reason(
     )
 
 
+def _resource_state_key(location_id: str, resource_id: str) -> str:
+    return f"{location_id}:{resource_id}"
+
+
+def _resource_status(
+    character: Any,
+    location_id: str,
+    entity: dict[str, Any],
+    now: float | None = None,
+) -> dict[str, Any]:
+    config = entity.get("gathering")
+    if not isinstance(config, dict):
+        return {"configured": False, "available": False}
+    current_time = time.time() if now is None else now
+    key = _resource_state_key(location_id, entity["id"])
+    state = (getattr(character, "resource_state", None) or {}).get(key, {})
+    respawn_at = state.get("respawn_at")
+    remaining = (
+        max(0, ceil(float(respawn_at) - current_time))
+        if isinstance(respawn_at, (int, float))
+        else 0
+    )
+    health = (
+        int(state.get("health", config["health"]))
+        if remaining > 0
+        else config["health"]
+    )
+    return {
+        "configured": bool(config.get("loot_table")),
+        "available": remaining == 0 and health > 0,
+        "health": health,
+        "max_health": config["health"],
+        "respawn_seconds_remaining": remaining,
+        "respawn_at": respawn_at,
+        "skill": config["skill"],
+        "skill_name": SKILL_LABELS[config["skill"]],
+        "skill_level": config["skill_level"],
+        "tool_stat": config.get("tool_stat"),
+        "minimum_tool_power": config["minimum_tool_power"],
+    }
+
+
+def _active_effect_views(character: Any, now: float | None = None) -> list[dict[str, Any]]:
+    current_time = time.time() if now is None else now
+    return [
+        {
+            **effect,
+            "remaining_seconds": max(0, ceil(effect["expires_at"] - current_time)),
+        }
+        for effect in _live_effects(character, current_time)
+    ]
+
+
 def _snapshot(
     character: Any,
     content: dict[str, Any],
@@ -271,10 +503,17 @@ def _snapshot(
     area = areas[character.area_id]
     entities = {entity["id"]: entity for entity in content["entities"]}
     quests = {quest["id"]: quest for quest in content.get("quests", [])}
-    stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
+    stats = _effective_stats(character, entities)
+    stats["health"] += _temporary_health(character)
     experience = getattr(character, "experience", 0) or 0
     level, experience_progress, experience_to_next_level = _level_progress(experience)
     equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
+    if entities.get(equipment["left_hand"], {}).get("type") != "shield":
+        equipment["left_hand"] = ""
+    if equipment["right_hand"] != "fist" and entities.get(
+        equipment["right_hand"], {}
+    ).get("type") != "weapon":
+        equipment["right_hand"] = "fist"
     combat_state = character.combat_state or {}
     enemy_health = combat_state.get("enemy_health", {})
     inventory_items = []
@@ -288,6 +527,11 @@ def _snapshot(
                 "quantity": quantity,
                 "type": item_type,
                 "equipable_slots": sorted(EQUIPMENT_TYPE_SLOTS.get(item_type, set())),
+                "can_use": bool(
+                    item
+                    and item_type == "item"
+                    and (item.get("item_use") or {}).get("effects")
+                ),
             }
         )
 
@@ -298,6 +542,12 @@ def _snapshot(
                 "name": entities[entity_id]["name"],
                 "description": entities[entity_id]["description"],
                 "type": entities[entity_id]["type"],
+                **(
+                    {"gathering": entities[entity_id]["gathering"]}
+                    if entities[entity_id]["type"] == "resource"
+                    and entities[entity_id].get("gathering") is not None
+                    else {}
+                ),
                 **(
                     {"race": entities[entity_id]["race"]}
                     if entities[entity_id]["type"] == "npc"
@@ -392,6 +642,13 @@ def _snapshot(
     npcs = visible_entities(visible_npc_ids)
     objects = visible_entities(area["object_ids"])
     resources = visible_entities(area["resource_ids"])
+    for resource_view in resources:
+        resource = entities[resource_view["id"]]
+        resource_view["gather_status"] = _resource_status(
+            character,
+            character.area_id,
+            resource,
+        )
     ambience_lines = list(area["ambience"])
     for entity_id in (*ambience_enemy_ids, *visible_npc_ids):
         ambience_lines.extend(entities[entity_id]["ambience"])
@@ -418,6 +675,22 @@ def _snapshot(
             "inventory": character.inventory or {},
             "inventory_items": inventory_items,
             "stats": stats,
+            "skills": _skill_progress(character),
+            "active_effects": _active_effect_views(character),
+            "gathering": (
+                {
+                    **character.gathering_state,
+                    "remaining_seconds": max(
+                        0,
+                        ceil(
+                            float(character.gathering_state["completes_at"])
+                            - time.time()
+                        ),
+                    ),
+                }
+                if isinstance(getattr(character, "gathering_state", None), dict)
+                else None
+            ),
             "respawn_area_id": getattr(character, "respawn_area_id", None)
             or starting_location(character.species),
             "level": level,
@@ -470,6 +743,7 @@ def resolve_command(
     defer_all_actions: bool = False,
     selected_occurrence_ids: set[str] | None = None,
     combat_context: bool = False,
+    party_members: Sequence[Any] | None = None,
 ) -> dict[str, Any]:
     content = world_content_dict()
     areas = _location_map(content)
@@ -525,11 +799,37 @@ def resolve_command(
         selected_ids, key=lambda item: occurrence_ids.index(item)
     )
     messages: list[str] = []
+    active_gathering = getattr(character, "gathering_state", None)
+    if isinstance(active_gathering, dict) and float(
+        active_gathering.get("completes_at", float("inf"))
+    ) <= time.time():
+        messages.extend(_complete_gathering(character, content))
+        active_gathering = getattr(character, "gathering_state", None)
+    selected_actions = [
+        occurrence["action_id"]
+        for occurrence in occurrences
+        if occurrence["occurrence_id"] in selected_ids
+    ]
+    if isinstance(active_gathering, dict) and any(
+        action_id != "cancel_gather" for action_id in selected_actions
+    ):
+        messages.append(
+            f"You are busy gathering {active_gathering['resource_name']}. "
+            "Type stop to cancel."
+        )
+        return {
+            "interpretation": parsed,
+            "messages": messages,
+            "dialogues": [],
+            "queued_actions": [],
+            "snapshot": _snapshot(character, content, enemy_spawns_by_location),
+        }
     dialogues: list[dict[str, Any]] = []
     profile_account_ids: list[str] = []
     observed_player_equipment: dict[str, dict[str, str]] = {}
     inventory_view: str | None = None
     queued_actions: list[dict[str, Any]] = []
+    party_effect_messages: dict[str, list[str]] = {}
     for occurrence in occurrences:
         if occurrence["occurrence_id"] not in selected_ids:
             continue
@@ -595,6 +895,18 @@ def resolve_command(
                             **DEFAULT_EQUIPMENT,
                             **(other_player.equipment or {}),
                         }
+                        if entities.get(player_equipment["left_hand"], {}).get(
+                            "type"
+                        ) != "shield":
+                            player_equipment["left_hand"] = ""
+                        if (
+                            player_equipment["right_hand"] != "fist"
+                            and entities.get(player_equipment["right_hand"], {}).get(
+                                "type"
+                            )
+                            != "weapon"
+                        ):
+                            player_equipment["right_hand"] = "fist"
                         observed_player_equipment[entity["account_id"]] = {
                             slot: (
                                 entities.get(item_id, {}).get(
@@ -712,6 +1024,12 @@ def resolve_command(
             messages.append(_equip(character, entities, args))
         elif action_id == "unequip_item":
             messages.append(_unequip(character, entities, args))
+        elif action_id == "gather":
+            messages.extend(_start_gathering(character, args, areas, entities))
+        elif action_id == "cancel_gather":
+            messages.append(_cancel_gathering(character))
+        elif action_id == "craft":
+            messages.extend(_craft(character, args, content, areas, entities))
         elif action_id == "use_item":
             item = args.get("item")
             subject = (
@@ -719,41 +1037,19 @@ def resolve_command(
                 if isinstance(item, dict)
                 else str(args.get("subject") or args.get("target") or item or "")
             )
-            area = areas[character.area_id]
-            environment_objects = [
-                entities[entity_id]
-                for entity_id in area["object_ids"]
-                if entity_id in entities
-            ]
-            matches = _matching_entities(subject, environment_objects) if subject else []
-            if len(matches) > 1:
-                messages.append(
-                    f"Which object do you mean: {', '.join(entity['name'] for entity in matches)}?"
+            item_messages, affected_messages = _use_item(
+                character,
+                subject,
+                content,
+                areas,
+                entities,
+                party_members or [],
+            )
+            messages.extend(item_messages)
+            for account_id, recipient_messages in affected_messages.items():
+                party_effect_messages.setdefault(account_id, []).extend(
+                    recipient_messages
                 )
-            elif not matches:
-                messages.append(
-                    f"There is no {subject} here to use."
-                    if subject
-                    else "Name an object here to use."
-                )
-            else:
-                target = matches[0]
-                effect = target.get("interaction_effect")
-                if effect == "restore_health":
-                    stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
-                    stats["health"] = stats["max_health"]
-                    character.combat_stats = stats
-                    messages.append(
-                        f"You rest at {target['name']} and restore your health to full "
-                        f"({stats['health']}/{stats['max_health']})."
-                    )
-                elif effect == "set_respawn":
-                    character.respawn_area_id = character.area_id
-                    messages.append(
-                        f"You set {target['name']} in {area['name']} as your respawn point."
-                    )
-                else:
-                    messages.append(f"{target['name']} has no available interaction.")
         elif action_id == "inspect_inventory":
             contents = ", ".join(f"{count} {item}" for item, count in character.inventory.items())
             messages.append(f"You are carrying {contents}." if contents else "Your inventory is empty.")
@@ -775,10 +1071,410 @@ def resolve_command(
         "dialogues": dialogues,
         "profile_account_ids": profile_account_ids,
         "observed_player_equipment": observed_player_equipment,
+        "party_effect_messages": party_effect_messages,
         "inventory_view": inventory_view,
         "queued_actions": queued_actions,
         "snapshot": _snapshot(character, content, enemy_spawns_by_location),
     }
+
+
+def _duration_text(seconds: int) -> str:
+    minutes, remainder = divmod(seconds, 60)
+    if minutes:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} {remainder} second{'s' if remainder != 1 else ''}"
+    return f"{remainder} second{'s' if remainder != 1 else ''}"
+
+
+def _quantity_name(quantity: int, name: str) -> str:
+    if quantity == 1:
+        return f"1 {name}"
+    words = name.split()
+    last = words[-1]
+    if last.casefold().endswith("y") and len(last) > 1 and last[-2].casefold() not in "aeiou":
+        words[-1] = f"{last[:-1]}ies"
+    elif last.casefold().endswith(("s", "x", "z", "ch", "sh")):
+        words[-1] = f"{last}es"
+    else:
+        words[-1] = f"{last}s"
+    return f"{quantity} {' '.join(words)}"
+
+
+def _command_subject(arguments: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = arguments.get(key)
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("id")
+        if value:
+            return str(value)
+    return ""
+
+
+def _start_gathering(
+    character: Any,
+    arguments: dict[str, Any],
+    areas: dict[str, dict[str, Any]],
+    entities: dict[str, dict[str, Any]],
+    now: float | None = None,
+) -> list[str]:
+    subject = _command_subject(arguments, "resource", "subject", "target", "item")
+    area = areas.get(character.area_id)
+    if area is None:
+        return ["You are not in a valid location."]
+    resources = [
+        entities[entity_id]
+        for entity_id in area["resource_ids"]
+        if entity_id in entities
+    ]
+    matches = _matching_entities(subject, resources) if subject else resources
+    if len(matches) > 1:
+        return [f"Which resource do you mean: {', '.join(item['name'] for item in matches)}?"]
+    if not matches:
+        return [f"There is no {subject} here to gather." if subject else "Name a resource to gather."]
+    resource = matches[0]
+    config = resource.get("gathering")
+    if not isinstance(config, dict) or not config.get("loot_table"):
+        return [f"{resource['name']} is not configured for gathering."]
+    current_time = time.time() if now is None else now
+    status = _resource_status(character, character.area_id, resource, current_time)
+    if not status["available"]:
+        remaining = status.get("respawn_seconds_remaining", 0)
+        if remaining:
+            return [f"{resource['name']} has been depleted. It will return in {_duration_text(remaining)}."]
+        return [f"There is nothing left to gather from {resource['name']}."]
+
+    skill = config["skill"]
+    levels = _skill_levels(character)
+    if levels[skill] < config["skill_level"]:
+        return [
+            f"You need {SKILL_LABELS[skill]} level {config['skill_level']} "
+            f"to gather {resource['name']}."
+        ]
+    tool_power = 0
+    tool_stat = config.get("tool_stat")
+    if tool_stat:
+        equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
+        tool = entities.get(equipment.get("right_hand", ""))
+        raw_power = (tool or {}).get("attributes", {}).get(tool_stat)
+        if (
+            tool is None
+            or tool.get("type") != "weapon"
+            or not isinstance(raw_power, int)
+            or isinstance(raw_power, bool)
+            or raw_power < config["minimum_tool_power"]
+        ):
+            return [
+                f"You need a right-hand tool with at least "
+                f"{config['minimum_tool_power']} {tool_stat} power to gather {resource['name']}."
+            ]
+        tool_power = raw_power
+    duration = max(1, ceil(config["health"] * 60 / (levels[skill] + tool_power)))
+    character.gathering_state = {
+        "resource_id": resource["id"],
+        "resource_name": resource["name"],
+        "location_id": character.area_id,
+        "skill": skill,
+        "duration_seconds": duration,
+        "started_at": current_time,
+        "completes_at": current_time + duration,
+    }
+    return [
+        f"You begin gathering {resource['name']}. It will take about "
+        f"{_duration_text(duration)}. Type stop to cancel."
+    ]
+
+
+def _cancel_gathering(character: Any) -> str:
+    state = getattr(character, "gathering_state", None)
+    if not isinstance(state, dict):
+        return "You are not gathering anything."
+    character.gathering_state = None
+    return f"You stop gathering {state['resource_name']}. Nothing is collected."
+
+
+def _complete_gathering(
+    character: Any,
+    content: dict[str, Any],
+    now: float | None = None,
+) -> list[str]:
+    state = getattr(character, "gathering_state", None)
+    if not isinstance(state, dict):
+        return []
+    current_time = time.time() if now is None else now
+    if float(state.get("completes_at", float("inf"))) > current_time:
+        return []
+    areas = _location_map(content)
+    entities = {entity["id"]: entity for entity in content.get("entities", [])}
+    resource = entities.get(state.get("resource_id"))
+    area = areas.get(state.get("location_id"))
+    if character.area_id != state.get("location_id"):
+        character.gathering_state = None
+        return ["Your gathering is interrupted because you left the location."]
+    if (
+        resource is None
+        or resource.get("type") != "resource"
+        or area is None
+        or resource["id"] not in area["resource_ids"]
+        or not isinstance(resource.get("gathering"), dict)
+    ):
+        character.gathering_state = None
+        return ["Your gathering attempt ends because that resource is no longer available."]
+
+    config = resource["gathering"]
+    key = _resource_state_key(state["location_id"], resource["id"])
+    resource_state = dict(getattr(character, "resource_state", None) or {})
+    node_state = dict(resource_state.get(key, {}))
+    respawn_at = node_state.get("respawn_at")
+    if isinstance(respawn_at, (int, float)) and respawn_at > current_time:
+        character.gathering_state = None
+        return [f"{resource['name']} has already been depleted."]
+
+    inventory = dict(character.inventory or {})
+    drop_chance_bonus, gathering_yield_bonus = _luck_bonuses(character, current_time)
+    messages = [f"You finish gathering {resource['name']}."]
+    gathered: list[str] = []
+    for drop in config.get("loot_table", []):
+        chance = min(1.0, drop["chance"] * (1 + drop_chance_bonus / 100))
+        if combat_rng.random() >= chance:
+            continue
+        quantity = combat_rng.randint(
+            drop["minimum_quantity"],
+            drop["maximum_quantity"],
+        )
+        if gathering_yield_bonus:
+            quantity = ceil(quantity * (1 + gathering_yield_bonus / 100))
+        inventory[drop["item_id"]] = inventory.get(drop["item_id"], 0) + quantity
+        item = entities.get(drop["item_id"])
+        item_name = item["name"] if item else drop["item_id"].replace("_", " ").title()
+        gathered.append(_quantity_name(quantity, item_name))
+        _record_quest_event(character, content, "collect", drop["item_id"], quantity)
+    if gathered:
+        messages.append(f"You gather {', '.join(gathered)}.")
+    else:
+        messages.append("You find nothing this time.")
+    character.inventory = inventory
+    resource_state[key] = {
+        "health": 0,
+        "respawn_at": current_time + config["respawn_seconds"],
+    }
+    character.resource_state = resource_state
+    character.gathering_state = None
+    messages.extend(_award_skill_experience(character, config["skill"], config["skill_level"]))
+    return messages
+
+
+def _craft(
+    character: Any,
+    arguments: dict[str, Any],
+    content: dict[str, Any],
+    areas: dict[str, dict[str, Any]],
+    entities: dict[str, dict[str, Any]],
+) -> list[str]:
+    subject = _command_subject(
+        arguments, "recipe", "product", "item", "subject", "target"
+    )
+    recipes = content.get("recipes", [])
+    matches = _matching_entities(subject, recipes) if subject else recipes
+    if len(matches) > 1:
+        return [f"Which recipe do you mean: {', '.join(item['name'] for item in matches)}?"]
+    if not matches:
+        return [f"There is no recipe for {subject}." if subject else "Name something to craft."]
+    recipe = matches[0]
+    area = areas.get(character.area_id)
+    if area is None:
+        return ["You are not in a valid location."]
+    station_id = recipe.get("station_id")
+    if station_id and station_id not in area["object_ids"]:
+        station_name = entities.get(station_id, {}).get("name", station_id.replace("_", " "))
+        return [f"You need to be at {station_name} to craft {recipe['name']}."]
+    levels = _skill_levels(character)
+    skill = recipe.get("skill")
+    skill_level = int(recipe.get("skill_level", 0))
+    if skill and levels.get(skill, 1) < skill_level:
+        return [f"You need {SKILL_LABELS[skill]} level {skill_level} to craft {recipe['name']}."]
+    inventory = dict(character.inventory or {})
+    missing = [
+        f"{ingredient['quantity'] - inventory.get(ingredient['item_id'], 0)} "
+        f"{entities.get(ingredient['item_id'], {}).get('name', ingredient['item_id'])}"
+        for ingredient in recipe["ingredients"]
+        if inventory.get(ingredient["item_id"], 0) < ingredient["quantity"]
+    ]
+    if missing:
+        return [f"You are missing {', '.join(missing)} to craft {recipe['name']}."]
+    for ingredient in recipe["ingredients"]:
+        inventory[ingredient["item_id"]] -= ingredient["quantity"]
+        if inventory[ingredient["item_id"]] == 0:
+            del inventory[ingredient["item_id"]]
+    output_id = recipe["output_item_id"]
+    inventory[output_id] = inventory.get(output_id, 0) + recipe["output_quantity"]
+    character.inventory = inventory
+    _record_quest_event(character, content, "collect", output_id, recipe["output_quantity"])
+    output = entities.get(output_id)
+    output_name = output["name"] if output else output_id.replace("_", " ").title()
+    messages = [
+        f"You craft {recipe['output_quantity']} {output_name}"
+        f"{'' if recipe['output_quantity'] == 1 else 's'}."
+    ]
+    if skill:
+        messages.extend(_award_skill_experience(character, skill, max(1, skill_level)))
+    return messages
+
+
+def _apply_item_effect(
+    character: Any,
+    effect: dict[str, Any],
+    entities: dict[str, dict[str, Any]],
+    now: float,
+) -> str:
+    kind = effect["type"]
+    if kind == "heal":
+        base_stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
+        stats = _effective_stats(character, entities, now)
+        previous_health = base_stats["health"]
+        if effect["mode"] == "full":
+            base_stats["health"] = base_stats["max_health"]
+        else:
+            restored = (
+                int(effect["amount"])
+                if effect["mode"] == "fixed"
+                else ceil(stats["max_health"] * effect["amount"] / 100)
+            )
+            base_stats["health"] = min(
+                stats["max_health"], previous_health + restored
+            )
+        _set_current_health(character, base_stats["health"])
+        restored = base_stats["health"] - previous_health
+        total_health = base_stats["health"] + _temporary_health(character, now)
+        return f"restore {restored} health ({total_health}/{stats['max_health']})"
+    _apply_timed_effect(character, effect, now)
+    if kind == "stat_buff":
+        return f"boost {effect['stat']} for {_duration_text(effect['duration_seconds'])}"
+    if kind == "shield":
+        return f"grant a {_duration_text(effect['duration_seconds'])} shield"
+    if kind == "luck":
+        return f"improve your luck for {_duration_text(effect['duration_seconds'])}"
+    return "have no effect"
+
+
+def _use_item(
+    character: Any,
+    subject: str,
+    content: dict[str, Any],
+    areas: dict[str, dict[str, Any]],
+    entities: dict[str, dict[str, Any]],
+    party_members: Sequence[Any],
+    now: float | None = None,
+) -> tuple[list[str], dict[str, list[str]]]:
+    current_time = time.time() if now is None else now
+    inventory = dict(character.inventory or {})
+    usable_items = [
+        entity
+        for entity in entities.values()
+        if entity["type"] == "item"
+        and inventory.get(entity["id"], 0) > 0
+        and (entity.get("item_use") or {}).get("effects")
+    ]
+    matches = _matching_items(subject, usable_items) if subject else []
+    if len(matches) > 1:
+        return [f"Which item do you mean: {', '.join(item['name'] for item in matches)}?"], {}
+    if matches:
+        item = matches[0]
+        use_config = item["item_use"]
+        source_location = character.area_id
+        if use_config.get("target_scope") == "party":
+            targets = [
+                target
+                for target in party_members
+                if target.area_id == source_location
+            ]
+            if all(target.account_id != character.account_id for target in targets):
+                targets.append(character)
+        else:
+            targets = [character]
+        unique_targets: dict[str, Any] = {
+            target.account_id: target for target in targets
+        }
+        party_messages: dict[str, list[str]] = {}
+        actor_effects: list[str] = []
+        teleport_effects = [
+            effect
+            for effect in use_config["effects"]
+            if effect["type"] == "teleport"
+        ]
+        for target in unique_targets.values():
+            effects = [
+                _apply_item_effect(target, effect, entities, current_time)
+                for effect in use_config["effects"]
+                if effect["type"] != "teleport"
+            ]
+            for effect in teleport_effects:
+                destination = effect["destination_area_id"]
+                if (
+                    target.area_id != destination
+                    and isinstance(getattr(target, "gathering_state", None), dict)
+                ):
+                    target.gathering_state = None
+                    effects.append("stop gathering")
+                target.area_id = destination
+                effects.append(f"travel to {areas[destination]['name']}")
+            if target.account_id == character.account_id:
+                actor_effects = effects
+            else:
+                party_messages[target.account_id] = [
+                    f"You receive the effects of {character.name}'s {item['name']}: "
+                    f"{', '.join(effects)}."
+                ]
+        if use_config.get("consume_on_use", True):
+            inventory[item["id"]] -= 1
+            if inventory[item["id"]] <= 0:
+                del inventory[item["id"]]
+            character.inventory = inventory
+        recipient_count = max(0, len(unique_targets) - 1)
+        if use_config.get("target_scope") == "party":
+            result = [
+                f"You use {item['name']}; its effects reach you and "
+                f"{recipient_count} online party member{'s' if recipient_count != 1 else ''} here."
+            ]
+        else:
+            result = [f"You use {item['name']}."]
+        result.extend(f"The effects {effect}." for effect in actor_effects)
+        return result, party_messages
+
+    area = areas.get(character.area_id)
+    if area is None:
+        return ["You are not in a valid location."], {}
+    environment_objects = [
+        entities[entity_id]
+        for entity_id in area["object_ids"]
+        if entity_id in entities
+    ]
+    object_matches = _matching_entities(subject, environment_objects) if subject else []
+    if len(object_matches) > 1:
+        return [
+            f"Which object do you mean: {', '.join(entity['name'] for entity in object_matches)}?"
+        ], {}
+    if not object_matches:
+        return [
+            f"There is no {subject} here to use."
+            if subject
+            else "Name an item or object to use."
+        ], {}
+    target = object_matches[0]
+    effect = target.get("interaction_effect")
+    if effect == "restore_health":
+        stats = _effective_stats(character, entities, current_time)
+        _set_current_health(character, stats["max_health"])
+        stats["health"] = stats["max_health"]
+        total_health = stats["health"] + _temporary_health(character, current_time)
+        return [
+            f"You rest at {target['name']} and restore your health to full "
+            f"({total_health}/{stats['max_health']})."
+        ], {}
+    if effect == "set_respawn":
+        character.respawn_area_id = character.area_id
+        return [
+            f"You set {target['name']} in {area['name']} as your respawn point."
+        ], {}
+    return [f"{target['name']} has no available interaction."], {}
 
 
 def _normalize_npc_name(value: str) -> str:
@@ -796,7 +1492,10 @@ def _positive_stat(entity: dict[str, Any], key: str, default: int) -> int:
 
 
 def attack_initiative_relation(character: Any, action_id: str, enemy: dict[str, Any]) -> int:
-    stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
+    entities = {
+        entity["id"]: entity for entity in world_content_dict().get("entities", [])
+    }
+    stats = _effective_stats(character, entities)
     player_speed = stats["speed"] * ATTACK_INITIATIVE_MULTIPLIERS[action_id]
     enemy_speed = _positive_stat(enemy, "speed", 0)
     return (player_speed > enemy_speed) - (player_speed < enemy_speed)
@@ -836,6 +1535,7 @@ def _reward_enemy_defeat(
     character: Any,
     enemy: dict[str, Any],
     entities: dict[str, dict[str, Any]],
+    content: dict[str, Any] | None = None,
 ) -> list[str]:
     experience_reward = _positive_stat(enemy, "experience", 0)
     messages = award_experience(character, experience_reward)
@@ -843,8 +1543,10 @@ def _reward_enemy_defeat(
         messages.append("You gain 0 experience.")
     inventory = dict(character.inventory or {})
     dropped_items = False
+    drop_chance_bonus, _ = _luck_bonuses(character)
     for drop in enemy.get("loot_table", []):
-        if combat_rng.random() >= drop["chance"]:
+        chance = min(1.0, drop["chance"] * (1 + drop_chance_bonus / 100))
+        if combat_rng.random() >= chance:
             continue
         quantity = combat_rng.randint(
             drop["minimum_quantity"],
@@ -853,6 +1555,14 @@ def _reward_enemy_defeat(
         inventory[drop["item_id"]] = inventory.get(drop["item_id"], 0) + quantity
         item_name = entities[drop["item_id"]]["name"]
         dropped_items = True
+        if content is not None:
+            _record_quest_event(
+                character,
+                content,
+                "collect",
+                drop["item_id"],
+                quantity,
+            )
         messages.append(
             f"Loot: {quantity} {item_name}{'' if quantity == 1 else 's'}."
         )
@@ -872,7 +1582,7 @@ def award_enemy_defeat(
     enemy = entities.get(enemy_id)
     if enemy is None:
         return []
-    messages = _reward_enemy_defeat(character, enemy, entities)
+    messages = _reward_enemy_defeat(character, enemy, entities, current_content)
     _record_quest_event(character, current_content, "kill", enemy_id)
     return messages
 
@@ -1019,10 +1729,11 @@ def _equip(
     slot = arguments.get("slot")
     item_key = _normalize_npc_name(item_name)
     if item_key == "fist":
-        if slot not in {None, "left_hand", "right_hand"}:
-            return "Fists can only be readied in your left hand or right hand."
+        if slot not in {None, "right_hand"}:
+            return "Fists can only be readied in your right hand."
         slot = slot or "right_hand"
         equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
+        equipment["left_hand"] = "" if equipment["left_hand"] == "fist" else equipment["left_hand"]
         equipment[slot] = "fist"
         character.equipment = equipment
         return f"You ready your fist in your {slot.replace('_', ' ')}."
@@ -1037,12 +1748,14 @@ def _equip(
         return f"{item['name']} cannot be equipped; this item type has no equipment definition."
     if (character.inventory or {}).get(item["id"], 0) < 1:
         return f"You are not carrying a {item['name']}."
-    slot = slot or ("right_hand" if item["type"] == "weapon" else None)
+    slot = slot or next(iter(sorted(item_slots)))
     if slot not in EQUIPMENT_SLOTS:
         return f"Choose an equipment slot: {', '.join(EQUIPMENT_SLOTS)}."
     if slot not in item_slots:
         return f"{item['name']} cannot be equipped in your {slot.replace('_', ' ')}."
     equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
+    if equipment["left_hand"] == "fist":
+        equipment["left_hand"] = ""
     equipment[slot] = item["id"]
     character.equipment = equipment
     return f"You equip {item['name']} in your {slot.replace('_', ' ')}."
@@ -1082,7 +1795,7 @@ def _unequip(
     previous = equipment[slot]
     if not previous or (previous == "fist" and slot not in {"left_hand", "right_hand"}):
         return f"Nothing is equipped in your {slot.replace('_', ' ')}."
-    equipment[slot] = "fist" if slot in {"left_hand", "right_hand"} else ""
+    equipment[slot] = "fist" if slot == "right_hand" else ""
     character.equipment = equipment
     previous_name = entities.get(previous, {}).get("name", "Fist" if previous == "fist" else previous)
     return f"You unequip {previous_name} from your {slot.replace('_', ' ')}."
@@ -1164,7 +1877,7 @@ def _attack(
     is_spawn_instance = target["id"] in spawn_instances
     spawn = spawn_instances.get(target["id"])
     enemy = entities.get(target.get("entity_id", target["id"]), target)
-    stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
+    stats = _effective_stats(character, entities)
     state = {
         **(character.combat_state or {}),
         "target_id": target["id"],
@@ -1216,7 +1929,7 @@ def _attack(
         character.combat_state = state
         messages.append(f"{target['name']} is defeated.")
         if award_rewards:
-            messages.extend(_reward_enemy_defeat(character, enemy, entities))
+            messages.extend(_reward_enemy_defeat(character, enemy, entities, content))
             _record_quest_event(character, content, "kill", enemy["id"])
         return messages
 
@@ -1226,7 +1939,7 @@ def _attack(
     if enemy.get("behavior", "neutral") == "passive":
         messages.append(f"{target['name']} does not fight back.")
         return messages
-    messages.extend(enemy_strike(character, enemy, areas))
+    messages.extend(enemy_strike(character, enemy, areas, entities=entities))
     if not is_spawn_instance and character.area_id != area["id"]:
         state = dict(character.combat_state or {})
         state["enemy_health"] = dict(state.get("enemy_health", {}))
@@ -1241,8 +1954,9 @@ def enemy_strike(
     areas: dict[str, dict[str, Any]],
     *,
     consume_defending: bool = True,
+    entities: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
-    stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
+    stats = _effective_stats(character, entities)
     die_sides = enemy["attack_die_sides"]
     roll = combat_rng.randint(1, die_sides)
     incoming_damage = max(
@@ -1252,13 +1966,48 @@ def enemy_strike(
     state = dict(character.combat_state or {})
     if state.get("defending", False):
         incoming_damage //= 2
+    active_effects = _live_effects(character)
+    shield_messages: list[str] = []
+    retained_effects = []
+    buffer_effects = []
+    for effect in active_effects:
+        if effect.get("type") != "shield":
+            retained_effects.append(effect)
+            continue
+        if effect.get("mode") == "damage_reduction":
+            incoming_damage = max(0, incoming_damage - int(effect["amount"]))
+            retained_effects.append(effect)
+            continue
+        buffer_effects.append(effect)
+    for mode in ("damage_pool", "temporary_health"):
+        for effect in buffer_effects:
+            if effect.get("mode") != mode:
+                continue
+            remaining = max(0, int(effect.get("remaining", effect["amount"])))
+            absorbed = min(incoming_damage, remaining)
+            if absorbed:
+                incoming_damage -= absorbed
+                remaining -= absorbed
+                shield_messages.append(
+                    (
+                        f"Your temporary health absorbs {absorbed} damage."
+                        if mode == "temporary_health"
+                        else f"Your damage pool absorbs {absorbed} damage."
+                    )
+                )
+            if remaining > 0:
+                retained_effects.append({**effect, "remaining": remaining})
+    character.active_effects = retained_effects
     if consume_defending:
         state.pop("defending", None)
     stats["health"] = max(0, stats["health"] - incoming_damage)
+    _set_current_health(character, stats["health"])
+    displayed_health = stats["health"] + _temporary_health(character)
     messages = [
         f"{enemy['name']} rolls D{die_sides} ({roll}) and hits you for "
-        f"{incoming_damage} damage ({stats['health']}/{stats['max_health']} health)."
+        f"{incoming_damage} damage ({displayed_health}/{stats['max_health']} health)."
     ]
+    messages.extend(shield_messages)
     if stats["health"] == 0:
         saved_respawn_area = getattr(character, "respawn_area_id", None)
         starting_area = starting_location(character.species)
@@ -1271,7 +2020,9 @@ def enemy_strike(
         if stale_respawn:
             character.respawn_area_id = None
         character.area_id = respawn_area
+        character.gathering_state = None
         stats["health"] = stats["max_health"]
+        _set_current_health(character, stats["health"])
         state["target_id"] = None
         stale_notice = (
             "Your saved respawn location is no longer available. "
@@ -1282,7 +2033,6 @@ def enemy_strike(
             f"You are defeated. {stale_notice}You awaken in {areas[respawn_area]['name']} "
             "with full health."
         )
-    character.combat_stats = stats
     character.combat_state = state
     return messages
 

@@ -39,6 +39,7 @@ from plight_server.audio_assets import (
     save_mp3_audio,
 )
 from plight_server.game import (
+    _complete_gathering,
     award_enemy_defeat,
     award_experience,
     attack_initiative_relation,
@@ -578,10 +579,17 @@ async def _chat_retention_loop() -> None:
 async def _enemy_world_loop() -> None:
     next_spawn = time.monotonic() + 15
     next_aggression = time.monotonic() + 5
+    next_gathering = time.monotonic() + 1
     while True:
         now = time.monotonic()
-        await asyncio.sleep(max(0, min(next_spawn, next_aggression) - now))
+        await asyncio.sleep(max(0, min(next_spawn, next_aggression, next_gathering) - now))
         now = time.monotonic()
+        if now >= next_gathering:
+            try:
+                await asyncio.to_thread(_run_gathering_completion_tick)
+            except Exception:
+                LOGGER.exception("Gathering completion tick failed.")
+            next_gathering += int((now - next_gathering) // 1) + 1
         if now >= next_spawn:
             try:
                 await asyncio.to_thread(_run_enemy_spawn_tick)
@@ -594,6 +602,40 @@ async def _enemy_world_loop() -> None:
             except Exception:
                 LOGGER.exception("Enemy aggression tick failed.")
             next_aggression += 5 * (int((now - next_aggression) // 5) + 1)
+
+
+def _run_gathering_completion_tick() -> None:
+    online_accounts = live_hub.active_account_ids()
+    if not online_accounts:
+        return
+    content = world_content_dict()
+    notifications: dict[str, list[str]] = {}
+    with _enemy_world_lock, SessionLocal() as db:
+        characters = db.scalars(
+            select(Character).where(Character.account_id.in_(online_accounts))
+        ).all()
+        current_time = time.time()
+        for character in characters:
+            gathering = character.gathering_state
+            if (
+                not isinstance(gathering, dict)
+                or float(gathering.get("completes_at", float("inf"))) > current_time
+            ):
+                continue
+            messages = _complete_gathering(character, content, current_time)
+            if messages:
+                notifications[character.account_id] = messages
+        if db.new or db.dirty:
+            db.commit()
+    for account_id, messages in notifications.items():
+        live_hub.publish(
+            account_id,
+            f"account:{account_id}",
+            {
+                "type": "world.updated",
+                "payload": {"id": str(uuid4()), "messages": messages},
+            },
+        )
 
 
 def _active_enemy_scopes(db: Session) -> list[tuple[str, str]]:
@@ -823,7 +865,9 @@ def _run_enemy_aggression_tick() -> None:
                 attack_times[spawn["id"]] = now.isoformat()
                 if chance < 100 and _enemy_aggression_rng.random() * 100 >= chance:
                     continue
-                messages.extend(enemy_strike(character, enemy, areas))
+                messages.extend(
+                    enemy_strike(character, enemy, areas, entities=entities)
+                )
                 if character.area_id != location_id:
                     break
             attack_times = {
@@ -1104,6 +1148,7 @@ def _run_combat_round_tick(now: datetime | None = None) -> None:
                             enemy,
                             areas,
                             consume_defending=False,
+                            entities=entities,
                         )
                         round_messages[fighter.account_id].extend(messages)
                         if fighter.area_id != encounter.location_id:
@@ -1687,6 +1732,11 @@ def _cleanup_party_after_disconnect(account_id: str) -> None:
     party_notifications: list[tuple[str, set[str]]] = []
     command_notifications: list[tuple[str, dict[str, Any]]] = []
     with _enemy_world_lock, SessionLocal() as db:
+        character = db.scalar(
+            select(Character).where(Character.account_id == account_id)
+        )
+        if character is not None and character.gathering_state is not None:
+            character.gathering_state = None
         solo_encounters = db.scalars(
             select(CombatEncounter).where(
                 CombatEncounter.solo_account_id == account_id
@@ -2842,6 +2892,25 @@ def _submit_command_locked(
                 Character.account_id != account.id,
             )
         ).all()
+
+        def online_party_members_at(location_id: str) -> list[Character]:
+            if party is None:
+                return [character]
+            online_member_ids = live_hub.active_account_ids() | {account.id}
+            member_ids = set(
+                db.scalars(
+                    select(PartyMember.account_id).where(
+                        PartyMember.party_id == party.id,
+                        PartyMember.account_id.in_(online_member_ids),
+                    )
+                ).all()
+            )
+            return db.scalars(
+                select(Character).where(
+                    Character.account_id.in_(member_ids),
+                    Character.area_id == location_id,
+                )
+            ).all()
         if not is_resuming:
             result = resolve_command(
                 body.text,
@@ -3003,7 +3072,9 @@ def _submit_command_locked(
                     enemy = entities.get(spawn["enemy_id"]) if spawn else None
                     if spawn is None or not spawn["is_alive"] or enemy is None:
                         continue
-                    strike_messages = enemy_strike(character, enemy, areas)
+                    strike_messages = enemy_strike(
+                        character, enemy, areas, entities=entities
+                    )
                     result["messages"].extend(strike_messages)
                     if character.area_id != location_id or any(
                         message.startswith("You are defeated.") for message in strike_messages
@@ -3018,8 +3089,13 @@ def _submit_command_locked(
                     available_players=nearby_players,
                     enemy_spawns_by_location=spawns_by_location,
                     selected_occurrence_ids={occurrence["occurrence_id"]},
+                    party_members=online_party_members_at(character.area_id),
                 )
                 result["messages"].extend(outcome["messages"])
+                for recipient_id, recipient_messages in outcome.get(
+                    "party_effect_messages", {}
+                ).items():
+                    party_notifications[recipient_id].extend(recipient_messages)
                 result["dialogues"].extend(outcome.get("dialogues", []))
                 result["profile_account_ids"].extend(
                     outcome.get("profile_account_ids", [])
@@ -3067,12 +3143,17 @@ def _submit_command_locked(
                     enemy_spawns_by_location=spawns_by_location,
                     selected_occurrence_ids={occurrence["occurrence_id"]},
                     combat_context=True,
+                    party_members=online_party_members_at(character.area_id),
                 )
                 outcome = {
                     **outcome,
                     "defeated_enemy_id": None,
                 }
             action_row.result = outcome
+            for recipient_id, recipient_messages in outcome.get(
+                "party_effect_messages", {}
+            ).items():
+                party_notifications[recipient_id].extend(recipient_messages)
             if not attack_interrupted:
                 result["action_events"].append(action_id)
             result["messages"].extend(outcome["messages"])
@@ -3157,6 +3238,7 @@ def _submit_command_locked(
                         enemy,
                         areas,
                         consume_defending=False,
+                        entities=entities,
                     )
                 )
                 if character.area_id != location_id:

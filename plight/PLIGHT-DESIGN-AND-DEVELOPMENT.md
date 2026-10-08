@@ -135,6 +135,9 @@ The live combat implementation uses immediate action-response combat and the par
 - Furniture and objects may have one optional Content Studio interaction effect: fully restore the character's health, or save the current location as that character's respawn point.
 - Players may activate an effect by using the object in its location; beds set persistent, per-character respawn locations, and a valid bed location overrides the species starting location after defeat. If the saved location was removed, the character falls back to their species start.
 - Effects have no cooldown and may be used during combat. World authors manage the risk through placement. Crafting stations continue to work by presence alone.
+- Regular items may combine healing, timed stat boosts, shields, teleport, and luck effects. Healing supports fixed, maximum-health percentage, and full restoration. Timed boosts affect attack, defense, or speed. Shield effects can absorb a finite total damage pool, reduce each hit by a fixed amount, or add expiring temporary health above normal maximum health; damage pools absorb damage before temporary health, which is then consumed before regular health. Teleport destinations are authored per item.
+- Item effects can target the user or the user plus online party members in the same location. Only the user spends an item, and one item is consumed by default (each item can opt out). All item effects work during combat. Timed effects use real time; reapplying the same kind refreshes its duration without stacking its strength. Luck raises enemy-drop chances and gathering yields.
+- Weapons equip only in the right hand. Dedicated shields equip only in the left hand and add their authored defense attribute to the character's defense.
 
 ### Rewards and scope
 
@@ -145,9 +148,13 @@ The live combat implementation uses immediate action-response combat and the par
 
 ### Gathering and crafting
 
-Gathering is an in-world action expressed in text, such as “chop wood.” It requires the appropriate tool and a suitable resource in the current area. A successful start puts the character into a timed gathering state. Gathering is intentionally a substantial commitment: while it is underway, the player can wait or cancel, but cannot perform other actions. Gathering time, interruption behavior, resource availability, and crafting recipes need detailed design and playtesting.
+The supported proficiencies are Felling, Foraging, Gouging, Fishing, Herbology, Alchemy, Fletching, Smithing, Lapidary, and Woodworking. Every proficiency begins at level 1 and stores its own XP. The next level costs 100 times the current level; a successful gather or craft awards 10 times its configured required level in that proficiency's XP.
 
-Crafting is an intended player activity and should be available in the interaction-focused MVP, though its initial recipe list and exact rules remain to be specified.
+Each resource can author its gathering proficiency and required level, health, required right-hand weapon stat and minimum power, respawn seconds, and a weighted yield table whose entries choose existing items or gear and quantity ranges. Harvest duration is `resource health × 60 ÷ (player proficiency level + equipped right-hand tool power)`, rounded up to a whole second. A tool stat requirement requires a matching weapon in the right hand; a resource without a gathering profile or yield table cannot be harvested. Each character tracks resource depletion and respawn independently.
+
+Starting a gather locks the character into the timed action. `stop` cancels without a reward or resource depletion; disconnect and defeat also cancel it without reward. Other actions cannot be performed while gathering. Once the timer completes, the character receives successful yield rolls and proficiency XP, and that character's resource enters its authored respawn cooldown.
+
+Recipes can produce items, weapons, or shields and define ingredients, an optional station, and an optional skill/level requirement. Crafting is immediate after validation, requires the station to be present in the current location, consumes the required ingredients, creates the authored quantity, and awards the recipe proficiency's XP. Existing recipes without a skill requirement remain valid.
 
 ### Shops and player marketplace
 
@@ -246,7 +253,9 @@ The suite should cover:
 - Required tools, inventory, reachability, species/faction restrictions, and unavailable targets.
 - Best-interpretation behavior for ambiguous or unfamiliar sentences, including its in-world response.
 - Immediate combat retaliation, passive enemies, enemy/NPC joins, spawn caps, player separation, and party membership changes.
-- Gathering completion, cancellation, and prevention of conflicting actions during its timed state.
+- Item-effect targeting, consumption, refresh-without-stacking, combat use, teleport, and shield absorption.
+- Gathering duration and tool/skill checks, per-character depletion and respawn, yield chances and quantities, cancellation/disconnect/defeat, and prevention of conflicting actions during its timed state.
+- Crafting station, skill, ingredient, output, and proficiency progression checks.
 - Trading and marketplace transfers, including offline sellers, barter, and two players attempting conflicting purchases.
 - Persistence across logout, server restart, and reconnect.
 - Real-time delivery of chat and relevant area changes, plus usability at phone-sized widths.
@@ -260,8 +269,8 @@ These were deliberately left for focused design and implementation work:
 The initial Speed-based attack initiative decision is implemented: attacks compare action-adjusted player Speed to each engaged non-passive enemy independently; light, normal, and heavy attacks use 1.05×, 1.0×, and 0.95× player Speed. The faster actor acts first. Exact Speed ties pause for player-triggered D20 rolls, and tied D20s require another click. An enemy that defeats the player before their turn cancels that attack. Defend and wait do not use initiative.
 
 1. What combat behaviors and weighted join rules should helpful NPCs use if they later participate in fights?
-2. Which skills, character backgrounds, appearance options, and religions are available at launch, and how do they affect mechanics?
-3. What resource respawn rules, NPC stock/prices, and shop inventories should populate the MVP world?
+2. What character backgrounds, additional appearance options, and religions are available at launch, and how should they affect mechanics?
+3. Which authored resource profiles, NPC stock/prices, and shop inventories should populate the MVP world?
 4. What moderation/reporting tools are needed beyond initial word blocking and player blocking? Chat retention is set to 90 days in [NETWORKING-AND-UI-ARCHITECTURE.md](./NETWORKING-AND-UI-ARCHITECTURE.md).
 5. What clock and tick model drives weather, respawns, events, and offline simulation?
 

@@ -7,6 +7,18 @@ from plight_nlp_inspector import evaluate_expression, parse_local, parse_with_rp
 
 
 class LocalParserTests(unittest.TestCase):
+    def test_gather_craft_and_bare_stop_actions(self):
+        gathering = parse_local("gather the blueberry bush")
+        self.assertEqual(gathering["occurrences"][0]["action_id"], "gather")
+        self.assertEqual(gathering["occurrences"][0]["arguments"]["resource"], "blueberry bush")
+
+        crafting = parse_local("craft a crafted ring")
+        self.assertEqual(crafting["occurrences"][0]["action_id"], "craft")
+        self.assertEqual(crafting["occurrences"][0]["arguments"]["product"], "crafted ring")
+
+        stopping = parse_local("stop")
+        self.assertEqual(stopping["occurrences"][0]["action_id"], "cancel_gather")
+
     def test_attack_extracts_target_and_instrument(self):
         result = parse_local("Attack the goblin with two daggers")
         occurrence = result["occurrences"][0]

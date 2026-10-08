@@ -5,7 +5,7 @@ import json
 import re
 import threading
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -18,6 +18,19 @@ _CONTENT_LOCK = threading.Lock()
 _SLUG = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _DIRECTIONS = {"north", "south", "east", "west"}
 Direction = Literal["north", "south", "east", "west"]
+SkillName = Literal[
+    "felling",
+    "foraging",
+    "gouging",
+    "fishing",
+    "herbology",
+    "alchemy",
+    "fletching",
+    "smithing",
+    "lapidary",
+    "woodworking",
+]
+GatheringSkill = Literal["felling", "foraging", "gouging", "fishing", "herbology"]
 NPCRace = Literal[
     "human",
     "elf",
@@ -245,13 +258,119 @@ class LootDrop(ContentModel):
         return self
 
 
+class ItemHealingEffect(ContentModel):
+    type: Literal["heal"]
+    mode: Literal["fixed", "percent", "full"] = "fixed"
+    amount: int | None = Field(default=25, ge=1, le=10_000)
+
+    @model_validator(mode="after")
+    def validate_amount(self) -> ItemHealingEffect:
+        if self.mode == "full":
+            return self
+        maximum = 100 if self.mode == "percent" else 10_000
+        if self.amount is None or self.amount > maximum:
+            raise ValueError(f"{self.mode} healing requires an amount from 1 to {maximum}.")
+        return self
+
+
+class ItemStatBuffEffect(ContentModel):
+    type: Literal["stat_buff"]
+    stat: Literal["attack", "defense", "speed"]
+    mode: Literal["flat", "percent"]
+    amount: int = Field(ge=1, le=500)
+    duration_seconds: int = Field(ge=1, le=86_400)
+
+
+class ItemShieldEffect(ContentModel):
+    type: Literal["shield"]
+    mode: Literal["damage_pool", "damage_reduction", "temporary_health"]
+    amount: int = Field(ge=1, le=100_000)
+    duration_seconds: int = Field(ge=1, le=86_400)
+
+
+class ItemTeleportEffect(ContentModel):
+    type: Literal["teleport"]
+    destination_area_id: str = Field(pattern=_SLUG.pattern)
+
+
+class ItemLuckEffect(ContentModel):
+    type: Literal["luck"]
+    drop_chance_bonus_percent: int = Field(default=0, ge=0, le=1_000)
+    gathering_yield_bonus_percent: int = Field(default=0, ge=0, le=1_000)
+    duration_seconds: int = Field(ge=1, le=86_400)
+
+    @model_validator(mode="after")
+    def validate_bonus(self) -> ItemLuckEffect:
+        if self.drop_chance_bonus_percent == self.gathering_yield_bonus_percent == 0:
+            raise ValueError("A luck effect must boost at least one reward chance or yield.")
+        return self
+
+
+ItemEffect = Annotated[
+    ItemHealingEffect
+    | ItemStatBuffEffect
+    | ItemShieldEffect
+    | ItemTeleportEffect
+    | ItemLuckEffect,
+    Field(discriminator="type"),
+]
+
+
+class ItemUseConfig(ContentModel):
+    effects: list[ItemEffect] = Field(default_factory=list, max_length=20)
+    target_scope: Literal["self", "party"] = "self"
+    consume_on_use: bool = True
+
+    @model_validator(mode="after")
+    def validate_effects(self) -> ItemUseConfig:
+        active_effect_keys: set[tuple[str, str]] = set()
+        teleport_count = 0
+        for effect in self.effects:
+            if isinstance(effect, ItemTeleportEffect):
+                teleport_count += 1
+            if isinstance(effect, ItemStatBuffEffect):
+                key = ("stat_buff", effect.stat)
+            elif isinstance(effect, ItemShieldEffect):
+                key = ("shield", effect.mode)
+            elif isinstance(effect, ItemLuckEffect):
+                key = ("luck", "luck")
+            else:
+                continue
+            if key in active_effect_keys:
+                raise ValueError("An item cannot contain duplicate timed effects of the same kind.")
+            active_effect_keys.add(key)
+        if teleport_count > 1:
+            raise ValueError("An item can have at most one teleport destination.")
+        return self
+
+
+class ResourceGathering(ContentModel):
+    skill: GatheringSkill
+    skill_level: int = Field(default=1, ge=1, le=100)
+    health: int = Field(default=100, ge=1, le=1_000_000)
+    tool_stat: str | None = Field(default=None, pattern=_SLUG.pattern)
+    minimum_tool_power: int = Field(default=0, ge=0, le=1_000_000)
+    respawn_seconds: int = Field(default=3_600, ge=1, le=31_536_000)
+    loot_table: list[LootDrop] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_tool_requirement(self) -> ResourceGathering:
+        if self.minimum_tool_power > 0 and self.tool_stat is None:
+            raise ValueError("A minimum tool power requires a tool stat name.")
+        return self
+
+
 class ContentEntity(ContentModel):
     id: str = Field(pattern=_SLUG.pattern)
-    type: Literal["enemy", "npc", "item", "weapon", "furniture", "object", "resource"]
+    type: Literal[
+        "enemy", "npc", "item", "weapon", "shield", "furniture", "object", "resource"
+    ]
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(max_length=4000)
     attributes: dict[str, Any] = Field(default_factory=dict)
     interaction_effect: Literal["restore_health", "set_respawn"] | None = None
+    item_use: ItemUseConfig | None = None
+    gathering: ResourceGathering | None = None
     attack_die_sides: int | None = Field(default=None, ge=2, le=100)
     respawn_chance_percent: int | None = Field(default=None, ge=0, le=100)
     aggressive_attack_chance_percent: int | None = Field(default=None, ge=0, le=100)
@@ -284,7 +403,7 @@ class ContentRecipe(ContentModel):
     output_quantity: int = Field(ge=1, le=1_000_000)
     ingredients: list[RecipeIngredient] = Field(min_length=1, max_length=50)
     station_id: str | None = Field(default=None, pattern=_SLUG.pattern)
-    skill: str = Field(default="", max_length=100)
+    skill: SkillName | Literal[""] = ""
     skill_level: int = Field(default=0, ge=0, le=100)
 
 
@@ -479,6 +598,27 @@ class WorldContent(BaseModel):
                 raise ValueError(
                     f"Interaction effects only apply to furniture and objects ({entity.id})."
                 )
+            if entity.type != "item" and entity.item_use is not None:
+                raise ValueError(f"Item effects only apply to regular items ({entity.id}).")
+            if entity.type != "resource" and entity.gathering is not None:
+                raise ValueError(f"Gathering settings only apply to resources ({entity.id}).")
+            if entity.item_use is not None:
+                for effect in entity.item_use.effects:
+                    if (
+                        isinstance(effect, ItemTeleportEffect)
+                        and effect.destination_area_id not in locations
+                    ):
+                        raise ValueError(
+                            f"Item {entity.id} teleports to a missing location."
+                        )
+            if entity.gathering is not None:
+                for drop in entity.gathering.loot_table:
+                    if entity_types.get(drop.item_id) not in {
+                        "item", "weapon", "shield", "resource"
+                    }:
+                        raise ValueError(
+                            f"Resource {entity.id} has a gathering drop referencing a missing item."
+                        )
             if entity.type == "npc":
                 if entity.race is None:
                     entity.race = "human"
@@ -507,7 +647,9 @@ class WorldContent(BaseModel):
                 if not isinstance(experience, int) or isinstance(experience, bool) or experience < 0:
                     raise ValueError(f"Enemy {entity.id} must have non-negative integer experience.")
                 for drop in entity.loot_table:
-                    if entity_types.get(drop.item_id) not in {"item", "weapon", "resource"}:
+                    if entity_types.get(drop.item_id) not in {
+                        "item", "weapon", "shield", "resource"
+                    }:
                         raise ValueError(f"Enemy {entity.id} has loot referencing a missing or invalid item.")
             elif (
                 entity.attack_die_sides is not None
@@ -522,6 +664,10 @@ class WorldContent(BaseModel):
                 damage = entity.attributes.get("damage", 0)
                 if not isinstance(damage, int) or isinstance(damage, bool) or damage < 0:
                     raise ValueError(f"Weapon {entity.id} must have a non-negative integer damage value.")
+            if entity.type == "shield":
+                defense = entity.attributes.get("defense", 0)
+                if not isinstance(defense, int) or isinstance(defense, bool) or defense < 0:
+                    raise ValueError(f"Shield {entity.id} must have a non-negative integer defense value.")
             if entity.type not in {"enemy", "npc"} and entity.ambience:
                 raise ValueError(f"Only NPCs and enemies can have ambience lines ({entity.id}).")
             if entity.type != "npc" and (entity.stock or entity.weapon_ids):
@@ -529,16 +675,20 @@ class WorldContent(BaseModel):
             if any(entity_types.get(weapon_id) != "weapon" for weapon_id in entity.weapon_ids):
                 raise ValueError(f"NPC {entity.id} references a missing or non-weapon entity.")
             if any(
-                entity_types.get(entry.item_id) not in {"item", "weapon", "resource"}
+                entity_types.get(entry.item_id) not in {
+                    "item", "weapon", "shield", "resource"
+                }
                 for entry in entity.stock
             ):
                 raise ValueError(f"NPC {entity.id} has stock referencing a missing or invalid item.")
 
         for recipe in self.recipes:
-            if entity_types.get(recipe.output_item_id) not in {"item", "weapon"}:
-                raise ValueError(f"Recipe {recipe.id} must produce an existing item or weapon.")
+            if entity_types.get(recipe.output_item_id) not in {"item", "weapon", "shield"}:
+                raise ValueError(f"Recipe {recipe.id} must produce an existing item, weapon, or shield.")
             if any(
-                entity_types.get(ingredient.item_id) not in {"item", "weapon", "resource"}
+                entity_types.get(ingredient.item_id) not in {
+                    "item", "weapon", "shield", "resource"
+                }
                 for ingredient in recipe.ingredients
             ):
                 raise ValueError(f"Recipe {recipe.id} has a missing or invalid ingredient.")
@@ -551,7 +701,7 @@ class WorldContent(BaseModel):
             for step in quest.steps:
                 for objective in step.objectives:
                     valid_types = {
-                        "collect": {"item", "weapon", "resource"},
+                        "collect": {"item", "weapon", "shield", "resource"},
                         "kill": {"enemy"},
                         "talk": {"npc"},
                         "visit": set(),
@@ -566,7 +716,9 @@ class WorldContent(BaseModel):
                             f"Quest {quest.id} has a missing or invalid {objective.type} target."
                         )
             if any(
-                entity_types.get(reward.item_id) not in {"item", "weapon", "resource"}
+                entity_types.get(reward.item_id) not in {
+                    "item", "weapon", "shield", "resource"
+                }
                 for reward in quest.reward_items
             ):
                 raise ValueError(f"Quest {quest.id} has a missing or invalid reward item.")

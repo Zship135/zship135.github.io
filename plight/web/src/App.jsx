@@ -1415,6 +1415,11 @@ export default function App() {
                 <span>DEF {snapshot?.character?.stats?.defense ?? "—"}</span>
                 <span>SPD {snapshot?.character?.stats?.speed ?? "—"}</span>
               </div>
+              <TimedActivityPanel
+                busy={commandBusy}
+                character={snapshot?.character}
+                onCancel={() => runCommand("stop")}
+              />
               <div className="location-equipment">
                 <span>LEFT: {equipmentName(snapshot, "left_hand")}</span>
                 <span>RIGHT: {equipmentName(snapshot, "right_hand")}</span>
@@ -1538,6 +1543,14 @@ export default function App() {
               ]} renderItem={(entity) => (
                 <article className="world-entity" key={entity.id}>
                   <strong>{entity.name}</strong><p>{entity.description}</p>
+                  {entity.type === "resource" && (
+                    <ResourceGatherControl
+                      busy={commandBusy}
+                      gathering={Boolean(snapshot?.character?.gathering)}
+                      onGather={() => enterCommand(`gather ${entity.name}`)}
+                      status={entity.gather_status}
+                    />
+                  )}
                   {entity.interaction_effect && (
                     <button
                       onClick={() => enterCommand(
@@ -1587,6 +1600,7 @@ export default function App() {
           onClose={() => setInventoryView(null)}
           onEquip={(itemId, slot) => runCommand(`equip ${itemId.replaceAll("_", " ")} in my ${slot.replaceAll("_", " ")}`)}
           onUnequip={(slot) => runCommand(`unequip from my ${slot.replaceAll("_", " ")}`)}
+          onUse={(itemId) => runCommand(`use ${itemId.replaceAll("_", " ")}`)}
           onSelectView={setInventoryView}
           snapshot={snapshot}
           view={inventoryView}
@@ -1757,12 +1771,116 @@ export default function App() {
   );
 }
 
-function equipmentName(world, slot) {
- const itemId = world?.character?.equipment?.[slot] || "fist";
- return formatEquipmentItem(itemId, world?.character?.inventory_items || []);
+function TimedActivityPanel({ busy, character, onCancel }) {
+  const [now, setNow] = useState(Date.now() / 1000);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  if (!character) return null;
+  const gathering = character.gathering;
+  const activeEffects = (character.active_effects || []).filter(
+    (effect) => Number(effect.expires_at) > now,
+  );
+  const skills = character.skills || [];
+  const remaining = gathering
+    ? Math.max(0, Math.ceil(Number(gathering.completes_at) - now))
+    : 0;
+  const progress = gathering?.duration_seconds
+    ? Math.min(100, Math.max(
+      0,
+      ((now - Number(gathering.started_at)) / Number(gathering.duration_seconds)) * 100,
+    ))
+    : 0;
+
+  return (
+    <div className="timed-activity-panel">
+      {gathering && (
+        <section className="gathering-progress" aria-live="polite">
+          <div>
+            <strong>Gathering {gathering.resource_name}</strong>
+            <span>{remaining > 0 ? `${remaining}s remaining` : "Finishing…"}</span>
+          </div>
+          <progress max="100" value={progress} />
+          <button disabled={busy} onClick={onCancel} type="button">Stop gathering</button>
+        </section>
+      )}
+      {skills.length > 0 && (
+        <details className="character-skills">
+          <summary>Proficiencies</summary>
+          <div className="character-skill-list">
+            {skills.map((skill) => (
+              <div key={skill.id}>
+                <span>{skill.name} · Lv {skill.level}</span>
+                <span>{skill.experience}/{skill.experience_to_next_level} XP</span>
+                <progress max={skill.experience_to_next_level} value={skill.experience} />
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {activeEffects.length > 0 && (
+        <div className="active-effect-list" aria-label="Active effects">
+          {activeEffects.map((effect, index) => {
+            const label = effect.type === "stat_buff"
+              ? `${effect.stat} ${effect.mode === "percent" ? "+" : "+"}${effect.amount}${effect.mode === "percent" ? "%" : ""}`
+              : effect.type === "shield"
+                ? effect.mode === "temporary_health"
+                  ? `Temporary health +${effect.remaining ?? effect.amount}`
+                  : `${effect.mode.replaceAll("_", " ")} shield${effect.mode === "damage_pool" ? ` (${effect.remaining ?? effect.amount} remaining)` : ""}`
+                : effect.type === "luck"
+                  ? "Luck"
+                  : effect.type;
+            const effectRemaining = Math.max(0, Math.ceil(Number(effect.expires_at) - now));
+            return <span key={`${effect.type}-${effect.stat || effect.mode || index}`}>{label} · {effectRemaining}s</span>;
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
-function InventoryDialog({ busy, onClose, onEquip, onUnequip, onSelectView, snapshot, view }) {
+function ResourceGatherControl({ busy, gathering, onGather, status }) {
+  const [now, setNow] = useState(Date.now() / 1000);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  if (!status?.configured) {
+    return <div className="resource-gather-status"><span>Not configured for gathering.</span></div>;
+  }
+  const respawnRemaining = status.respawn_at
+    ? Math.max(0, Math.ceil(Number(status.respawn_at) - now))
+    : status.respawn_seconds_remaining;
+  const available = status.available || (Boolean(status.respawn_at) && respawnRemaining === 0);
+
+  return (
+    <div className="resource-gather-status">
+      {respawnRemaining > 0 ? (
+        <span>Depleted · respawns in {respawnRemaining}s</span>
+      ) : (
+        <span>
+          {status.skill_name || status.skill} level {status.skill_level}
+          {status.tool_stat ? ` · ${status.minimum_tool_power}+ ${status.tool_stat} tool` : ""}
+        </span>
+      )}
+      <button disabled={busy || gathering || !available} onClick={onGather} type="button">Gather</button>
+    </div>
+  );
+}
+
+function equipmentName(world, slot) {
+ const itemId = world?.character?.equipment?.[slot] || (slot === "right_hand" ? "fist" : "");
+ return itemId
+   ? formatEquipmentItem(itemId, world?.character?.inventory_items || [])
+   : "Empty";
+}
+
+function InventoryDialog({ busy, onClose, onEquip, onUnequip, onUse, onSelectView, snapshot, view }) {
   const [selectedSlots, setSelectedSlots] = useState({});
   const items = snapshot?.character?.inventory_items || [];
   const visibleSlots = equipmentSlotsForView(view);
@@ -1806,6 +1924,7 @@ function InventoryDialog({ busy, onClose, onEquip, onUnequip, onSelectView, snap
           {visibleItems.length ? visibleItems.map((item) => (
             <article className="inventory-item" key={item.id}>
               <div><strong>{item.name}</strong><span> × {item.quantity}</span></div>
+              {item.can_use && <button disabled={busy} onClick={() => onUse(item.id)} type="button">Use</button>}
               {itemCanEquip(item) ? (
                 <div className="inventory-equip-controls">
                   <label>

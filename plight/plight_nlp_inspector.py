@@ -42,7 +42,7 @@ ACTION_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "wait": ("wait", "rest"),
     "gather": ("gather", "chop", "mine", "harvest", "collect", "forage"),
-    "cancel_gather": ("cancel gathering", "cancel gather", "stop gathering"),
+    "cancel_gather": ("cancel gathering", "cancel gather", "stop gathering", "stop"),
     "craft": ("craft", "make", "build", "create", "forge"),
     "equip_item": ("equip", "wear", "wield"),
     "unequip_item": ("unequip", "remove", "take off"),

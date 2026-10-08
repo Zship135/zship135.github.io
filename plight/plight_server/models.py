@@ -37,7 +37,7 @@ DEFAULT_EQUIPMENT = {
     "ring_5": "",
     "necklace_1": "",
     "necklace_2": "",
-    "left_hand": "fist",
+    "left_hand": "",
     "right_hand": "fist",
 }
 
@@ -88,6 +88,21 @@ class Character(Base):
         JSON,
         default=lambda: {"target_id": None, "enemy_health": {}},
         server_default=text("'{}'"),
+    )
+    skills: Mapped[dict[str, int]] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
+    skill_experience: Mapped[dict[str, int]] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
+    resource_state: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
+    gathering_state: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    active_effects: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
     )
     experience: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     quest_state: Mapped[dict[str, Any]] = mapped_column(

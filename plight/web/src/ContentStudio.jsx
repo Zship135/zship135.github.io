@@ -12,6 +12,7 @@ const NAVIGATION = [
   ["npcs", "NPCs"],
   ["items", "Items"],
   ["weapons", "Weapons"],
+  ["shields", "Shields"],
   ["recipes", "Recipes"],
   ["quests", "Quests"],
   ["environment", "Furniture / objects"],
@@ -48,8 +49,9 @@ const ENTITY_TABS = {
   npcs: ["npc", { health: 100 }],
   items: ["item", { weight: 1, stack_size: 99, value: 1 }],
   weapons: ["weapon", { damage: 5, speed: 10, stamina_cost: 1, value: 10 }],
+  shields: ["shield", { defense: 3, value: 10 }],
   environment: ["furniture", { durability: 100 }],
-  resources: ["resource", { yield: 1, respawn_minutes: 60 }],
+  resources: ["resource", {}],
 };
 
 const CATEGORY_NAMES = {
@@ -57,10 +59,25 @@ const CATEGORY_NAMES = {
   npc: "NPCs",
   item: "Items",
   weapon: "Weapons",
+  shield: "Shields",
   furniture: "Furniture",
   object: "Objects",
   resource: "Resources",
 };
+
+const SKILL_OPTIONS = [
+  ["felling", "Felling"],
+  ["foraging", "Foraging"],
+  ["gouging", "Gouging"],
+  ["fishing", "Fishing"],
+  ["herbology", "Herbology"],
+  ["alchemy", "Alchemy"],
+  ["fletching", "Fletching"],
+  ["smithing", "Smithing"],
+  ["lapidary", "Lapidary"],
+  ["woodworking", "Woodworking"],
+].map(([id, name]) => ({ id, name }));
+const GATHERING_SKILL_OPTIONS = SKILL_OPTIONS.slice(0, 5);
 
 const NPC_RACE_GROUPS = [
   ["Common peoples", [
@@ -499,7 +516,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
     }
     if (tab === "quests") {
       const giver = content.entities.find((entity) => entity.type === "npc");
-      const item = content.entities.find((entity) => ["item", "weapon", "resource"].includes(entity.type));
+      const item = content.entities.find((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type));
       const enemy = content.entities.find((entity) => entity.type === "enemy");
       const location = content.locations[0];
       if (!giver || (!item && !enemy && !location)) {
@@ -534,10 +551,10 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
       return;
     }
     if (tab === "recipes") {
-      const product = content.entities.find((entity) => ["item", "weapon"].includes(entity.type));
-      const ingredient = content.entities.find((entity) => ["item", "weapon", "resource"].includes(entity.type));
+      const product = content.entities.find((entity) => ["item", "weapon", "shield"].includes(entity.type));
+      const ingredient = content.entities.find((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type));
       if (!product || !ingredient) {
-        setError("Create at least one item or weapon and one ingredient before adding a recipe.");
+        setError("Create at least one item, weapon, or shield and one ingredient before adding a recipe.");
         return;
       }
       const id = makeId("new_recipe", new Set(content.recipes.map((recipe) => recipe.id)));
@@ -567,6 +584,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         description: "",
         attributes: { ...defaultAttributes },
         ...(type === "furniture" || type === "object" ? { interaction_effect: null } : {}),
+        ...(type === "item" ? { item_use: null } : {}),
+        ...(type === "resource" ? { gathering: null } : {}),
         ...(type === "enemy" ? {
           attack_die_sides: 2,
           respawn_chance_percent: 0,
@@ -649,7 +668,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
           recipe.ingredients = recipe.ingredients.filter((entry) => entry.item_id !== selectedId);
         }
         next.recipes = next.recipes.filter((recipe) => recipe.ingredients.length > 0);
-        if (removed?.type === "item" || removed?.type === "weapon" || removed?.type === "resource") {
+        if (removed?.type === "item" || removed?.type === "weapon" || removed?.type === "shield" || removed?.type === "resource") {
           for (const entity of next.entities) {
             entity.stock = entity.stock.filter((entry) => entry.item_id !== selectedId);
           }
@@ -722,8 +741,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   }
 
   const locationsById = new Map((content?.locations || []).map((location) => [location.id, location]));
-  const eligibleItems = (content?.entities || []).filter((entity) => ["item", "weapon", "resource"].includes(entity.type));
-  const eligibleOutputs = (content?.entities || []).filter((entity) => ["item", "weapon"].includes(entity.type));
+  const eligibleItems = (content?.entities || []).filter((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type));
+  const eligibleOutputs = (content?.entities || []).filter((entity) => ["item", "weapon", "shield"].includes(entity.type));
   const eligibleStations = (content?.entities || []).filter((entity) => ["furniture", "object"].includes(entity.type));
 
   return (
@@ -841,7 +860,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       })}
                     />
                   )}
-                  {currentEntity && ["enemies", "npcs", "items", "weapons", "environment", "resources"].includes(tab) && (
+                  {currentEntity && ["enemies", "npcs", "items", "weapons", "shields", "environment", "resources"].includes(tab) && (
                     <EntityEditor
                       entity={currentEntity}
                       locations={content.locations}
@@ -1073,7 +1092,7 @@ function EntityEditor({ entity, entities, locations, lootItems, onChange, onLoca
     object: "object_ids",
     resource: "resource_ids",
   }[entity.type];
-  const stockOptions = entities.filter((item) => ["item", "weapon", "resource"].includes(item.type));
+  const stockOptions = entities.filter((item) => ["item", "weapon", "shield", "resource"].includes(item.type));
   const weaponOptions = entities.filter((item) => item.type === "weapon");
 
   function set(field, value) {
@@ -1239,6 +1258,12 @@ function EntityEditor({ entity, entities, locations, lootItems, onChange, onLoca
           {Object.keys(entity.attributes).length === 0 && <p className="studio-hint">No attributes. Add stats such as health, speed, damage, or value.</p>}
         </div>
       </section>
+      {entity.type === "item" && (
+        <ItemUseEditor itemUse={entity.item_use} locations={locations} onChange={(value) => set("item_use", value)} />
+      )}
+      {entity.type === "resource" && (
+        <ResourceGatheringEditor gathering={entity.gathering} items={lootItems} onChange={(value) => set("gathering", value)} />
+      )}
       {entity.type === "enemy" && (
         <LootTableEditor entries={entity.loot_table || []} items={lootItems} onChange={(value) => set("loot_table", value)} />
       )}
@@ -1273,7 +1298,264 @@ function EntityEditor({ entity, entities, locations, lootItems, onChange, onLoca
   );
 }
 
-function LootTableEditor({ entries, items, onChange }) {
+function ItemUseEditor({ itemUse, locations, onChange }) {
+  const config = itemUse || { effects: [], target_scope: "self", consume_on_use: true };
+  const effects = config.effects || [];
+
+  function updateConfig(field, value) {
+    onChange({ ...config, [field]: value, effects });
+  }
+
+  function updateEffect(index, field, value) {
+    onChange({
+      ...config,
+      effects: effects.map((effect, effectIndex) => (
+        effectIndex === index ? { ...effect, [field]: value } : effect
+      )),
+    });
+  }
+
+  function addEffect(type) {
+    const defaults = {
+      heal: { type, mode: "fixed", amount: 25 },
+      stat_buff: { type, stat: "attack", mode: "flat", amount: 2, duration_seconds: 300 },
+      shield: { type, mode: "damage_pool", amount: 20, duration_seconds: 300 },
+      teleport: { type, destination_area_id: locations[0]?.id || "" },
+      luck: { type, drop_chance_bonus_percent: 10, gathering_yield_bonus_percent: 0, duration_seconds: 300 },
+    };
+    onChange({ ...config, effects: [...effects, defaults[type]] });
+  }
+
+  if (!itemUse) {
+    return (
+      <section className="studio-subsection">
+        <h3>Item effects</h3>
+        <p className="studio-hint">Effects are applied when a player uses this item.</p>
+        <button
+          className="studio-small-button"
+          onClick={() => onChange({ effects: [], target_scope: "self", consume_on_use: true })}
+          type="button"
+        >
+          Enable item effects
+        </button>
+      </section>
+    );
+  }
+
+  return (
+    <section className="studio-subsection">
+      <div className="studio-subsection-heading">
+        <div><h3>Item effects</h3><p>Effects can be combined. Timed effects refresh when reapplied and do not stack their strength.</p></div>
+        <button className="studio-small-button" onClick={() => onChange(null)} type="button">Disable effects</button>
+      </div>
+      <div className="studio-two-fields">
+        <SelectField
+          label="Targets"
+          options={[
+            { id: "self", name: "Only the user" },
+            { id: "party", name: "User and online party members here" },
+          ]}
+          value={config.target_scope}
+          onChange={(value) => updateConfig("target_scope", value)}
+        />
+        <label className="studio-field studio-inline-check">
+          <span>Consume one item per use</span>
+          <input
+            checked={config.consume_on_use !== false}
+            onChange={(event) => updateConfig("consume_on_use", event.target.checked)}
+            type="checkbox"
+          />
+        </label>
+      </div>
+      {effects.map((effect, index) => (
+        <section className="studio-effect-card" key={`${effect.type}-${index}`}>
+          <div className="studio-subsection-heading">
+            <strong>Effect {index + 1}</strong>
+            <button
+              aria-label={`Remove effect ${index + 1}`}
+              className="studio-remove-button"
+              onClick={() => onChange({ ...config, effects: effects.filter((_, effectIndex) => effectIndex !== index) })}
+              type="button"
+            >
+              ×
+            </button>
+          </div>
+          <SelectField
+            label="Effect type"
+            options={[
+              { id: "heal", name: "Restore health" },
+              { id: "stat_buff", name: "Boost a stat" },
+              { id: "shield", name: "Shield" },
+              { id: "teleport", name: "Teleport" },
+              { id: "luck", name: "Luck" },
+            ]}
+            value={effect.type}
+            onChange={(type) => {
+              const defaults = {
+                heal: { type, mode: "fixed", amount: 25 },
+                stat_buff: { type, stat: "attack", mode: "flat", amount: 2, duration_seconds: 300 },
+                shield: { type, mode: "damage_pool", amount: 20, duration_seconds: 300 },
+                teleport: { type, destination_area_id: locations[0]?.id || "" },
+                luck: { type, drop_chance_bonus_percent: 10, gathering_yield_bonus_percent: 0, duration_seconds: 300 },
+              };
+              onChange({
+                ...config,
+                effects: effects.map((current, effectIndex) => effectIndex === index ? defaults[type] : current),
+              });
+            }}
+          />
+          {effect.type === "heal" && (
+            <div className="studio-two-fields">
+              <SelectField
+                label="Healing amount"
+                options={[
+                  { id: "fixed", name: "Fixed health" },
+                  { id: "percent", name: "Percent of max health" },
+                  { id: "full", name: "Restore to full" },
+                ]}
+                value={effect.mode}
+                onChange={(value) => updateEffect(index, "mode", value)}
+              />
+              {effect.mode !== "full" && (
+                <Field
+                  label={effect.mode === "percent" ? "Health restored (%)" : "Health restored"}
+                  min={1}
+                  max={effect.mode === "percent" ? 100 : 10000}
+                  onChange={(value) => updateEffect(index, "amount", value)}
+                  type="number"
+                  value={effect.amount}
+                />
+              )}
+            </div>
+          )}
+          {effect.type === "stat_buff" && (
+            <div className="studio-two-fields">
+              <SelectField
+                label="Stat"
+                options={["attack", "defense", "speed"].map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1) }))}
+                value={effect.stat}
+                onChange={(value) => updateEffect(index, "stat", value)}
+              />
+              <SelectField
+                label="Bonus type"
+                options={[{ id: "flat", name: "Flat points" }, { id: "percent", name: "Percent" }]}
+                value={effect.mode}
+                onChange={(value) => updateEffect(index, "mode", value)}
+              />
+              <Field label="Bonus amount" min={1} max={500} onChange={(value) => updateEffect(index, "amount", value)} type="number" value={effect.amount} />
+              <Field label="Duration (seconds)" min={1} max={86400} onChange={(value) => updateEffect(index, "duration_seconds", value)} type="number" value={effect.duration_seconds} />
+            </div>
+          )}
+          {effect.type === "shield" && (
+            <div className="studio-two-fields">
+              <SelectField
+                label="Shield mode"
+                options={[
+                  { id: "damage_pool", name: "Absorb a total damage pool" },
+                  { id: "damage_reduction", name: "Reduce each hit by a fixed amount" },
+                  { id: "temporary_health", name: "Temporary health buffer" },
+                ]}
+                value={effect.mode}
+                onChange={(value) => updateEffect(index, "mode", value)}
+              />
+              <Field label="Shield amount" min={1} max={100000} onChange={(value) => updateEffect(index, "amount", value)} type="number" value={effect.amount} />
+              <Field label="Duration (seconds)" min={1} max={86400} onChange={(value) => updateEffect(index, "duration_seconds", value)} type="number" value={effect.duration_seconds} />
+            </div>
+          )}
+          {effect.type === "teleport" && (
+            <SelectField
+              label="Destination"
+              options={locations}
+              value={effect.destination_area_id}
+              onChange={(value) => updateEffect(index, "destination_area_id", value)}
+            />
+          )}
+          {effect.type === "luck" && (
+            <div className="studio-two-fields">
+              <Field label="Loot drop chance bonus (%)" min={0} max={1000} onChange={(value) => updateEffect(index, "drop_chance_bonus_percent", value)} type="number" value={effect.drop_chance_bonus_percent} />
+              <Field label="Gathering yield bonus (%)" min={0} max={1000} onChange={(value) => updateEffect(index, "gathering_yield_bonus_percent", value)} type="number" value={effect.gathering_yield_bonus_percent} />
+              <Field label="Duration (seconds)" min={1} max={86400} onChange={(value) => updateEffect(index, "duration_seconds", value)} type="number" value={effect.duration_seconds} />
+            </div>
+          )}
+        </section>
+      ))}
+      <label className="studio-field">
+        <span>Add effect</span>
+        <select onChange={(event) => {
+          if (event.target.value) addEffect(event.target.value);
+          event.target.value = "";
+        }} value="">
+          <option value="">Choose an effect…</option>
+          <option value="heal">Restore health</option>
+          <option value="stat_buff">Boost a stat</option>
+          <option value="shield">Shield</option>
+          <option value="teleport">Teleport</option>
+          <option value="luck">Luck</option>
+        </select>
+      </label>
+    </section>
+  );
+}
+
+function ResourceGatheringEditor({ gathering, items, onChange }) {
+  const config = gathering || {
+    skill: "foraging",
+    skill_level: 1,
+    health: 100,
+    tool_stat: null,
+    minimum_tool_power: 0,
+    respawn_seconds: 3600,
+    loot_table: [],
+  };
+
+  if (!gathering) {
+    return (
+      <section className="studio-subsection">
+        <h3>Gathering</h3>
+        <p className="studio-hint">Enable harvesting configuration to make this resource gatherable.</p>
+        <button className="studio-small-button" onClick={() => onChange(config)} type="button">Enable gathering</button>
+      </section>
+    );
+  }
+
+  function set(field, value) {
+    onChange({ ...config, [field]: value });
+  }
+
+  return (
+    <section className="studio-subsection">
+      <div className="studio-subsection-heading">
+        <div><h3>Gathering settings</h3><p>Harvest time is resource health × 60 ÷ (player skill level + equipped right-hand tool power).</p></div>
+        <button className="studio-small-button" onClick={() => onChange(null)} type="button">Disable gathering</button>
+      </div>
+      <div className="studio-two-fields">
+        <SelectField label="Required skill" options={GATHERING_SKILL_OPTIONS} value={config.skill} onChange={(value) => set("skill", value)} />
+        <Field label="Required skill level" min={1} max={100} onChange={(value) => set("skill_level", value)} type="number" value={config.skill_level} />
+        <Field label="Resource health" min={1} max={1000000} onChange={(value) => set("health", value)} type="number" value={config.health} />
+        <Field label="Respawn time (seconds)" min={1} max={31536000} onChange={(value) => set("respawn_seconds", value)} type="number" value={config.respawn_seconds} />
+        <Field label="Required tool stat (optional)" onChange={(value) => set("tool_stat", value || null)} value={config.tool_stat || ""} placeholder="e.g. gathering_power" />
+        <Field label="Minimum tool power" min={0} max={1000000} onChange={(value) => set("minimum_tool_power", value)} type="number" value={config.minimum_tool_power} />
+      </div>
+      <LootTableEditor
+        entries={config.loot_table || []}
+        items={items}
+        onChange={(value) => set("loot_table", value)}
+        title="Gathering yield table"
+        hint="Choose existing items, gear, or resources harvested from this node."
+        emptyMessage="This resource will not yield anything until a drop is added."
+      />
+    </section>
+  );
+}
+
+function LootTableEditor({
+  entries,
+  items,
+  onChange,
+  title = "Loot table",
+  hint = "Choose an existing item, weapon/gear, or resource; set its drop chance and quantity range.",
+  emptyMessage = "This enemy does not drop loot.",
+}) {
   function updateEntry(index, field, value) {
     onChange(entries.map((entry, entryIndex) => (
       entryIndex === index ? { ...entry, [field]: value } : entry
@@ -1283,7 +1565,7 @@ function LootTableEditor({ entries, items, onChange }) {
   return (
     <section className="studio-subsection">
       <div className="studio-subsection-heading">
-        <div><h3>Loot table</h3><p>Choose an existing item, weapon/gear, or resource; set its drop chance and quantity range.</p></div>
+        <div><h3>{title}</h3><p>{hint}</p></div>
         <button
           className="studio-small-button"
           disabled={items.length === 0}
@@ -1339,7 +1621,7 @@ function LootTableEditor({ entries, items, onChange }) {
           </button>
         </div>
       ))}
-      {entries.length === 0 && <p className="studio-hint">This enemy does not drop loot.</p>}
+      {entries.length === 0 && <p className="studio-hint">{emptyMessage}</p>}
       {items.length === 0 && <p className="studio-hint">Create an item or resource before adding a drop.</p>}
     </section>
   );
@@ -1360,7 +1642,7 @@ function QuestEditor({ quest, npcs, entities, locations, onChange }) {
   function targetsFor(type) {
     if (type === "visit") return locations;
     const validTypes = {
-      collect: ["item", "weapon", "resource"],
+      collect: ["item", "weapon", "shield", "resource"],
       kill: ["enemy"],
       talk: ["npc"],
     }[type] || [];
@@ -1592,9 +1874,9 @@ function QuestEditor({ quest, npcs, entities, locations, onChange }) {
           <div><h3>Item rewards</h3><p>Players receive these when they return to the giver for final turn-in.</p></div>
           <button
             className="studio-small-button"
-            disabled={(quest.reward_items || []).length >= 20 || !entities.some((entity) => ["item", "weapon", "resource"].includes(entity.type))}
+            disabled={(quest.reward_items || []).length >= 20 || !entities.some((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type))}
             onClick={() => onChange((current) => {
-              const rewardItems = entities.filter((entity) => ["item", "weapon", "resource"].includes(entity.type));
+              const rewardItems = entities.filter((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type));
               if (!rewardItems.length) return;
               current.reward_items.push({ item_id: rewardItems[0].id, quantity: 1 });
             })}
@@ -1607,7 +1889,7 @@ function QuestEditor({ quest, npcs, entities, locations, onChange }) {
           <div className="studio-quest-objective" key={`${reward.item_id}-${index}`}>
             <SelectField
               label="Reward item"
-              options={entities.filter((entity) => ["item", "weapon", "resource"].includes(entity.type))}
+              options={entities.filter((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type))}
               value={reward.item_id}
               onChange={(itemId) => onChange((current) => { current.reward_items[index].item_id = itemId; })}
             />
@@ -1755,7 +2037,7 @@ function RecipeEditor({ recipe, outputs, ingredients, stations, onChange }) {
       </section>
       <SelectField label="Crafting station" emptyLabel="No station required" options={stations} value={recipe.station_id} onChange={(value) => set("station_id", value)} />
       <div className="studio-two-fields">
-        <Field label="Required skill" onChange={(value) => set("skill", value)} value={recipe.skill} />
+        <SelectField label="Required skill" emptyLabel="No skill requirement" options={SKILL_OPTIONS} value={recipe.skill} onChange={(value) => set("skill", value || "")} />
         <Field label="Skill level" min={0} onChange={(value) => set("skill_level", value)} type="number" value={recipe.skill_level} />
       </div>
     </div>
