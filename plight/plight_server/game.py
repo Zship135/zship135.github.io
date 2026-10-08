@@ -379,6 +379,18 @@ def _complete_purchase(
     ]
 
 
+def _book_window(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": "book",
+        "item_id": item["id"],
+        "title": item["name"],
+        "pages": [
+            {"title": page.get("title", ""), "text": page["text"]}
+            for page in item["book"]["pages"]
+        ],
+    }
+
+
 def _shop_window(
     character: Any,
     npc: dict[str, Any],
@@ -1260,7 +1272,10 @@ def _snapshot(
                 "can_use": bool(
                     item
                     and item_type == "item"
-                    and (item.get("item_use") or {}).get("effects")
+                    and (
+                        (item.get("item_use") or {}).get("effects")
+                        or item.get("book")
+                    )
                 ),
             }
         )
@@ -1831,6 +1846,20 @@ def resolve_command(
                 if isinstance(item, dict)
                 else str(args.get("subject") or args.get("target") or item or "")
             )
+            books = [
+                entity
+                for entity in entities.values()
+                if entity["type"] == "item"
+                and entity.get("book")
+                and (character.inventory or {}).get(entity["id"], 0) > 0
+            ]
+            book_matches = _matching_items(subject, books) if subject else []
+            if len(book_matches) == 1:
+                messages.append(f"You open {book_matches[0]['name']}.")
+                dialogues.append(
+                    {"occurrence_id": occurrence["occurrence_id"], **_book_window(book_matches[0])}
+                )
+                continue
             item_messages, affected_messages = _use_item(
                 character,
                 subject,

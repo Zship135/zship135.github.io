@@ -1384,6 +1384,9 @@ export default function App() {
                   ))}
                   {(entry.result?.dialogues || []).map((dialogue) => {
                     const busyKey = `${entry.request_id}:${dialogue.occurrence_id}`;
+                    if (dialogue.kind === "book") {
+                      return <BookWindow dialogue={dialogue} key={dialogue.occurrence_id} />;
+                    }
                     if (dialogue.kind === "shop") {
                       return (
                         <section className="dialogue-interaction shop-window" key={dialogue.occurrence_id}>
@@ -1979,6 +1982,27 @@ function equipmentName(world, slot) {
  return itemId
    ? formatEquipmentItem(itemId, world?.character?.inventory_items || [])
    : "Empty";
+}
+
+function BookWindow({ dialogue }) {
+  const [page, setPage] = useState(0);
+  const pages = dialogue.pages || [];
+  const current = pages[page];
+  return (
+    <section className="dialogue-interaction book-window">
+      <header><span>{dialogue.title} / Page {page + 1} of {pages.length}</span></header>
+      <div className="dialogue-history book-page">
+        {current?.title && <h3>{current.title}</h3>}
+        {(current?.text || "").split(/\n{2,}/).map((paragraph, index) => (
+          <p className="book-text" key={index}>{paragraph}</p>
+        ))}
+      </div>
+      <div className="dialogue-options book-controls">
+        <button className="dialogue-choice-button" disabled={page === 0} onClick={() => setPage(page - 1)} type="button">← Previous page</button>
+        <button className="dialogue-choice-button" disabled={page >= pages.length - 1} onClick={() => setPage(page + 1)} type="button">Next page →</button>
+      </div>
+    </section>
+  );
 }
 
 function WorldMapDialog({ onClose, questPath, worldMap }) {

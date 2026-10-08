@@ -1365,6 +1365,9 @@ function EntityEditor({ entity, entities, currencies = [], enchantments = [], lo
         </section>
       )}
       {entity.type === "item" && (
+        <BookEditor book={entity.book} onChange={(value) => set("book", value)} />
+      )}
+      {entity.type === "item" && (
         <ItemUseEditor itemUse={entity.item_use} locations={locations} onChange={(value) => set("item_use", value)} />
       )}
       {entity.type === "resource" && (
@@ -1423,6 +1426,44 @@ function EntityEditor({ entity, entities, currencies = [], enchantments = [], lo
         </>
       )}
     </div>
+  );
+}
+
+function BookEditor({ book, onChange }) {
+  const pages = book?.pages || [];
+  function update(index, field, value) {
+    onChange({ pages: pages.map((page, i) => (i === index ? { ...page, [field]: value } : page)) });
+  }
+  if (!book) {
+    return (
+      <section className="studio-subsection">
+        <h3>Book</h3>
+        <p className="studio-hint">Make this item a readable book. Using it opens a page-flipping reader.</p>
+        <button className="studio-small-button" onClick={() => onChange({ pages: [{ title: "", text: "" }] })} type="button">Make this a book</button>
+      </section>
+    );
+  }
+  return (
+    <section className="studio-subsection">
+      <div className="studio-subsection-heading">
+        <div><h3>Book pages</h3><p>Leave a blank line between paragraphs. Players flip through pages one at a time.</p></div>
+        <div>
+          <button className="studio-small-button" disabled={pages.length >= 200} onClick={() => onChange({ pages: [...pages, { title: "", text: "" }] })} type="button">Add page</button>
+          <button className="studio-small-button" onClick={() => onChange(null)} type="button">Remove book</button>
+        </div>
+      </div>
+      {pages.map((page, index) => (
+        <section className="studio-effect-card" key={index}>
+          <div className="studio-subsection-heading">
+            <strong>Page {index + 1}</strong>
+            <button aria-label={`Remove page ${index + 1}`} className="studio-remove-button" disabled={pages.length <= 1} onClick={() => onChange({ pages: pages.filter((_, i) => i !== index) })} type="button">×</button>
+          </div>
+          <Field label="Page title (optional)" onChange={(value) => update(index, "title", value)} value={page.title || ""} />
+          <TextAreaField label="Text" onChange={(value) => update(index, "text", value)} rows={8} value={page.text} />
+        </section>
+      ))}
+      <p className="studio-hint">Every page needs text before you can save.</p>
+    </section>
   );
 }
 

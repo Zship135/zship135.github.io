@@ -491,3 +491,8 @@ a { color: inherit; text-decoration: none; }
 .map-node.current circle { fill: #ffd65c; stroke: #fff; stroke-width: 0.6; }
 .map-node text { fill: #d8dde6; font-size: 2.6px; text-anchor: middle; }
 .map-node.unvisited text { fill: #7d8696; }
+
+.book-page { white-space: pre-wrap; font-family: Georgia, serif; line-height: 1.6; }
+.book-page h3 { margin: 0 0 0.5rem; }
+.book-text { margin: 0 0 0.75rem; }
+.book-controls { display: flex; gap: 0.5rem; }

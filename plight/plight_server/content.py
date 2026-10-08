@@ -459,6 +459,15 @@ class ResourceGathering(ContentModel):
         return self
 
 
+class BookPage(ContentModel):
+    title: str = Field(default="", max_length=100)
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class BookConfig(ContentModel):
+    pages: list[BookPage] = Field(min_length=1, max_length=200)
+
+
 class ContentEntity(ContentModel):
     id: str = Field(pattern=_SLUG.pattern)
     type: Literal[
@@ -485,6 +494,7 @@ class ContentEntity(ContentModel):
     currency_drops: list[CurrencyDrop] = Field(default_factory=list, max_length=20)
     enchantment_ids: list[str] = Field(default_factory=list, max_length=10)
     is_map: bool = False
+    book: BookConfig | None = None
 
     @field_validator("ambience")
     @classmethod
@@ -706,6 +716,8 @@ class WorldContent(BaseModel):
                 raise ValueError(
                     f"Interaction effects only apply to furniture and objects ({entity.id})."
                 )
+            if entity.type != "item" and entity.book is not None:
+                raise ValueError(f"Books can only be regular items ({entity.id}).")
             if entity.type != "item" and entity.item_use is not None:
                 raise ValueError(f"Item effects only apply to regular items ({entity.id}).")
             if entity.type not in {"item", "weapon", "shield"} and (

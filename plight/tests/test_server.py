@@ -3712,3 +3712,27 @@ def test_map_visibility_and_quest_path(
     character.inventory = {}
     plain = game._snapshot(character, content)
     assert plain["world_map"] is None and plain["quest_path"] is None
+
+def test_book_item_opens_reader_window(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = content_store.WorldContent.model_validate(
+        {
+            "locations": [{"id": "a", "name": "A", "description": "d", "position": {"x": 0, "y": 0},
+                           "starting_species": ["human", "goblin"]}],
+            "entities": [{"id": "lore", "type": "item", "name": "Tome of Lore", "description": "x",
+                          "book": {"pages": [{"title": "One", "text": "Once."}, {"text": "Twice."}]}}],
+        }
+    )
+    path = tmp_path / "world_content.json"
+    path.write_text(world.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", path)
+    character = _enchant_character(inventory={"lore": 1})
+    result = game.resolve_command("use tome of lore", character)
+    window = result["dialogues"][0]
+    assert window["kind"] == "book" and len(window["pages"]) == 2
+    assert game.snapshot(character)["character"]["inventory_items"][0]["can_use"] is True
+    assert character.inventory == {"lore": 1}
+    with pytest.raises(ValueError):
+        content_store.WorldContent.model_validate(
+            {"locations": [], "entities": [{"id": "s", "type": "weapon", "name": "S", "description": "x",
+                                            "book": {"pages": [{"text": "x"}]}}]}
+        )
