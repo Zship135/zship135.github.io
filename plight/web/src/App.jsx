@@ -1377,6 +1377,39 @@ export default function App() {
                   ))}
                   {(entry.result?.dialogues || []).map((dialogue) => {
                     const busyKey = `${entry.request_id}:${dialogue.occurrence_id}`;
+                    if (dialogue.kind === "shop") {
+                      return (
+                        <section className="dialogue-interaction shop-window" key={dialogue.occurrence_id}>
+                          <header><span>{dialogue.npc_name} / Shop</span></header>
+                          <div className="dialogue-history">
+                            <p className="npc-dialogue-line"><strong>{dialogue.npc_name}</strong> {dialogue.text}</p>
+                            {dialogue.notice && <p className="player-dialogue-line"><strong>You</strong> {dialogue.notice}</p>}
+                          </div>
+                          <div className="shop-wallet">
+                            {(dialogue.wallet || []).map((currency) => (
+                              <span className="wallet-balance" key={currency.currency_id}>
+                                {currency.symbol ? `${currency.symbol}${currency.amount.toLocaleString()}` : `${currency.amount.toLocaleString()} ${currency.name}`}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="dialogue-options">
+                            {(dialogue.offers || []).map((offer) => (
+                              <button
+                                className="dialogue-choice-button shop-offer-button"
+                                disabled={offer.remaining <= 0 || dialogueBusyKey === busyKey}
+                                key={offer.item_id}
+                                onClick={() => buyFromShop(entry, dialogue, offer)}
+                                type="button"
+                              >
+                                <span>{offer.item_name}</span>
+                                <span>{offer.price_text} · {offer.remaining > 0 ? `${offer.remaining} left` : `sold out${offer.restock_seconds_remaining ? `, restocks in ${offer.restock_seconds_remaining}s` : ""}`}</span>
+                              </button>
+                            ))}
+                            {(dialogue.offers || []).length === 0 && <p className="dialogue-finished">Nothing is for sale right now. Stock entries need a currency set in Content Studio.</p>}
+                          </div>
+                        </section>
+                      );
+                    }
                     return (
                       <section className="dialogue-interaction" key={dialogue.occurrence_id}>
                         <header><span>{dialogue.npc_name} / {dialogue.title}</span></header>
