@@ -32,7 +32,7 @@ ACTION_ALIASES: dict[str, tuple[str, ...]] = {
     "heavy_attack": (
         "heavy attack", "powerful attack", "strong attack", "attack with force",
         "attack powerfully", "attack strongly", "attack forcefully",
-        "smash", "crush", "demolish", "shatter",
+        "bash", "slam", "obliterate", "smash", "crush", "demolish", "shatter",
     ),
     "defend": ("defend", "block", "parry", "dodge", "guard", "protect"),
     "wait": ("wait", "rest"),
