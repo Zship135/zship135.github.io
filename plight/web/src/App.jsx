@@ -1135,17 +1135,17 @@ export default function App() {
     }
   }
 
-  async function buyFromShop(entry, dialogue, offer) {
+  async function buyFromShop(entry, dialogue, offer, mode = "buy") {
     const busyKey = `${entry.request_id}:${dialogue.occurrence_id}`;
     setDialogueBusyKey(busyKey);
     setNotice("");
     try {
-      const result = await api("/api/v1/shop/buy", {
+      const result = await api(`/api/v1/shop/${mode}`, {
         token,
         method: "POST",
         body: JSON.stringify({ npc_id: dialogue.npc_id, item_id: offer.item_id, quantity: 1 }),
       });
-      queueActionSounds(["shop_buy"], snapshot?.action_sounds);
+      queueActionSounds([mode === "sell" ? "shop_sell" : "shop_buy"], snapshot?.action_sounds);
       setSnapshot(result.snapshot);
       setActivity((current) => current.map((currentEntry) => {
         if (currentEntry.request_id !== entry.request_id) return currentEntry;
@@ -1405,8 +1405,27 @@ export default function App() {
                                 <span>{offer.price_text} · {offer.remaining > 0 ? `${offer.remaining} left` : `sold out${offer.restock_seconds_remaining ? `, restocks in ${offer.restock_seconds_remaining}s` : ""}`}</span>
                               </button>
                             ))}
-                            {(dialogue.offers || []).length === 0 && <p className="dialogue-finished">Nothing is for sale right now. Stock entries need a currency set in Content Studio.</p>}
+                            {(dialogue.offers || []).length === 0 && (dialogue.sell_offers || []).length === 0 && <p className="dialogue-finished">Nothing is for sale right now. Stock entries need a currency set in Content Studio.</p>}
                           </div>
+                          {(dialogue.sell_offers || []).length > 0 && (
+                            <>
+                              <p className="shop-section-label">Sell to {dialogue.npc_name}</p>
+                              <div className="dialogue-options">
+                                {dialogue.sell_offers.map((offer) => (
+                                  <button
+                                    className="dialogue-choice-button shop-offer-button"
+                                    disabled={offer.remaining <= 0 || dialogueBusyKey === busyKey}
+                                    key={`sell-${offer.item_id}`}
+                                    onClick={() => buyFromShop(entry, dialogue, offer, "sell")}
+                                    type="button"
+                                  >
+                                    <span>{offer.item_name} (you have {offer.owned})</span>
+                                    <span>{offer.price_text} each · {offer.remaining > 0 ? `buys ${offer.remaining} more` : `not buying more${offer.restock_seconds_remaining ? `, resets in ${offer.restock_seconds_remaining}s` : ""}`}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </>
+                          )}
                         </section>
                       );
                     }

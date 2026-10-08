@@ -476,3 +476,4 @@ a { color: inherit; text-decoration: none; }
 .shop-offer small { opacity: .75; }
 .shop-offer-button { display: flex; justify-content: space-between; gap: 12px; text-align: left; }
 .shop-wallet { display: flex; gap: 12px; padding: 4px 0; }
+.shop-section-label { margin: 10px 0 4px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .7; }

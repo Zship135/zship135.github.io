@@ -235,6 +235,9 @@ class StockEntry(ContentModel):
     restock_seconds: int = Field(default=300, ge=1, le=604_800)
 
 
+class BuyEntry(StockEntry):
+    """An item a vendor purchases from players; quantity is the per-player capacity."""
+
 class DialogueChoice(ContentModel):
     id: str = Field(pattern=_SLUG.pattern)
     text: str = Field(min_length=1, max_length=200)
@@ -407,6 +410,7 @@ class ContentEntity(ContentModel):
     dialogue: NPCDialogue | None = None
     ambience: list[str] = Field(default_factory=list, max_length=100)
     stock: list[StockEntry] = Field(default_factory=list, max_length=100)
+    buy_list: list[BuyEntry] = Field(default_factory=list, max_length=100)
     weapon_ids: list[str] = Field(default_factory=list, max_length=50)
     loot_table: list[LootDrop] = Field(default_factory=list, max_length=100)
     currency_drops: list[CurrencyDrop] = Field(default_factory=list, max_length=20)
@@ -703,8 +707,16 @@ class WorldContent(BaseModel):
                     raise ValueError(f"Shield {entity.id} must have a non-negative integer defense value.")
             if entity.type not in {"enemy", "npc"} and entity.ambience:
                 raise ValueError(f"Only NPCs and enemies can have ambience lines ({entity.id}).")
-            if entity.type != "npc" and (entity.stock or entity.weapon_ids):
-                raise ValueError(f"Only NPCs can have shop stock or equipped weapons ({entity.id}).")
+            if entity.type != "npc" and (entity.stock or entity.buy_list or entity.weapon_ids):
+                raise ValueError(f"Only NPCs can have shop stock, buy lists or equipped weapons ({entity.id}).")
+            if any(
+                entity_types.get(entry.item_id) not in {"item", "weapon", "shield", "resource"}
+                or (entry.currency_id is not None and entry.currency_id not in currencies)
+                for entry in entity.buy_list
+            ):
+                raise ValueError(f"NPC {entity.id} has a buy list with a missing item or currency.")
+            if len({entry.item_id for entry in entity.buy_list}) != len(entity.buy_list):
+                raise ValueError(f"NPC {entity.id} lists the same item twice in its buy list.")
             if any(entity_types.get(weapon_id) != "weapon" for weapon_id in entity.weapon_ids):
                 raise ValueError(f"NPC {entity.id} references a missing or non-weapon entity.")
             if any(

@@ -40,6 +40,7 @@ from plight_server.audio_assets import (
 )
 from plight_server.game import (
     _buy_from_npc,
+    _sell_to_npc,
     _shop_window,
     _add_currency,
     _currency_text,
@@ -2572,6 +2573,43 @@ def shop_buy(
         if item is None:
             raise HTTPException(status_code=404, detail="That item is not for sale.")
         messages = _buy_from_npc(character, npc, item, body.quantity, content, areas, entities)
+        db.commit()
+        return {
+            "messages": messages,
+            "shop": _shop_window(character, npc, entities, content),
+            "snapshot": _snapshot_for_character(character, db),
+        }
+
+
+@app.post("/api/v1/shop/sell")
+def shop_sell(
+    body: ShopBuyRequest,
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "shop_sell", 60, 60)
+    character = _require_character(account)
+    with _character_lock(account.id):
+        db.refresh(character)
+        content = world_content_dict()
+        entities = {entity["id"]: entity for entity in content["entities"]}
+        areas = {location["id"]: location for location in content["locations"]}
+        npc = entities.get(body.npc_id)
+        area = areas.get(character.area_id)
+        item = entities.get(body.item_id)
+        if (
+            npc is None
+            or npc["type"] != "npc"
+            or area is None
+            or body.npc_id not in area["npc_ids"]
+            or character.species not in npc["present_for"]
+            or not npc.get("buy_list")
+        ):
+            raise HTTPException(status_code=404, detail="That vendor is not buying here.")
+        if item is None:
+            raise HTTPException(status_code=404, detail="That item cannot be sold.")
+        messages = _sell_to_npc(character, npc, item, body.quantity, content)
         db.commit()
         return {
             "messages": messages,

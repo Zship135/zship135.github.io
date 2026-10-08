@@ -616,7 +616,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         } : {}),
         ambience: [],
         stock: [],
-        weapon_ids: [],
+        buy_list: [],
         loot_table: [],
       });
     });
@@ -632,6 +632,9 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         for (const entity of next.entities) {
           if (entity.currency_drops) entity.currency_drops = entity.currency_drops.filter((drop) => drop.currency_id !== selectedId);
           for (const entry of entity.stock || []) {
+            if (entry.currency_id === selectedId) entry.currency_id = null;
+          }
+          for (const entry of entity.buy_list || []) {
             if (entry.currency_id === selectedId) entry.currency_id = null;
           }
         }
@@ -687,6 +690,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         }
         for (const entity of next.entities) {
           entity.stock = entity.stock.filter((entry) => entry.item_id !== selectedId);
+          if (entity.buy_list) entity.buy_list = entity.buy_list.filter((entry) => entry.item_id !== selectedId);
           entity.weapon_ids = entity.weapon_ids.filter((weaponId) => weaponId !== selectedId);
         }
         next.recipes = next.recipes.filter((recipe) =>
@@ -1335,6 +1339,23 @@ function EntityEditor({ entity, entities, currencies = [], locations, lootItems,
               </div>
             ))}
             {entity.stock.length === 0 && <p className="studio-hint">This NPC is not selling anything.</p>}
+          </section>
+          <section className="studio-subsection">
+            <div className="studio-subsection-heading"><div><h3>Buys from players</h3><p>Items this NPC purchases. Max per player is how many each player can sell before the reset time refreshes it.</p></div><button className="studio-small-button" disabled={stockOptions.length === 0} onClick={() => onChange((current) => {
+              current.buy_list ||= [];
+              current.buy_list.push({ item_id: stockOptions[0].id, quantity: 10, price: 1, currency_id: currencies[0]?.id || null, restock_seconds: 300 });
+            })} type="button">Add buy entry</button></div>
+            {(entity.buy_list || []).map((entry, index) => (
+              <div className="studio-stock-row" key={`buy-${entry.item_id}-${index}`}>
+                <SelectField label="Item" options={stockOptions} value={entry.item_id} onChange={(value) => onChange((current) => { current.buy_list[index].item_id = value; })} />
+                <Field label="Max per player" min={0} onChange={(value) => onChange((current) => { current.buy_list[index].quantity = value; })} type="number" value={entry.quantity} />
+                <Field label="Pays each" min={0} onChange={(value) => onChange((current) => { current.buy_list[index].price = value; })} type="number" value={entry.price} />
+                <SelectField emptyLabel="Choose currency" label="Currency" options={currencies} value={entry.currency_id} onChange={(value) => onChange((current) => { current.buy_list[index].currency_id = value; })} />
+                <Field label="Reset (seconds)" min={1} onChange={(value) => onChange((current) => { current.buy_list[index].restock_seconds = value; })} type="number" value={entry.restock_seconds ?? 300} />
+                <button aria-label="Remove buy entry" className="studio-remove-button" onClick={() => onChange((current) => { current.buy_list.splice(index, 1); })} type="button">×</button>
+              </div>
+            ))}
+            {(entity.buy_list || []).length === 0 && <p className="studio-hint">This NPC does not buy anything from players.</p>}
           </section>
         </>
       )}

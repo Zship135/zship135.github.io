@@ -393,8 +393,176 @@ def _shop_window(
         "offers": _shop_view(
             character, npc, entities, currencies, time.time() if now is None else now
         ),
+        "sell_offers": _sell_view(
+            character, npc, entities, currencies, time.time() if now is None else now
+        ),
         "wallet": _wallet_view(character, content),
     }
+
+
+def _sell_key(npc_id: str) -> str:
+    return f"{npc_id}#buy"
+
+
+def _equipped_counts(character: Any) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item_id in (getattr(character, "equipment", None) or {}).values():
+        if item_id:
+            counts[item_id] = counts.get(item_id, 0) + 1
+    return counts
+
+
+def _sellable_owned(character: Any, item_id: str) -> int:
+    owned = int((character.inventory or {}).get(item_id, 0))
+    return max(0, owned - _equipped_counts(character).get(item_id, 0))
+
+
+def _sell_view(
+    character: Any,
+    npc: dict[str, Any],
+    entities: dict[str, dict[str, Any]],
+    currencies: dict[str, dict[str, Any]],
+    now: float,
+) -> list[dict[str, Any]]:
+    offers = []
+    for entry in npc.get("buy_list", []):
+        item = entities.get(entry["item_id"])
+        owned = _sellable_owned(character, entry["item_id"])
+        if item is None or entry.get("currency_id") not in currencies or owned <= 0:
+            continue
+        remaining, restock_in = _stock_state(character, _sell_key(npc["id"]), entry, now)
+        offers.append(
+            {
+                "item_id": entry["item_id"],
+                "item_name": item["name"],
+                "currency_id": entry["currency_id"],
+                "price": entry["price"],
+                "price_text": _currency_text(currencies, entry["currency_id"], entry["price"]),
+                "owned": owned,
+                "remaining": remaining,
+                "capacity": entry["quantity"],
+                "restock_seconds_remaining": restock_in,
+            }
+        )
+    return offers
+
+
+def _sell_to_npc(
+    character: Any,
+    npc: dict[str, Any],
+    item: dict[str, Any],
+    quantity: int,
+    content: dict[str, Any],
+    now: float | None = None,
+) -> list[str]:
+    current_time = time.time() if now is None else now
+    currencies = {currency["id"]: currency for currency in content.get("currencies", [])}
+    entry = next(
+        (candidate for candidate in npc.get("buy_list", []) if candidate["item_id"] == item["id"]),
+        None,
+    )
+    if entry is None:
+        return [f"{npc['name']} is not buying {item['name']}."]
+    currency_id = entry.get("currency_id")
+    if currency_id not in currencies:
+        return [f"{npc['name']} has not set a price for {item['name']}."]
+    quantity = max(1, quantity)
+    owned = _sellable_owned(character, item["id"])
+    if owned < quantity:
+        equipped = _equipped_counts(character).get(item["id"], 0)
+        if owned == 0 and equipped:
+            return [f"Unequip {item['name']} before selling it."]
+        return [f"You only have {owned} {item['name']} to sell." if owned else f"You have no {item['name']} to sell."]
+    key = _sell_key(npc["id"])
+    remaining, restock_in = _stock_state(character, key, entry, current_time)
+    if remaining == 0:
+        return [
+            f"{npc['name']} will not buy any more {item['name']} from you"
+            + (f" for {_duration_text(restock_in)}." if restock_in else ".")
+        ]
+    if quantity > remaining:
+        return [f"{npc['name']} will only buy {remaining} more {item['name']} from you right now."]
+    total = entry["price"] * quantity
+    inventory = dict(character.inventory or {})
+    left = inventory.get(item["id"], 0) - quantity
+    if left > 0:
+        inventory[item["id"]] = left
+    else:
+        inventory.pop(item["id"], None)
+    character.inventory = inventory
+    _add_currency(character, currency_id, total)
+    shop_state = {k: dict(v) for k, v in (getattr(character, "shop_state", None) or {}).items()}
+    npc_state = dict(shop_state.get(key) or {})
+    previous = npc_state.get(item["id"]) or {}
+    still_restocking = (
+        isinstance(previous.get("restock_at"), (int, float))
+        and previous["restock_at"] > current_time
+    )
+    npc_state[item["id"]] = {
+        "purchased": (int(previous.get("purchased", 0)) if still_restocking else 0) + quantity,
+        "restock_at": previous["restock_at"]
+        if still_restocking
+        else current_time + entry["restock_seconds"],
+    }
+    shop_state[key] = npc_state
+    character.shop_state = shop_state
+    return [
+        f"You sell {_quantity_name(quantity, item['name'])} to {npc['name']} "
+        f"for {_currency_text(currencies, currency_id, total)}."
+    ]
+
+
+def _sell(
+    character: Any,
+    arguments: dict[str, Any],
+    content: dict[str, Any],
+    areas: dict[str, dict[str, Any]],
+    entities: dict[str, dict[str, Any]],
+) -> list[str]:
+    area = areas.get(character.area_id)
+    if area is None:
+        return ["You are not in a valid location."]
+    quantity = 1
+    item_value = arguments.get("item")
+    if isinstance(item_value, dict):
+        quantity = int(item_value.get("quantity") or 1)
+    if arguments.get("quantity"):
+        quantity = int(arguments["quantity"])
+    item_text = _command_subject(arguments, "item", "subject", "target")
+    shop_text = str(arguments.get("shop") or "")
+    parts = re.split(r"\s+to\s+", item_text, maxsplit=1, flags=re.I)
+    item_text = parts[0]
+    if len(parts) == 2 and not shop_text:
+        shop_text = parts[1]
+    shop_text = re.sub(r"^(?:the|a|an)\s+", "", shop_text.strip(), flags=re.I)
+    quantity = max(1, quantity)
+    buyers = [
+        entities[npc_id]
+        for npc_id in area["npc_ids"]
+        if character.species in entities[npc_id]["present_for"]
+        and entities[npc_id].get("buy_list")
+    ]
+    if shop_text:
+        buyers = _matching_entities(shop_text, buyers)
+    if not buyers:
+        return [f"There is no buyer called {shop_text} here." if shop_text else "Nobody here is buying anything."]
+    owned_items = [
+        entities[item_id] for item_id in (character.inventory or {}) if item_id in entities
+    ]
+    matches = _matching_entities(item_text, owned_items)
+    exact = [i for i in matches if _normalize_npc_name(i["name"]) == _normalize_npc_name(item_text)]
+    matches = exact or matches
+    if not matches:
+        return [f"You have no {item_text} to sell."]
+    if len(matches) > 1:
+        return [f"Which item do you mean: {', '.join(i['name'] for i in matches)}?"]
+    item = matches[0]
+    candidates = [npc for npc in buyers if any(e["item_id"] == item["id"] for e in npc["buy_list"])]
+    if not candidates:
+        return [f"Nobody here is buying {item['name']}."]
+    if len(candidates) > 1:
+        return [f"Who do you want to sell {item['name']} to: {', '.join(npc['name'] for npc in candidates)}?"]
+    return _sell_to_npc(character, candidates[0], item, quantity, content)
 
 
 def _open_shop(
@@ -411,9 +579,9 @@ def _open_shop(
         entities[npc_id]
         for npc_id in area["npc_ids"]
         if character.species in entities[npc_id]["present_for"]
-        and entities[npc_id].get("stock")
+        and (entities[npc_id].get("stock") or entities[npc_id].get("buy_list"))
     ]
-    shop_text = re.sub(r"^(?:from\s+)?(?:the\s+|a\s+|an\s+)?", "", shop_text.strip(), flags=re.I)
+    shop_text = re.sub(r"^(?:from\s+|to\s+)?(?:the\s+|a\s+|an\s+)?", "", shop_text.strip(), flags=re.I)
     if shop_text:
         shopkeepers = _matching_entities(shop_text, shopkeepers)
         if not shopkeepers:
@@ -1310,7 +1478,18 @@ def resolve_command(
             else:
                 messages.extend(_buy(character, args, content, areas, entities))
         elif action_id == "shop_sell":
-            messages.append("Shopkeepers here do not buy items back.")
+            item_text = _command_subject(args, "item", "subject", "target").strip()
+            if not item_text:
+                shop_messages, shop = _open_shop(
+                    character, str(args.get("shop") or occurrence.get("raw_arguments") or ""),
+                    content, areas, entities,
+                )
+                messages.extend(shop_messages)
+                if shop is not None:
+                    messages.append(f"You browse {shop['npc_name']}'s shop.")
+                    dialogues.append({"occurrence_id": occurrence["occurrence_id"], **shop})
+            else:
+                messages.extend(_sell(character, args, content, areas, entities))
         elif action_id == "use_item":
             item = args.get("item")
             subject = (

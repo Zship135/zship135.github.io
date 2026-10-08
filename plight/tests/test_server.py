@@ -3526,3 +3526,32 @@ def test_buy_from_npc_opens_shop_window_and_buys_via_helper(
     assert game._shop_window(character, entities["trader"], entities, content)["offers"][0]["remaining"] == 1
 
 
+
+
+def test_players_sell_to_vendor_with_per_player_capacity(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = _currency_world(tmp_path, monkeypatch)
+    trader = next(e for e in content["entities"] if e["id"] == "trader")
+    trader["buy_list"] = [
+        {"item_id": "tonic", "price": 4, "quantity": 2, "currency_id": "gold", "restock_seconds": 60}
+    ]
+    content = content_store.WorldContent.model_validate(content).model_dump(mode="json")
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    areas = {location["id"]: location for location in content["locations"]}
+    character = SimpleNamespace(
+        area_id="market", species="human", inventory={"tonic": 5}, equipment={},
+        wallet={}, shop_state={}, quest_state={},
+    )
+    assert game._sell(character, {"item": {"name": "tonic", "quantity": 1}}, content, areas, entities)[0].startswith("You sell 1 Tonic")
+    assert character.wallet == {"gold": 4} and character.inventory == {"tonic": 4}
+    assert "only buy 1 more" in game._sell(character, {"item": {"name": "tonic", "quantity": 2}}, content, areas, entities)[0]
+    game._sell_to_npc(character, trader, entities["tonic"], 1, content, now=time() + 10)
+    assert "will not buy any more" in game._sell_to_npc(character, trader, entities["tonic"], 1, content, now=time() + 20)[0]
+    assert game._sell_to_npc(character, trader, entities["tonic"], 1, content, now=time() + 500)[0].startswith("You sell")
+    window = game._shop_window(character, trader, entities, content)
+    assert window["sell_offers"][0]["owned"] == 2
+    with pytest.raises(ValueError):
+        bad = dict(trader, buy_list=[{"item_id": "nope", "price": 1, "quantity": 1, "currency_id": "gold"}])
+        content_store.WorldContent.model_validate({**content, "entities": [bad if e["id"] == "trader" else e for e in content["entities"]]})
