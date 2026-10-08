@@ -1039,7 +1039,7 @@ export default function App() {
   }
 
   async function rollD20() {
-    if (commandBusy || rollBusy) return;
+    if (commandBusy || rollBusy || rollAnimation) return;
     setRollBusy(true);
     setRollAnimation({ rolling: true, rolls: [] });
     playRollSound();
@@ -1390,7 +1390,7 @@ export default function App() {
             <div className="command-entry">
               <span aria-hidden="true" className="prompt-mark">›</span>
               <input autoComplete="off" disabled={Boolean(pendingRollRequestId) || commandBusy} id="command-input" maxLength={500} onChange={(event) => setCommand(event.target.value)} placeholder="Type 'help' if help is needed" value={command} />
-              <button aria-label="Roll D20" className="roll-button" disabled={commandBusy || rollBusy} onClick={rollD20} type="button">{rollBusy ? "…" : "Roll"}</button>
+              <button aria-label="Roll D20" className="roll-button" disabled={commandBusy || rollBusy || Boolean(rollAnimation)} onClick={rollD20} type="button">{rollBusy ? "…" : "Roll"}</button>
               <button aria-label="Submit action" className="send-button" disabled={!command.trim() || commandBusy || Boolean(pendingRollRequestId)} type="submit">{commandBusy ? "…" : "↗"}</button>
             </div>
           </form>
