@@ -2091,69 +2091,146 @@ function WorldMapDialog({ onClose, questPath, worldMap }) {
   );
 }
 
+const BODY_SLOTS = [
+  ["helm", "top: 2%; left: 50%"],
+  ["tunic", "top: 28%; left: 50%"],
+  ["sleeves", "top: 28%; left: 11%"],
+  ["gloves", "top: 28%; left: 89%"],
+  ["right_hand", "top: 52%; left: 9%"],
+  ["left_hand", "top: 52%; left: 91%"],
+  ["pants", "top: 56%; left: 50%"],
+  ["boots", "top: 86%; left: 50%"],
+];
+const RING_SLOTS = ["ring_1", "ring_2", "ring_3", "ring_4", "ring_5"];
+const NECKLACE_SLOTS = ["necklace_1", "necklace_2"];
+
+function ItemStats({ item }) {
+  const stats = Object.entries(item.stats || {});
+  return (
+    <>
+      {item.description ? <p className="item-description">{item.description}</p> : null}
+      {stats.length ? <p className="item-stats">{stats.map(([key, value]) => `${key} ${value > 0 ? "+" : ""}${value}`).join(" · ")}</p> : null}
+    </>
+  );
+}
+
 function InventoryDialog({ busy, onClose, onEquip, onUnequip, onUse, onSelectView, snapshot, view }) {
   const [selectedSlots, setSelectedSlots] = useState({});
+  const [activeSlot, setActiveSlot] = useState(null);
   const items = snapshot?.character?.inventory_items || [];
-  const visibleSlots = equipmentSlotsForView(view);
-  const visibleItems = items.filter((item) => {
-    if (view === "armor") return item.equipable_slots.some((slot) => !EQUIPMENT_SLOT_GROUPS.hands.includes(slot));
-    if (view === "hands" || view === "weapons") return item.equipable_slots.some((slot) => EQUIPMENT_SLOT_GROUPS.hands.includes(slot));
-    return true;
-  });
-  const views = [["all", "All"], ["armor", "Armor"], ["hands", "Hands"]];
+  const equipment = snapshot?.character?.equipment || {};
+  const tab = view === "all" ? "inventory" : "equipment";
 
-  useEffect(() => setSelectedSlots({}), [view]);
+  const slotButton = (slot, style) => {
+    const itemId = equipment[slot] || "";
+    return (
+      <button
+        aria-pressed={activeSlot === slot}
+        className={`body-slot${itemId ? " filled" : ""}${activeSlot === slot ? " selected" : ""}`}
+        key={slot}
+        onClick={() => setActiveSlot(activeSlot === slot ? null : slot)}
+        style={style}
+        type="button"
+      >
+        <span>{EQUIPMENT_SLOT_LABELS[slot]}</span>
+        <strong>{formatEquipmentItem(itemId, items)}</strong>
+      </button>
+    );
+  };
+  const cssStyle = (text) => Object.fromEntries(text.split(";").map((part) => {
+    const [key, value] = part.split(":").map((piece) => piece.trim());
+    return [key, value];
+  }));
+  const activeItemId = activeSlot ? equipment[activeSlot] || "" : "";
+  const activeItem = items.find((item) => item.id === activeItemId);
+  const candidates = activeSlot ? items.filter((item) => item.equipable_slots.includes(activeSlot) && item.id !== activeItemId) : [];
 
   return (
     <div className="dialog-backdrop inventory-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section aria-labelledby="inventory-title" aria-modal="true" className="inventory-dialog" role="dialog">
         <button aria-label="Close inventory" className="dialog-close" onClick={onClose} type="button">×</button>
         <p className="eyebrow">CHARACTER</p>
-        <h2 id="inventory-title">Inventory & equipment</h2>
+        <h2 id="inventory-title">{tab === "inventory" ? "Inventory" : "Equipment"}</h2>
         <div className="inventory-tabs" aria-label="Inventory views">
-          {views.map(([id, label]) => (
-            <button aria-pressed={view === id} className={view === id ? "selected" : ""} key={id} onClick={() => onSelectView(id)} type="button">{label}</button>
-          ))}
+          <button aria-pressed={tab === "inventory"} className={tab === "inventory" ? "selected" : ""} onClick={() => onSelectView("all")} type="button">Inventory</button>
+          <button aria-pressed={tab === "equipment"} className={tab === "equipment" ? "selected" : ""} onClick={() => onSelectView("armor")} type="button">Equipment</button>
         </div>
-        <section className="inventory-equipment-section">
-          <h3>Equipment</h3>
-          <div className="equipment-grid">
-            {visibleSlots.map((slot) => {
-              const itemId = snapshot?.character?.equipment?.[slot] || "";
-              return (
-                <article className="equipment-slot" key={slot}>
-                  <span>{EQUIPMENT_SLOT_LABELS[slot]}</span>
-                  <strong>{formatEquipmentItem(itemId, items)}</strong>
-                  {itemId && itemId !== "fist" && <button disabled={busy} onClick={() => onUnequip(slot)} type="button">Unequip</button>}
-                </article>
-              );
-            })}
-          </div>
-        </section>
-        <section className="inventory-items-section">
-          <h3>Carrying</h3>
-          {visibleItems.length ? visibleItems.map((item) => (
-            <article className="inventory-item" key={item.id}>
-              <div><strong>{item.name}</strong><span> × {item.quantity}</span></div>
-              {item.can_use && <button disabled={busy} onClick={() => onUse(item.id)} type="button">Use</button>}
-              {itemCanEquip(item) ? (
-                <div className="inventory-equip-controls">
-                  <label>
-                    <span className="sr-only">Equipment slot for {item.name}</span>
-                    <select
-                      disabled={busy}
-                      onChange={(event) => setSelectedSlots((current) => ({ ...current, [item.id]: event.target.value }))}
-                      value={selectedSlots[item.id] || item.equipable_slots[0]}
-                    >
-                      {item.equipable_slots.map((slot) => <option key={slot} value={slot}>{EQUIPMENT_SLOT_LABELS[slot]}</option>)}
-                    </select>
-                  </label>
-                  <button disabled={busy} onClick={() => onEquip(item.id, selectedSlots[item.id] || item.equipable_slots[0])} type="button">Equip</button>
+        {tab === "inventory" ? (
+          <section className="inventory-items-section">
+            {items.length ? items.map((item) => (
+              <article className="inventory-item" key={item.id}>
+                <div className="inventory-item-main">
+                  <div><strong>{item.name}</strong><span> × {item.quantity}</span></div>
+                  <ItemStats item={item} />
                 </div>
-              ) : <p className="item-not-equipable">This item type has no equipment definition.</p>}
-            </article>
-          )) : <p className="inventory-empty">Nothing is carried in this view.</p>}
-        </section>
+                <div className="inventory-item-actions">
+                  {item.can_use && <button disabled={busy} onClick={() => onUse(item.id)} type="button">Use</button>}
+                  {itemCanEquip(item) && (
+                    <div className="inventory-equip-controls">
+                      <label>
+                        <span className="sr-only">Equipment slot for {item.name}</span>
+                        <select
+                          disabled={busy}
+                          onChange={(event) => setSelectedSlots((current) => ({ ...current, [item.id]: event.target.value }))}
+                          value={selectedSlots[item.id] || item.equipable_slots[0]}
+                        >
+                          {item.equipable_slots.map((slot) => <option key={slot} value={slot}>{EQUIPMENT_SLOT_LABELS[slot]}</option>)}
+                        </select>
+                      </label>
+                      <button disabled={busy} onClick={() => onEquip(item.id, selectedSlots[item.id] || item.equipable_slots[0])} type="button">Equip</button>
+                    </div>
+                  )}
+                </div>
+              </article>
+            )) : <p className="inventory-empty">You are carrying nothing.</p>}
+          </section>
+        ) : (
+          <section className="equipment-section">
+            <div className="equipment-paperdoll">
+              <div className="equipment-side" aria-label="Rings">
+                <h3>Rings</h3>
+                {RING_SLOTS.map((slot) => slotButton(slot))}
+              </div>
+              <div className="equipment-body">
+                <svg aria-hidden="true" viewBox="0 0 100 200" preserveAspectRatio="xMidYMid meet">
+                  <g fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+                    <circle cx="50" cy="18" r="12" />
+                    <path d="M44 30 v6 M56 30 v6" />
+                    <path d="M30 40 Q50 34 70 40 L78 92 L68 94 L63 62 L62 112 L66 190 L53 190 L50 120 L47 190 L34 190 L38 112 L37 62 L32 94 L22 92 Z" />
+                  </g>
+                </svg>
+                {BODY_SLOTS.map(([slot, position]) => slotButton(slot, cssStyle(position)))}
+              </div>
+              <div className="equipment-side" aria-label="Necklaces">
+                <h3>Necklaces</h3>
+                {NECKLACE_SLOTS.map((slot) => slotButton(slot))}
+              </div>
+            </div>
+            {activeSlot ? (
+              <div className="equipment-picker">
+                <h3>{EQUIPMENT_SLOT_LABELS[activeSlot]}</h3>
+                {activeItemId && activeItemId !== "fist" ? (
+                  <article className="inventory-item">
+                    <div className="inventory-item-main">
+                      <div><strong>{activeItem?.name || formatEquipmentItem(activeItemId, items)}</strong><span> — equipped</span></div>
+                      {activeItem ? <ItemStats item={activeItem} /> : null}
+                    </div>
+                    <button disabled={busy} onClick={() => onUnequip(activeSlot)} type="button">Unequip</button>
+                  </article>
+                ) : null}
+                {candidates.length ? candidates.map((item) => (
+                  <article className="inventory-item" key={item.id}>
+                    <div className="inventory-item-main">
+                      <div><strong>{item.name}</strong><span> × {item.quantity}</span></div>
+                      <ItemStats item={item} />
+                    </div>
+                    <button disabled={busy} onClick={() => onEquip(item.id, activeSlot)} type="button">Equip</button>
+                  </article>
+                )) : <p className="inventory-empty">Nothing in your pack fits this slot.</p>}
+              </div>
+            ) : <p className="inventory-empty">Select a slot to equip or remove an item.</p>}
+          </section>
+        )}
       </section>
     </div>
   );

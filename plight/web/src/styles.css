@@ -535,3 +535,22 @@ a { color: inherit; text-decoration: none; }
 .quest-section-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; border: 0; background: #1a1411; color: #e8dccb; font: 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; padding: 9px 11px; cursor: pointer; }
 .quest-section-body { display: grid; gap: 10px; padding: 10px 11px; }
 .quest-entry-actions { display: flex; gap: 8px; }
+
+.item-description { margin: 4px 0 0; color: var(--soft); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.item-stats { margin: 4px 0 0; color: var(--accent); font: 11px var(--mono); }
+.inventory-item-main { min-width: 0; flex: 1; }
+.inventory-item-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.equipment-paperdoll { display: grid; grid-template-columns: 128px minmax(220px, 1fr) 128px; gap: 12px; align-items: start; }
+.equipment-side { display: grid; gap: 6px; }
+.equipment-side h3 { margin: 0; color: var(--accent); font: 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.equipment-body { position: relative; aspect-ratio: 1 / 2; max-height: 430px; width: 100%; color: #5b4a3c; }
+.equipment-body svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.body-slot { display: grid; gap: 2px; border: 1px dashed var(--line); background: rgba(21, 18, 16, .92); color: var(--soft); padding: 5px 6px; text-align: left; font: 11px var(--mono); min-width: 0; }
+.equipment-body .body-slot { position: absolute; transform: translateX(-50%); width: 76px; }
+.body-slot span { color: var(--muted); font-size: 9px; text-transform: uppercase; }
+.body-slot strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.body-slot.filled { border-style: solid; border-color: var(--accent); }
+.body-slot.selected, .body-slot:hover { border-color: var(--warm); color: var(--warm); }
+.equipment-picker { display: grid; gap: 8px; margin-top: 16px; }
+.equipment-picker h3 { margin: 0; color: var(--accent); font: 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+@media (max-width: 640px) { .equipment-paperdoll { grid-template-columns: 1fr; } .equipment-body { max-width: 260px; margin: 0 auto; } }

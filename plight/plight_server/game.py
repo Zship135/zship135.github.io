@@ -1334,6 +1334,15 @@ def _snapshot(
                 "name": item["name"] if item else item_id.replace("_", " ").title(),
                 "quantity": quantity,
                 "type": item_type,
+                "description": (item or {}).get("description") or "",
+                "stats": {
+                    key: value
+                    for key, value in ((item or {}).get("attributes") or {}).items()
+                    if key in {"attack", "defense", "speed", "health"}
+                    and isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value
+                },
                 "equipable_slots": [
                     slot for slot in EQUIPMENT_SLOTS if slot in _item_equip_slots(item)
                 ],

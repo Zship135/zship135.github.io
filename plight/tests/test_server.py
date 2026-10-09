@@ -2551,6 +2551,8 @@ def test_shield_equipment_and_timed_absorption_affect_enemy_damage(
             return minimum
 
     monkeypatch.setattr(game, "combat_rng", FixedRoll())
+    assert game._effective_stats(character, entities, now=now + 1)["defense"] == 1
+    character.combat_state = {"defending": True}
     messages = game.enemy_strike(
         character,
         {"name": "Test rat", "attributes": {"attack": 10}, "attack_die_sides": 2},
@@ -2558,7 +2560,7 @@ def test_shield_equipment_and_timed_absorption_affect_enemy_damage(
         entities=entities,
     )
 
-    assert game._effective_stats(character, entities, now=now + 1)["defense"] == 6
+    assert game._effective_stats(character, entities, now=now + 1, defending=True)["defense"] == 6
     assert character.combat_stats["health"] == 99
     assert any("absorbs 2 damage" in message for message in messages)
 
