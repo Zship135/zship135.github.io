@@ -751,6 +751,7 @@ def _effective_stats(
     character: Any,
     entities: dict[str, dict[str, Any]] | None = None,
     now: float | None = None,
+    defending: bool = False,
 ) -> dict[str, int]:
     stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
     for effect in _live_effects(character, now):
@@ -767,6 +768,8 @@ def _effective_stats(
         if slot == "right_hand":
             continue
         worn = (entities or {}).get(equipment.get(slot) or "")
+        if (worn or {}).get("type") == "shield" and not defending:
+            continue
         defense = ((worn or {}).get("attributes") or {}).get("defense", 0)
         if isinstance(defense, int) and not isinstance(defense, bool) and defense > 0:
             stats["defense"] += defense
@@ -2886,14 +2889,14 @@ def enemy_strike(
     entities: dict[str, dict[str, Any]] | None = None,
     spawn: dict[str, Any] | None = None,
 ) -> list[str]:
-    stats = _effective_stats(character, entities)
+    state = dict(character.combat_state or {})
+    stats = _effective_stats(character, entities, defending=bool(state.get("defending", False)))
     die_sides = enemy["attack_die_sides"]
     roll = combat_rng.randint(1, die_sides)
     incoming_damage = max(
         0,
         _positive_stat(enemy, "attack", 0) + roll - stats["defense"],
     )
-    state = dict(character.combat_state or {})
     if state.get("defending", False):
         incoming_damage //= 2
     active_effects = _live_effects(character)
