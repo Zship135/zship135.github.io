@@ -44,6 +44,8 @@ from plight_server.game import (
     _shop_window,
     _add_currency,
     _currency_text,
+    _die_skin_view,
+    grant_die_skins,
     _complete_gathering,
     apply_damage_over_time,
     award_enemy_defeat,
@@ -86,6 +88,7 @@ from plight_server.schemas import (
     LoginRequest,
     PartyInviteCreate,
     PartyInviteUpdate,
+    DieSkinRequest,
     ProfileUpdateRequest,
     QuestChoiceRequest,
     RegisterRequest,
@@ -2337,6 +2340,9 @@ def turn_in_quest(
                 currency_messages.append(
                     f"Reward: {_currency_text(currency_map, reward['currency_id'], reward['amount'])}."
                 )
+        currency_messages.extend(
+            grant_die_skins(character, content, quest.get("reward_die_skin_ids", []))
+        )
         state[quest_id] = {
             **quest_state,
             "status": "completed",
@@ -2383,6 +2389,23 @@ def update_own_profile(
     character.profile_lore = body.lore
     db.commit()
     return _profile_dict(character)
+
+
+@app.put("/api/v1/character/die-skin")
+def select_die_skin(
+    body: DieSkinRequest,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    character = _require_character(account)
+    if body.skin_id is not None:
+        content = world_content_dict()
+        unlocked = {skin["id"] for skin in _die_skin_view(character, content)["unlocked"]}
+        if body.skin_id not in unlocked:
+            raise HTTPException(status_code=409, detail="You have not unlocked that die skin.")
+    character.active_die_skin = body.skin_id
+    db.commit()
+    return _snapshot_for_character(character, db)
 
 
 @app.put("/api/v1/profile/picture")

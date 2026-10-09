@@ -45,6 +45,35 @@ DEFAULT_EQUIPMENT = {
     "right_hand": "fist",
 }
 EQUIPMENT_TYPE_SLOTS = {"weapon": {"right_hand"}, "shield": {"left_hand"}}
+ARMOR_SLOTS = ("helm", "tunic", "pants", "sleeves", "gloves", "boots")
+EQUIPPABLE_TYPES = {"weapon", "shield", "armor", "ring", "necklace"}
+ITEM_TYPES = {"item", *EQUIPPABLE_TYPES}
+
+
+def _item_equip_slots(item: dict[str, Any] | None) -> set[str]:
+    kind = (item or {}).get("type")
+    if kind == "armor":
+        slot = (item or {}).get("armor_slot")
+        return {slot} if slot in ARMOR_SLOTS else set()
+    if kind == "ring":
+        return {f"ring_{index}" for index in range(1, 6)}
+    if kind == "necklace":
+        return {"necklace_1", "necklace_2"}
+    return set(EQUIPMENT_TYPE_SLOTS.get(kind, set()))
+
+
+def _clean_equipment(
+    equipment: dict[str, Any] | None, entities: dict[str, dict[str, Any]] | None
+) -> dict[str, str]:
+    cleaned = {**DEFAULT_EQUIPMENT, **(equipment or {})}
+    for slot in EQUIPMENT_SLOTS:
+        item_id = cleaned.get(slot) or ""
+        valid = slot in _item_equip_slots((entities or {}).get(item_id))
+        if slot == "right_hand":
+            cleaned[slot] = item_id if valid or item_id == "fist" else "fist"
+        else:
+            cleaned[slot] = item_id if valid else ""
+    return cleaned
 SKILL_NAMES = (
     "felling",
     "foraging",
@@ -182,6 +211,32 @@ def _add_currency(character: Any, currency_id: str, amount: int) -> None:
     wallet = dict(getattr(character, "wallet", None) or {})
     wallet[currency_id] = int(wallet.get(currency_id, 0)) + amount
     character.wallet = wallet
+
+
+def _die_skin_view(character: Any, content: dict[str, Any]) -> dict[str, Any]:
+    skins = {skin["id"]: skin for skin in content.get("die_skins", [])}
+    unlocked = [
+        skins[skin_id]
+        for skin_id in dict.fromkeys(getattr(character, "unlocked_die_skins", None) or [])
+        if skin_id in skins
+    ]
+    active = getattr(character, "active_die_skin", None)
+    return {
+        "active_id": active if any(skin["id"] == active for skin in unlocked) else None,
+        "unlocked": unlocked,
+    }
+
+
+def grant_die_skins(character: Any, content: dict[str, Any], skin_ids: list[str]) -> list[str]:
+    skins = {skin["id"]: skin for skin in content.get("die_skins", [])}
+    unlocked = list(getattr(character, "unlocked_die_skins", None) or [])
+    messages = []
+    for skin_id in skin_ids:
+        if skin_id in skins and skin_id not in unlocked:
+            unlocked.append(skin_id)
+            messages.append(f"Reward: the {skins[skin_id]['name']} die skin.")
+    character.unlocked_die_skins = unlocked
+    return messages
 
 
 def _wallet_view(character: Any, content: dict[str, Any]) -> list[dict[str, Any]]:
@@ -624,9 +679,10 @@ def _active_enchantments(
         entities = library_entities if entities is None else entities
     equipment = {**DEFAULT_EQUIPMENT, **(getattr(character, "equipment", None) or {})}
     sources: list[dict[str, Any]] = []
-    for slot, item_type in (("left_hand", "shield"), ("right_hand", "weapon")):
+    equipment = _clean_equipment(equipment, entities)
+    for slot in EQUIPMENT_SLOTS:
         item = entities.get(equipment.get(slot) or "")
-        if item is not None and item.get("type") == item_type:
+        if item is not None:
             sources.append(item)
     for item_id, quantity in (getattr(character, "inventory", None) or {}).items():
         item = entities.get(item_id)
@@ -706,17 +762,12 @@ def _effective_stats(
         amount = int(effect.get("amount", 0))
         bonus = amount if effect.get("mode") == "flat" else ceil(stats[stat] * amount / 100)
         stats[stat] += bonus
-    equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
-    if (entities or {}).get(equipment["left_hand"], {}).get("type") != "shield":
-        equipment["left_hand"] = ""
-    if equipment["right_hand"] != "fist" and (entities or {}).get(
-        equipment["right_hand"], {}
-    ).get("type") != "weapon":
-        equipment["right_hand"] = "fist"
-    shield_id = equipment.get("left_hand")
-    shield = (entities or {}).get(shield_id or "")
-    if shield is not None and shield.get("type") == "shield":
-        defense = (shield.get("attributes") or {}).get("defense", 0)
+    equipment = _clean_equipment(character.equipment, entities)
+    for slot in EQUIPMENT_SLOTS:
+        if slot == "right_hand":
+            continue
+        worn = (entities or {}).get(equipment.get(slot) or "")
+        defense = ((worn or {}).get("attributes") or {}).get("defense", 0)
         if isinstance(defense, int) and not isinstance(defense, bool) and defense > 0:
             stats["defense"] += defense
     deltas = {"attack": 0, "defense": 0, "speed": 0, "max_health": 0}
@@ -898,6 +949,7 @@ def _quest_view(
             for reward in quest.get("reward_items", [])
         ],
         "reward_currencies": list(quest.get("reward_currencies", [])),
+        "reward_die_skin_ids": list(quest.get("reward_die_skin_ids", [])),
         "can_turn_in": status == "active" and saved_state.get("ready_to_turn_in", False),
     }
 
@@ -1066,7 +1118,7 @@ def _has_map(character: Any, entities: dict[str, dict[str, Any]]) -> bool:
     return any(
         quantity > 0
         and entities.get(item_id, {}).get("is_map")
-        and entities[item_id]["type"] in {"item", "weapon", "shield"}
+        and entities[item_id]["type"] in ITEM_TYPES
         for item_id, quantity in (getattr(character, "inventory", None) or {}).items()
     )
 
@@ -1249,13 +1301,7 @@ def _snapshot(
     stats["health"] += _temporary_health(character)
     experience = getattr(character, "experience", 0) or 0
     level, experience_progress, experience_to_next_level = _level_progress(experience)
-    equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
-    if entities.get(equipment["left_hand"], {}).get("type") != "shield":
-        equipment["left_hand"] = ""
-    if equipment["right_hand"] != "fist" and entities.get(
-        equipment["right_hand"], {}
-    ).get("type") != "weapon":
-        equipment["right_hand"] = "fist"
+    equipment = _clean_equipment(character.equipment, entities)
     combat_state = character.combat_state or {}
     enemy_health = combat_state.get("enemy_health", {})
     inventory_items = []
@@ -1268,7 +1314,9 @@ def _snapshot(
                 "name": item["name"] if item else item_id.replace("_", " ").title(),
                 "quantity": quantity,
                 "type": item_type,
-                "equipable_slots": sorted(EQUIPMENT_TYPE_SLOTS.get(item_type, set())),
+                "equipable_slots": [
+                    slot for slot in EQUIPMENT_SLOTS if slot in _item_equip_slots(item)
+                ],
                 "can_use": bool(
                     item
                     and item_type == "item"
@@ -1453,6 +1501,8 @@ def _snapshot(
             or starting_location(character.species),
             "level": level,
             "wallet": _wallet_view(character, content),
+            "die_skins": _die_skin_view(character, content),
+            "die_skin_names": {skin["id"]: skin["name"] for skin in content.get("die_skins", [])},
             "enchantments": [
                 {
                     "id": item["id"],
@@ -1668,22 +1718,7 @@ def resolve_command(
                         None,
                     )
                     if other_player is not None:
-                        player_equipment = {
-                            **DEFAULT_EQUIPMENT,
-                            **(other_player.equipment or {}),
-                        }
-                        if entities.get(player_equipment["left_hand"], {}).get(
-                            "type"
-                        ) != "shield":
-                            player_equipment["left_hand"] = ""
-                        if (
-                            player_equipment["right_hand"] != "fist"
-                            and entities.get(player_equipment["right_hand"], {}).get(
-                                "type"
-                            )
-                            != "weapon"
-                        ):
-                            player_equipment["right_hand"] = "fist"
+                        player_equipment = _clean_equipment(other_player.equipment, entities)
                         observed_player_equipment[entity["account_id"]] = {
                             slot: (
                                 entities.get(item_id, {}).get(
@@ -2593,17 +2628,20 @@ def _equip(
     if len(matches) != 1:
         return f"There is no unique item named {item_name}."
     item = matches[0]
-    item_slots = EQUIPMENT_TYPE_SLOTS.get(item["type"])
-    if item_slots is None:
+    item_slots = _item_equip_slots(item)
+    if not item_slots:
         return f"{item['name']} cannot be equipped; this item type has no equipment definition."
     if (character.inventory or {}).get(item["id"], 0) < 1:
         return f"You are not carrying a {item['name']}."
-    slot = slot or next(iter(sorted(item_slots)))
+    equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
+    ordered_slots = [candidate for candidate in EQUIPMENT_SLOTS if candidate in item_slots]
+    slot = slot or next(
+        (candidate for candidate in ordered_slots if not equipment.get(candidate)), ordered_slots[0]
+    )
     if slot not in EQUIPMENT_SLOTS:
         return f"Choose an equipment slot: {', '.join(EQUIPMENT_SLOTS)}."
     if slot not in item_slots:
         return f"{item['name']} cannot be equipped in your {slot.replace('_', ' ')}."
-    equipment = {**DEFAULT_EQUIPMENT, **(character.equipment or {})}
     if _is_cursed_binding(equipment.get(slot) or "", entities):
         return f"The curse on your {entities[equipment[slot]]['name']} binds it to you; you cannot replace it."
     if equipment["left_hand"] == "fist":

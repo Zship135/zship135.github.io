@@ -102,7 +102,35 @@ function faceTransform({ x, y, z, inradius }) {
   return `matrix3d(${m.join(",")})`;
 }
 
-export default function Dice3D({ value, label }) {
+const PARTICLE_COUNTS = { sparks: 16, embers: 14, snow: 16, bubbles: 10, stars: 10, smoke: 8 };
+
+function DieParticles({ effect }) {
+  const count = PARTICLE_COUNTS[effect];
+  if (!count) return null;
+  return (
+    <div aria-hidden="true" className={`die-particles fx-${effect}`}>
+      {Array.from({ length: count }, (_, index) => (
+        <i
+          className="die-particle"
+          key={index}
+          style={{
+            "--x": `${8 + ((index * 37) % 84)}%`,
+            "--drift": `${((index * 53) % 41) - 20}px`,
+            "--delay": `${((index * 0.23) % 2.4).toFixed(2)}s`,
+            "--dur": `${(1.4 + ((index * 0.17) % 1.4)).toFixed(2)}s`,
+            "--size": `${3 + ((index * 5) % 4)}px`,
+          }}
+        >{effect === "stars" ? "\u2726" : null}</i>
+      ))}
+    </div>
+  );
+}
+
+export function DiePreview({ skin }) {
+  return <Dice3D label="Preview" skin={skin} value={20} />;
+}
+
+export default function Dice3D({ value, label, skin }) {
   const cubeRef = useRef(null);
   const shadowRef = useRef(null);
   const valueRef = useRef(value);
@@ -162,8 +190,17 @@ export default function Dice3D({ value, label }) {
   }, []);
 
   return (
-    <div className="d20">
-      <div className="d20-scene">
+    <div
+      className="d20"
+      style={skin ? {
+        "--skin-face": skin.face_color,
+        "--skin-edge": skin.edge_color,
+        "--skin-number": skin.number_color,
+        "--skin-glow": skin.glow_color || "transparent",
+        "--skin-particle": skin.particle_color,
+      } : undefined}
+    >
+      <div className={`d20-scene${skin?.glow_color ? " glow" : ""}`}>
         <div className="d20-shadow" ref={shadowRef} />
         <div className="d20-body" ref={cubeRef}>
           {faces.map((face) => (
@@ -185,6 +222,7 @@ export default function Dice3D({ value, label }) {
             </div>
           ))}
         </div>
+        <DieParticles effect={skin?.particle_effect} />
       </div>
       <small className={`d20-label${value != null ? " revealed" : ""}`}>{value != null ? `${label} · ${value}` : "\u00a0"}</small>
     </div>

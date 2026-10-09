@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiBlob, liveUrl } from "./api.js";
 import ContentStudio from "./ContentStudio.jsx";
-import Dice3D from "./Dice3D.jsx";
+import Dice3D, { DiePreview } from "./Dice3D.jsx";
 import { friendAction } from "./playerProfile.js";
 import {
   EQUIPMENT_SLOT_GROUPS,
@@ -326,6 +326,9 @@ export default function App() {
   const [commandBusy, setCommandBusy] = useState(false);
   const [inventoryView, setInventoryView] = useState(null);
   const [mapOpen, setMapOpen] = useState(false);
+  const [diceOpen, setDiceOpen] = useState(false);
+  const [diceBusy, setDiceBusy] = useState(false);
+  const [diceError, setDiceError] = useState("");
   const [notice, setNotice] = useState("");
   const commandInputRef = useRef(null);
   const socketRef = useRef(null);
@@ -1045,6 +1048,18 @@ export default function App() {
 
   }
 
+  async function selectDieSkin(skinId) {
+    setDiceBusy(true);
+    setDiceError("");
+    try {
+      setSnapshot(await api("/api/v1/character/die-skin", { token, method: "PUT", body: JSON.stringify({ skin_id: skinId }) }));
+    } catch (error) {
+      setDiceError(error.message);
+    } finally {
+      setDiceBusy(false);
+    }
+  }
+
   async function rollD20() {
     if (commandBusy || rollBusy) return;
     setRollBusy(true);
@@ -1336,6 +1351,7 @@ export default function App() {
         <a className="wordmark" href="#world">PLIGHT</a>
         <div className="topbar-right">
           <button className="text-button" onClick={() => setInventoryView("all")} type="button">Inventory</button>
+          {(snapshot?.character?.die_skins?.unlocked || []).length > 0 && <button className="text-button" onClick={() => setDiceOpen(true)} type="button">Dice</button>}
           {snapshot?.character?.has_map && <button className="text-button" onClick={() => setMapOpen(true)} type="button">Map</button>}
           <button className="text-button" onClick={openPeople} type="button">Party & friends</button>
           <button className="text-button" onClick={openOwnProfile} type="button">My profile</button>
@@ -1474,6 +1490,7 @@ export default function App() {
                 <Dice3D
                   key={index}
                   label={rollAnimation.rolls[index]?.label}
+                  skin={(snapshot?.character?.die_skins?.unlocked || []).find((skin) => skin.id === snapshot.character.die_skins.active_id)}
                   value={rollAnimation.rolls[index]?.value ?? null}
                 />
               ))}
@@ -1583,6 +1600,7 @@ export default function App() {
                             const currency = (snapshot?.character?.wallet || []).find((entry) => entry.currency_id === reward.currency_id);
                             return ` · ${currency?.symbol ? `${currency.symbol}${reward.amount}` : `${reward.amount} ${currency?.name || reward.currency_id}`}`;
                           }).join("")}
+                          {(quest.reward_die_skin_ids || []).map((id) => ` · ${snapshot?.die_skin_names?.[id] || id} die skin`).join("")}
                         </p>
                       )}
                     </section>
@@ -1693,6 +1711,16 @@ export default function App() {
           />
         </aside>
       </main>
+
+      {diceOpen && (
+        <DiceSkinDialog
+          busy={diceBusy}
+          dieSkins={snapshot?.character?.die_skins}
+          error={diceError}
+          onClose={() => setDiceOpen(false)}
+          onSelect={selectDieSkin}
+        />
+      )}
 
       {mapOpen && snapshot?.world_map && (
         <WorldMapDialog onClose={() => setMapOpen(false)} questPath={snapshot.quest_path} worldMap={snapshot.world_map} />
@@ -2002,6 +2030,35 @@ function BookWindow({ dialogue }) {
         <button className="dialogue-choice-button" disabled={page >= pages.length - 1} onClick={() => setPage(page + 1)} type="button">Next page →</button>
       </div>
     </section>
+  );
+}
+
+function DiceSkinDialog({ busy, dieSkins, error, onClose, onSelect }) {
+  const unlocked = dieSkins?.unlocked || [];
+  const active = unlocked.find((skin) => skin.id === dieSkins?.active_id) || null;
+  return (
+    <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section aria-labelledby="dice-title" aria-modal="true" className="inventory-dialog" role="dialog">
+        <button aria-label="Close dice skins" className="dialog-close" onClick={onClose} type="button">×</button>
+        <p className="eyebrow">CHARACTER</p>
+        <h2 id="dice-title">Dice skins</h2>
+        {error && <p className="studio-message error-message" role="alert">{error}</p>}
+        <div className="dice-roll-preview"><DiePreview key={active?.id || "default"} skin={active} /></div>
+        <div className="die-skin-picker">
+          <button className={`die-skin-option${active ? "" : " selected"}`} disabled={busy} onClick={() => onSelect(null)} type="button">
+            <strong>Default die</strong>
+          </button>
+          {unlocked.map((skin) => (
+            <button className={`die-skin-option${active?.id === skin.id ? " selected" : ""}`} disabled={busy} key={skin.id} onClick={() => onSelect(skin.id)} type="button">
+              <span><strong>{skin.name}</strong>{skin.description ? <small> — {skin.description}</small> : null}</span>
+              <span className="die-skin-swatches">
+                {[skin.face_color, skin.edge_color, skin.number_color].map((color, index) => <i key={index} style={{ background: color }} />)}
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
   );
 }
 

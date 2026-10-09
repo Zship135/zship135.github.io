@@ -297,3 +297,9 @@ The NLP action semantics, starter recipes, and marketplace/direct-trade lifecycl
 
 `craft 4 cow hide`, `craft 4x cow hide` and `craft cow hide x4` craft several at once (1-999). Ingredients scale with the count, missing amounts are reported for the whole request, and skill XP is awarded per craft. A recipe whose exact name matches the full text is never treated as a quantity.
 
+
+## Armor, jewelry, and die skins (implemented)
+
+- Content Studio has Armor, Necklaces, Rings and Die skins tabs. Armor picks a body slot (helm, tunic, pants, sleeves, gloves, boots); rings fit ring slots 1-5 and necklaces fit necklace slots 1-2. Shields, armor, rings and necklaces all add their `defense` attribute while equipped, and every equipped piece (not only carried items) applies its enchantments.
+- A die skin sets face, edge, number, glow and particle colors plus a particle effect (sparks, embers, snow, bubbles, stars, smoke). Quests grant skins as rewards; players choose the active skin from the Dice button (`PUT /api/v1/character/die-skin`). Characters gained `unlocked_die_skins` and `active_die_skin` (migration 0014).
+

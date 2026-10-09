@@ -153,3 +153,7 @@ class ErrorDetail(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorDetail
+
+
+class DieSkinRequest(BaseModel):
+    skin_id: str | None = Field(default=None, max_length=64)

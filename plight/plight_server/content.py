@@ -16,6 +16,10 @@ from plight_nlp_inspector import ACTION_ALIASES
 WORLD_CONTENT_PATH = Path(__file__).with_name("world_content.json")
 _CONTENT_LOCK = threading.Lock()
 _SLUG = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_HEX_COLOR = r"^#[0-9a-fA-F]{6}$"
+ITEM_TYPES = {"item", "weapon", "shield", "armor", "ring", "necklace"}
+ITEM_OR_RESOURCE_TYPES = ITEM_TYPES | {"resource"}
+ARMOR_SLOT_NAMES = ("helm", "tunic", "pants", "sleeves", "gloves", "boots")
 _DIRECTIONS = {"north", "south", "east", "west"}
 Direction = Literal["north", "south", "east", "west"]
 SkillName = Literal[
@@ -207,6 +211,18 @@ class Currency(ContentModel):
     name: str = Field(min_length=1, max_length=100)
     symbol: str = Field(default="", max_length=8)
     description: str = Field(default="", max_length=1000)
+
+
+class DieSkin(ContentModel):
+    id: str = Field(pattern=_SLUG.pattern)
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    face_color: str = Field(default="#856432", pattern=_HEX_COLOR)
+    edge_color: str = Field(default="#d9c67a", pattern=_HEX_COLOR)
+    number_color: str = Field(default="#f3e7b0", pattern=_HEX_COLOR)
+    glow_color: str | None = Field(default=None, pattern=_HEX_COLOR)
+    particle_effect: Literal["none", "sparks", "embers", "snow", "bubbles", "stars", "smoke"] = "none"
+    particle_color: str = Field(default="#ffd27a", pattern=_HEX_COLOR)
 
 
 class CurrencyAmount(ContentModel):
@@ -471,8 +487,10 @@ class BookConfig(ContentModel):
 class ContentEntity(ContentModel):
     id: str = Field(pattern=_SLUG.pattern)
     type: Literal[
-        "enemy", "npc", "item", "weapon", "shield", "furniture", "object", "resource"
+        "enemy", "npc", "item", "weapon", "shield", "armor", "ring", "necklace",
+        "furniture", "object", "resource",
     ]
+    armor_slot: Literal["helm", "tunic", "pants", "sleeves", "gloves", "boots"] | None = None
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(max_length=4000)
     attributes: dict[str, Any] = Field(default_factory=dict)
@@ -556,6 +574,7 @@ class Quest(ContentModel):
     reward_experience: int = Field(default=0, ge=0, le=1_000_000)
     reward_items: list[QuestRewardItem] = Field(default_factory=list, max_length=20)
     reward_currencies: list[CurrencyAmount] = Field(default_factory=list, max_length=20)
+    reward_die_skin_ids: list[str] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="before")
     @classmethod
@@ -650,6 +669,7 @@ class WorldContent(BaseModel):
     quests: list[Quest] = Field(default_factory=list, max_length=2000)
     currencies: list[Currency] = Field(default_factory=list, max_length=100)
     enchantments: list[Enchantment] = Field(default_factory=list, max_length=500)
+    die_skins: list[DieSkin] = Field(default_factory=list, max_length=200)
 
     @field_validator("action_sounds")
     @classmethod
@@ -675,6 +695,7 @@ class WorldContent(BaseModel):
         quests = unique_ids(self.quests, "Quest")
         currencies = unique_ids(self.currencies, "Currency")
         enchantments = unique_ids(self.enchantments, "Enchantment")
+        die_skins = unique_ids(self.die_skins, "Die skin")
         entity_types = {entity_id: entity.type for entity_id, entity in entities.items()}
 
         starting_species = {
@@ -720,10 +741,15 @@ class WorldContent(BaseModel):
                 raise ValueError(f"Books can only be regular items ({entity.id}).")
             if entity.type != "item" and entity.item_use is not None:
                 raise ValueError(f"Item effects only apply to regular items ({entity.id}).")
-            if entity.type not in {"item", "weapon", "shield"} and (
+            if entity.type not in ITEM_TYPES and (
                 entity.enchantment_ids or entity.is_map
             ):
-                raise ValueError(f"Only items, weapons, and shields can be enchanted or be maps ({entity.id}).")
+                raise ValueError(f"Only items and equipment can be enchanted or be maps ({entity.id}).")
+            if entity.type == "armor":
+                if entity.armor_slot is None:
+                    raise ValueError(f"Armor {entity.id} must choose a body slot.")
+            elif entity.armor_slot is not None:
+                raise ValueError(f"Only armor can have a body slot ({entity.id}).")
             if len(set(entity.enchantment_ids)) != len(entity.enchantment_ids) or any(
                 enchantment_id not in enchantments for enchantment_id in entity.enchantment_ids
             ):
@@ -741,9 +767,7 @@ class WorldContent(BaseModel):
                         )
             if entity.gathering is not None:
                 for drop in entity.gathering.loot_table:
-                    if entity_types.get(drop.item_id) not in {
-                        "item", "weapon", "shield", "resource"
-                    }:
+                    if entity_types.get(drop.item_id) not in ITEM_OR_RESOURCE_TYPES:
                         raise ValueError(
                             f"Resource {entity.id} has a gathering drop referencing a missing item."
                         )
@@ -775,9 +799,7 @@ class WorldContent(BaseModel):
                 if not isinstance(experience, int) or isinstance(experience, bool) or experience < 0:
                     raise ValueError(f"Enemy {entity.id} must have non-negative integer experience.")
                 for drop in entity.loot_table:
-                    if entity_types.get(drop.item_id) not in {
-                        "item", "weapon", "shield", "resource"
-                    }:
+                    if entity_types.get(drop.item_id) not in ITEM_OR_RESOURCE_TYPES:
                         raise ValueError(f"Enemy {entity.id} has loot referencing a missing or invalid item.")
                 if any(drop.currency_id not in currencies for drop in entity.currency_drops):
                     raise ValueError(f"Enemy {entity.id} has a currency drop referencing a missing currency.")
@@ -794,16 +816,16 @@ class WorldContent(BaseModel):
                 damage = entity.attributes.get("damage", 0)
                 if not isinstance(damage, int) or isinstance(damage, bool) or damage < 0:
                     raise ValueError(f"Weapon {entity.id} must have a non-negative integer damage value.")
-            if entity.type == "shield":
+            if entity.type in {"shield", "armor", "ring", "necklace"}:
                 defense = entity.attributes.get("defense", 0)
                 if not isinstance(defense, int) or isinstance(defense, bool) or defense < 0:
-                    raise ValueError(f"Shield {entity.id} must have a non-negative integer defense value.")
+                    raise ValueError(f"{entity.type.title()} {entity.id} must have a non-negative integer defense value.")
             if entity.type not in {"enemy", "npc"} and entity.ambience:
                 raise ValueError(f"Only NPCs and enemies can have ambience lines ({entity.id}).")
             if entity.type != "npc" and (entity.stock or entity.buy_list or entity.weapon_ids):
                 raise ValueError(f"Only NPCs can have shop stock, buy lists or equipped weapons ({entity.id}).")
             if any(
-                entity_types.get(entry.item_id) not in {"item", "weapon", "shield", "resource"}
+                entity_types.get(entry.item_id) not in ITEM_OR_RESOURCE_TYPES
                 or (entry.currency_id is not None and entry.currency_id not in currencies)
                 for entry in entity.buy_list
             ):
@@ -813,9 +835,7 @@ class WorldContent(BaseModel):
             if any(entity_types.get(weapon_id) != "weapon" for weapon_id in entity.weapon_ids):
                 raise ValueError(f"NPC {entity.id} references a missing or non-weapon entity.")
             if any(
-                entity_types.get(entry.item_id) not in {
-                    "item", "weapon", "shield", "resource"
-                }
+                entity_types.get(entry.item_id) not in ITEM_OR_RESOURCE_TYPES
                 for entry in entity.stock
             ):
                 raise ValueError(f"NPC {entity.id} has stock referencing a missing or invalid item.")
@@ -826,12 +846,10 @@ class WorldContent(BaseModel):
                 raise ValueError(f"NPC {entity.id} has stock priced in a missing currency.")
 
         for recipe in self.recipes:
-            if entity_types.get(recipe.output_item_id) not in {"item", "weapon", "shield"}:
+            if entity_types.get(recipe.output_item_id) not in ITEM_TYPES:
                 raise ValueError(f"Recipe {recipe.id} must produce an existing item, weapon, or shield.")
             if any(
-                entity_types.get(ingredient.item_id) not in {
-                    "item", "weapon", "shield", "resource"
-                }
+                entity_types.get(ingredient.item_id) not in ITEM_OR_RESOURCE_TYPES
                 for ingredient in recipe.ingredients
             ):
                 raise ValueError(f"Recipe {recipe.id} has a missing or invalid ingredient.")
@@ -844,7 +862,7 @@ class WorldContent(BaseModel):
             for step in quest.steps:
                 for objective in step.objectives:
                     valid_types = {
-                        "collect": {"item", "weapon", "shield", "resource"},
+                        "collect": ITEM_OR_RESOURCE_TYPES,
                         "kill": {"enemy"},
                         "talk": {"npc"},
                         "visit": set(),
@@ -859,14 +877,16 @@ class WorldContent(BaseModel):
                             f"Quest {quest.id} has a missing or invalid {objective.type} target."
                         )
             if any(
-                entity_types.get(reward.item_id) not in {
-                    "item", "weapon", "shield", "resource"
-                }
+                entity_types.get(reward.item_id) not in ITEM_OR_RESOURCE_TYPES
                 for reward in quest.reward_items
             ):
                 raise ValueError(f"Quest {quest.id} has a missing or invalid reward item.")
             if any(reward.currency_id not in currencies for reward in quest.reward_currencies):
                 raise ValueError(f"Quest {quest.id} has a reward in a missing currency.")
+            if len(set(quest.reward_die_skin_ids)) != len(quest.reward_die_skin_ids) or any(
+                skin_id not in die_skins for skin_id in quest.reward_die_skin_ids
+            ):
+                raise ValueError(f"Quest {quest.id} has a duplicate or missing die skin reward.")
         return self
 
 

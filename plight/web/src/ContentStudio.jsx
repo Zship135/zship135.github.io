@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, apiBlob } from "./api.js";
 import { restoreLocationSelection } from "./contentStudioSelection.js";
+import { DiePreview } from "./Dice3D.jsx";
 
 const SELECTED_LOCATION_KEY = "plight.content.selectedLocation";
 
@@ -13,13 +14,28 @@ const NAVIGATION = [
   ["items", "Items"],
   ["weapons", "Weapons"],
   ["shields", "Shields"],
+  ["armor", "Armor"],
+  ["necklaces", "Necklaces"],
+  ["rings", "Rings"],
   ["recipes", "Recipes"],
   ["quests", "Quests"],
   ["environment", "Furniture / objects"],
   ["resources", "Resources"],
   ["currencies", "Currencies"],
   ["enchantments", "Enchantments"],
+  ["dieskins", "Die skins"],
 ];
+
+const ITEM_TYPES = ["item", "weapon", "shield", "armor", "ring", "necklace"];
+const ITEM_RESOURCE_TYPES = [...ITEM_TYPES, "resource"];
+const ARMOR_SLOT_OPTIONS = [
+  ["helm", "Helm"], ["tunic", "Tunic"], ["pants", "Pants"],
+  ["sleeves", "Sleeves"], ["gloves", "Gloves"], ["boots", "Boots"],
+].map(([id, name]) => ({ id, name }));
+const PARTICLE_EFFECTS = [
+  ["none", "None"], ["sparks", "Sparks"], ["embers", "Embers"], ["snow", "Snowflakes"],
+  ["bubbles", "Bubbles"], ["stars", "Stars"], ["smoke", "Smoke"],
+].map(([id, name]) => ({ id, name }));
 
 const ACTION_SOUND_OPTIONS = [
   ["observe", "Observe"],
@@ -52,6 +68,9 @@ const ENTITY_TABS = {
   items: ["item", { weight: 1, stack_size: 99, value: 1 }],
   weapons: ["weapon", { damage: 5, speed: 10, stamina_cost: 1, value: 10 }],
   shields: ["shield", { defense: 3, value: 10 }],
+  armor: ["armor", { defense: 3, value: 10 }],
+  necklaces: ["necklace", { value: 10 }],
+  rings: ["ring", { value: 10 }],
   environment: ["furniture", { durability: 100 }],
   resources: ["resource", {}],
 };
@@ -62,6 +81,9 @@ const CATEGORY_NAMES = {
   item: "Items",
   weapon: "Weapons",
   shield: "Shields",
+  armor: "Armor",
+  necklace: "Necklaces",
+  ring: "Rings",
   furniture: "Furniture",
   object: "Objects",
   resource: "Resources",
@@ -422,12 +444,14 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   const quests = content?.quests || [];
   const currencies = content?.currencies || [];
   const enchantments = content?.enchantments || [];
+  const dieSkins = content?.die_skins || [];
+  const currentDieSkin = tab === "dieskins" ? dieSkins.find((item) => item.id === selectedId) : null;
   const currentEnchantment = tab === "enchantments" ? enchantments.find((item) => item.id === selectedId) : null;
   const currentCurrency = tab === "currencies" ? currencies.find((currency) => currency.id === selectedId) : null;
   const currentLocation = content?.locations.find((location) => location.id === selectedId);
   const currentRecipe = recipes.find((recipe) => recipe.id === selectedId);
   const currentQuest = quests.find((quest) => quest.id === selectedId);
-  const currentEntity = ["enemies", "npcs", "items", "weapons", "shields", "environment", "resources"].includes(tab)
+  const currentEntity = Object.keys(ENTITY_TABS).includes(tab)
     ? (content?.entities || []).find((entity) => entity.id === selectedId)
     : null;
   const currentActionSound = tab === "audio"
@@ -443,6 +467,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
     ? ACTION_SOUND_OPTIONS
     : tab === "locations"
       ? content?.locations || []
+        : tab === "dieskins"
+          ? dieSkins
         : tab === "enchantments"
           ? enchantments
         : tab === "currencies"
@@ -480,6 +506,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         ? content.locations
         : nextTab === "map"
           ? content.locations
+          : nextTab === "dieskins"
+            ? content.die_skins || []
           : nextTab === "enchantments"
             ? content.enchantments || []
           : nextTab === "currencies"
@@ -530,7 +558,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
     }
     if (tab === "quests") {
       const giver = content.entities.find((entity) => entity.type === "npc");
-      const item = content.entities.find((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type));
+      const item = content.entities.find((entity) => ITEM_RESOURCE_TYPES.includes(entity.type));
       const enemy = content.entities.find((entity) => entity.type === "enemy");
       const location = content.locations[0];
       if (!giver || (!item && !enemy && !location)) {
@@ -565,6 +593,17 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
       setSelectedId(id);
       return;
     }
+    if (tab === "dieskins") {
+      const id = makeId("new_die_skin", new Set(dieSkins.map((item) => item.id)));
+      updateContent((next) => {
+        next.die_skins = [...(next.die_skins || []), {
+          id, name: "New die skin", description: "", face_color: "#856432", edge_color: "#d9c67a",
+          number_color: "#f3e7b0", glow_color: null, particle_effect: "sparks", particle_color: "#ffd27a",
+        }];
+      });
+      setSelectedId(id);
+      return;
+    }
     if (tab === "enchantments") {
       const id = makeId("new_enchantment", new Set(enchantments.map((item) => item.id)));
       updateContent((next) => {
@@ -585,8 +624,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
       return;
     }
     if (tab === "recipes") {
-      const product = content.entities.find((entity) => ["item", "weapon", "shield"].includes(entity.type));
-      const ingredient = content.entities.find((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type));
+      const product = content.entities.find((entity) => ITEM_TYPES.includes(entity.type));
+      const ingredient = content.entities.find((entity) => ITEM_RESOURCE_TYPES.includes(entity.type));
       if (!product || !ingredient) {
         setError("Create at least one item, weapon, or shield and one ingredient before adding a recipe.");
         return;
@@ -619,7 +658,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         attributes: { ...defaultAttributes },
         ...(type === "furniture" || type === "object" ? { interaction_effect: null } : {}),
         ...(type === "item" ? { item_use: null } : {}),
-        ...(["item", "weapon", "shield"].includes(type) ? { enchantment_ids: [], is_map: false } : {}),
+        ...(ITEM_TYPES.includes(type) ? { enchantment_ids: [], is_map: false } : {}),
+        ...(type === "armor" ? { armor_slot: "tunic" } : {}),
         ...(type === "resource" ? { gathering: null } : {}),
         ...(type === "enemy" ? {
           attack_die_sides: 2,
@@ -644,10 +684,15 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   }
 
   function deleteEntry() {
-    const name = currentLocation?.name || currentRecipe?.name || currentQuest?.title || currentEntity?.name || currentCurrency?.name || currentEnchantment?.name;
+    const name = currentLocation?.name || currentRecipe?.name || currentQuest?.title || currentEntity?.name || currentCurrency?.name || currentEnchantment?.name || currentDieSkin?.name;
     if (!name || !window.confirm(`Delete "${name}"? References to this content will be removed.`)) return;
     updateContent((next) => {
-      if (tab === "enchantments") {
+      if (tab === "dieskins") {
+        next.die_skins = (next.die_skins || []).filter((item) => item.id !== selectedId);
+        for (const quest of next.quests) {
+          if (quest.reward_die_skin_ids) quest.reward_die_skin_ids = quest.reward_die_skin_ids.filter((id) => id !== selectedId);
+        }
+      } else if (tab === "enchantments") {
         next.enchantments = (next.enchantments || []).filter((item) => item.id !== selectedId);
         for (const entity of next.entities) {
           if (entity.enchantment_ids) entity.enchantment_ids = entity.enchantment_ids.filter((id) => id !== selectedId);
@@ -725,7 +770,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
           recipe.ingredients = recipe.ingredients.filter((entry) => entry.item_id !== selectedId);
         }
         next.recipes = next.recipes.filter((recipe) => recipe.ingredients.length > 0);
-        if (removed?.type === "item" || removed?.type === "weapon" || removed?.type === "shield" || removed?.type === "resource") {
+        if (ITEM_RESOURCE_TYPES.includes(removed?.type)) {
           for (const entity of next.entities) {
             entity.stock = entity.stock.filter((entry) => entry.item_id !== selectedId);
           }
@@ -798,8 +843,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   }
 
   const locationsById = new Map((content?.locations || []).map((location) => [location.id, location]));
-  const eligibleItems = (content?.entities || []).filter((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type));
-  const eligibleOutputs = (content?.entities || []).filter((entity) => ["item", "weapon", "shield"].includes(entity.type));
+  const eligibleItems = (content?.entities || []).filter((entity) => ITEM_RESOURCE_TYPES.includes(entity.type));
+  const eligibleOutputs = (content?.entities || []).filter((entity) => ITEM_TYPES.includes(entity.type));
   const eligibleStations = (content?.entities || []).filter((entity) => ["furniture", "object"].includes(entity.type));
 
   return (
@@ -838,7 +883,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
             {NAVIGATION.map(([id, label]) => (
               <button aria-current={tab === id ? "page" : undefined} className={tab === id ? "active" : ""} key={id} onClick={() => changeTab(id)} type="button">
                 <span>{label}</span>
-                <small>{id === "map" || id === "locations" ? content.locations.length : id === "audio" ? Object.keys(content.action_sounds || {}).length : id === "recipes" ? content.recipes.length : id === "currencies" ? currencies.length : id === "enchantments" ? enchantments.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
+                <small>{id === "map" || id === "locations" ? content.locations.length : id === "audio" ? Object.keys(content.action_sounds || {}).length : id === "recipes" ? content.recipes.length : id === "currencies" ? currencies.length : id === "enchantments" ? enchantments.length : id === "dieskins" ? dieSkins.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
               </button>
             ))}
             <div className="studio-nav-note">
@@ -884,7 +929,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                     ))}
                     {currentEntries.length === 0 && <p className="studio-empty">Nothing here yet. Use + to create one.</p>}
                   </div>
-                  {(currentLocation || currentRecipe || currentQuest || currentEntity || currentCurrency) && (
+                  {(currentLocation || currentRecipe || currentQuest || currentEntity || currentCurrency || currentEnchantment || currentDieSkin) && (
                     <button className="studio-delete-button" onClick={deleteEntry} type="button">Delete selected</button>
                   )}
                 </aside>
@@ -917,7 +962,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       })}
                     />
                   )}
-                  {currentEntity && ["enemies", "npcs", "items", "weapons", "shields", "environment", "resources"].includes(tab) && (
+                  {currentEntity && Object.keys(ENTITY_TABS).includes(tab) && (
                     <EntityEditor
                       entity={currentEntity}
                       locations={content.locations}
@@ -942,6 +987,15 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       onChange={(field, value) => updateContent((next) => {
                         const item = next.enchantments.find((entry) => entry.id === selectedId);
                         if (item) item[field] = value;
+                      })}
+                    />
+                  )}
+                  {currentDieSkin && tab === "dieskins" && (
+                    <DieSkinEditor
+                      skin={currentDieSkin}
+                      onChange={(field, value) => updateContent((next) => {
+                        const skin = next.die_skins.find((item) => item.id === selectedId);
+                        if (skin) skin[field] = value;
                       })}
                     />
                   )}
@@ -972,6 +1026,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       npcs={content.entities.filter((entity) => entity.type === "npc")}
                       entities={content.entities}
                       currencies={currencies}
+                      dieSkins={dieSkins}
                       locations={content.locations}
                       onChange={(field, value) => updateContent((next) => {
                         const quest = next.quests.find((item) => item.id === selectedId);
@@ -979,7 +1034,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       })}
                     />
                   )}
-                  {!currentLocation && !currentEntity && !currentRecipe && !currentQuest && !currentCurrency && !currentEnchantment && <div className="studio-empty-detail">Select an entry or create a new one.</div>}
+                  {!currentLocation && !currentEntity && !currentRecipe && !currentQuest && !currentCurrency && !currentEnchantment && !currentDieSkin && <div className="studio-empty-detail">Select an entry or create a new one.</div>}
                 </div>
               </div>
             )}
@@ -1170,7 +1225,7 @@ function EntityEditor({ entity, entities, currencies = [], enchantments = [], lo
     object: "object_ids",
     resource: "resource_ids",
   }[entity.type];
-  const stockOptions = entities.filter((item) => ["item", "weapon", "shield", "resource"].includes(item.type));
+  const stockOptions = entities.filter((item) => ITEM_RESOURCE_TYPES.includes(item.type));
   const weaponOptions = entities.filter((item) => item.type === "weapon");
 
   function set(field, value) {
@@ -1310,6 +1365,9 @@ function EntityEditor({ entity, entities, currencies = [], enchantments = [], lo
             />
           </>
         )}
+        {entity.type === "armor" && (
+          <SelectField label="Body slot" options={ARMOR_SLOT_OPTIONS} value={entity.armor_slot} onChange={(value) => set("armor_slot", value || "tunic")} />
+        )}
         <div className="studio-attribute-list">
           {Object.entries(entity.attributes).map(([key, value]) => (
             <div className="studio-attribute-row" key={key}>
@@ -1336,7 +1394,7 @@ function EntityEditor({ entity, entities, currencies = [], enchantments = [], lo
           {Object.keys(entity.attributes).length === 0 && <p className="studio-hint">No attributes. Add stats such as health, speed, damage, or value.</p>}
         </div>
       </section>
-      {["item", "weapon", "shield"].includes(entity.type) && (
+      {ITEM_TYPES.includes(entity.type) && (
         <section className="studio-subsection">
           <h3>Enchantments and curses</h3>
           <p className="studio-hint">
@@ -1797,7 +1855,7 @@ function LootTableEditor({
   );
 }
 
-function QuestEditor({ quest, npcs, entities, currencies = [], locations, onChange }) {
+function QuestEditor({ quest, npcs, entities, currencies = [], dieSkins = [], locations, onChange }) {
   function set(field, value) {
     onChange((current, next) => { current[field] = next; }, value);
   }
@@ -1812,7 +1870,7 @@ function QuestEditor({ quest, npcs, entities, currencies = [], locations, onChan
   function targetsFor(type) {
     if (type === "visit") return locations;
     const validTypes = {
-      collect: ["item", "weapon", "shield", "resource"],
+      collect: ITEM_RESOURCE_TYPES,
       kill: ["enemy"],
       talk: ["npc"],
     }[type] || [];
@@ -2044,9 +2102,9 @@ function QuestEditor({ quest, npcs, entities, currencies = [], locations, onChan
           <div><h3>Item rewards</h3><p>Players receive these when they return to the giver for final turn-in.</p></div>
           <button
             className="studio-small-button"
-            disabled={(quest.reward_items || []).length >= 20 || !entities.some((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type))}
+            disabled={(quest.reward_items || []).length >= 20 || !entities.some((entity) => ITEM_RESOURCE_TYPES.includes(entity.type))}
             onClick={() => onChange((current) => {
-              const rewardItems = entities.filter((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type));
+              const rewardItems = entities.filter((entity) => ITEM_RESOURCE_TYPES.includes(entity.type));
               if (!rewardItems.length) return;
               current.reward_items.push({ item_id: rewardItems[0].id, quantity: 1 });
             })}
@@ -2059,7 +2117,7 @@ function QuestEditor({ quest, npcs, entities, currencies = [], locations, onChan
           <div className="studio-quest-objective" key={`${reward.item_id}-${index}`}>
             <SelectField
               label="Reward item"
-              options={entities.filter((entity) => ["item", "weapon", "shield", "resource"].includes(entity.type))}
+              options={entities.filter((entity) => ITEM_RESOURCE_TYPES.includes(entity.type))}
               value={reward.item_id}
               onChange={(itemId) => onChange((current) => { current.reward_items[index].item_id = itemId; })}
             />
@@ -2122,6 +2180,24 @@ function QuestEditor({ quest, npcs, entities, currencies = [], locations, onChan
           </div>
         ))}
         {currencies.length === 0 && <p className="studio-hint">Create a currency in the Currencies section first.</p>}
+      </section>
+      <section className="studio-subsection">
+        <h3>Die skin rewards</h3>
+        {dieSkins.map((skin) => (
+          <label className="studio-field studio-inline-check" key={skin.id}>
+            <span>{skin.name}</span>
+            <input
+              checked={(quest.reward_die_skin_ids || []).includes(skin.id)}
+              onChange={(event) => onChange((current) => {
+                const ids = new Set(current.reward_die_skin_ids || []);
+                if (event.target.checked) ids.add(skin.id); else ids.delete(skin.id);
+                current.reward_die_skin_ids = [...ids];
+              })}
+              type="checkbox"
+            />
+          </label>
+        ))}
+        {dieSkins.length === 0 && <p className="studio-hint">Create a skin in the Die skins section first.</p>}
       </section>
       <p className="studio-hint">To gate a passage, select this quest as the exit requirement in the destination location's editor.</p>
     </div>
@@ -2234,6 +2310,42 @@ function EnchantmentEditor({ enchantment, onChange }) {
           </section>
         ))}
       </section>
+    </div>
+  );
+}
+
+function DieSkinEditor({ skin, onChange }) {
+  const colorField = (label, field, optional = false) => (
+    <label className="studio-field">
+      <span>{label}</span>
+      <span className="studio-color-row">
+        <input
+          onChange={(event) => onChange(field, event.target.value)}
+          type="color"
+          value={skin[field] || "#000000"}
+        />
+        {optional && (
+          <button className="studio-secondary-button" onClick={() => onChange(field, null)} type="button">
+            {skin[field] ? "Remove" : "None"}
+          </button>
+        )}
+      </span>
+    </label>
+  );
+  return (
+    <div className="studio-form">
+      <div className="studio-form-heading"><p className="eyebrow">DIE SKIN</p><h2>{skin.name}</h2></div>
+      <Field label="Name" onChange={(value) => onChange("name", value)} value={skin.name} />
+      <TextAreaField label="Description" onChange={(value) => onChange("description", value)} rows={3} value={skin.description || ""} />
+      {colorField("Face color", "face_color")}
+      {colorField("Edge color", "edge_color")}
+      {colorField("Number color", "number_color")}
+      {colorField("Glow color (optional)", "glow_color", true)}
+      <SelectField label="Particle effect" options={PARTICLE_EFFECTS} value={skin.particle_effect} onChange={(value) => onChange("particle_effect", value || "none")} />
+      {colorField("Particle color", "particle_color")}
+      <p className="studio-hint">Preview</p>
+      <DiePreview skin={skin} />
+      <p className="studio-hint">Players unlock skins from quest rewards (set them in the Quests tab) and pick the active one from the Dice button.</p>
     </div>
   );
 }

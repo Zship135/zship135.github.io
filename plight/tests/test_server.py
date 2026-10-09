@@ -3760,3 +3760,65 @@ def test_craft_multiple_scales_ingredients(tmp_path: Any, monkeypatch: pytest.Mo
         assert game.resolve_command(text, character)["messages"][0] == "You craft 6 Cow Hides."
     assert character.inventory == {"raw": 1, "hide": 6}
     assert game.resolve_command("craft cow hide", _enchant_character(inventory={"raw": 3}))["messages"][0] == "You craft 2 Cow Hides."
+
+
+def _gear_world(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    world = content_store.WorldContent.model_validate(
+        {
+            "locations": [{"id": "a", "name": "A", "description": "d", "position": {"x": 0, "y": 0},
+                           "starting_species": ["human", "goblin"]}],
+            "enchantments": [{"id": "might", "name": "Might", "effects": [
+                {"type": "stat_modifier", "stat": "attack", "mode": "flat", "amount": 4}]}],
+            "die_skins": [{"id": "ember", "name": "Ember", "particle_effect": "embers", "glow_color": "#ff6600"}],
+            "entities": [
+                {"id": "cap", "type": "armor", "name": "Iron Cap", "description": "x",
+                 "armor_slot": "helm", "attributes": {"defense": 4}},
+                {"id": "band", "type": "ring", "name": "Band", "description": "x",
+                 "attributes": {"defense": 1}, "enchantment_ids": ["might"]},
+                {"id": "chain", "type": "necklace", "name": "Chain", "description": "x"},
+            ],
+            "quests": [],
+        }
+    )
+    path = tmp_path / "world_content.json"
+    path.write_text(world.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", path)
+    return world.model_dump(mode="json")
+
+
+def test_armor_rings_and_necklaces_equip_and_apply(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = _gear_world(tmp_path, monkeypatch)
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    character = _enchant_character(inventory={"cap": 1, "band": 2, "chain": 1})
+    base = game._effective_stats(character, entities)
+    assert game.resolve_command("equip iron cap", character)["messages"][0].endswith("in your helm.")
+    assert game.resolve_command("equip band", character)["messages"][0].endswith("in your ring 1.")
+    assert game.resolve_command("equip band", character)["messages"][0].endswith("in your ring 2.")
+    assert game.resolve_command("equip chain", character)["messages"][0].endswith("in your necklace 1.")
+    assert "cannot be equipped in your boots" in game.resolve_command("equip iron cap on boots", character)["messages"][0]
+    stats = game._effective_stats(character, entities)
+    assert stats["defense"] == base["defense"] + 4 + 2
+    assert stats["attack"] == base["attack"] + 8
+    state = game.snapshot(character)
+    assert state["character"]["equipment"]["helm"] == "cap"
+    assert next(i for i in state["character"]["inventory_items"] if i["id"] == "cap")["equipable_slots"] == ["helm"]
+
+
+def test_gear_validation_and_die_skins(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    content = _gear_world(tmp_path, monkeypatch)
+    for extra in (
+        {"entities": [{"id": "x", "type": "armor", "name": "X", "description": "x"}]},
+        {"die_skins": [{"id": "x", "name": "X", "face_color": "red"}]},
+    ):
+        with pytest.raises(ValueError):
+            content_store.WorldContent.model_validate({**{k: v for k, v in content.items() if k in ("locations",)}, **extra})
+    character = _enchant_character()
+    assert game._die_skin_view(character, content) == {"active_id": None, "unlocked": []}
+    assert game.grant_die_skins(character, content, ["ember", "ember", "missing"]) == [
+        "Reward: the Ember die skin."
+    ]
+    character.active_die_skin = "ember"
+    view = game._die_skin_view(character, content)
+    assert view["active_id"] == "ember" and view["unlocked"][0]["particle_effect"] == "embers"
