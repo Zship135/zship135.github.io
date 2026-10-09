@@ -1562,6 +1562,7 @@ export default function App() {
                 <article className="world-entity npc-entity" key={npc.id}>
                   <strong>{npc.name}</strong><p>{npc.description}</p>
                   <button onClick={() => enterCommand(`talk to ${npc.name}`)} type="button">Talk</button>
+                  {npc.has_shop && <button onClick={() => runCommand(`buy from ${npc.name}`)} type="button">Shop</button>}
                   {(npc.quests || []).map((quest) => (
                     <section className="quest-offer" key={quest.id}>
                       <h3>{quest.title}</h3>

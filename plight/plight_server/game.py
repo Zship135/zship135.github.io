@@ -1335,6 +1335,10 @@ def _snapshot(
                 "name": entities[entity_id]["name"],
                 "description": entities[entity_id]["description"],
                 "type": entities[entity_id]["type"],
+                "has_shop": bool(
+                    entities[entity_id]["type"] == "npc"
+                    and (entities[entity_id].get("stock") or entities[entity_id].get("buy_list"))
+                ),
                 **(
                     {"gathering": entities[entity_id]["gathering"]}
                     if entities[entity_id]["type"] == "resource"
