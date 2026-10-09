@@ -2096,7 +2096,7 @@ def _craft(
         arguments, "recipe", "product", "item", "subject", "target"
     )
     recipes = content.get("recipes", [])
-    matches = _matching_entities(subject, recipes) if subject else recipes
+    matches = _matching_items(subject, recipes) if subject else recipes
     if len(matches) > 1:
         return [f"Which recipe do you mean: {', '.join(item['name'] for item in matches)}?"]
     if not matches:
