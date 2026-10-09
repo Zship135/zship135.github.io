@@ -142,6 +142,7 @@ a { color: inherit; text-decoration: none; }
 .d20-label { color: #b9a76a; font: 10px var(--mono); opacity: 0; transition: opacity .3s; }
 .d20-label.revealed { opacity: 1; color: #eee0a2; }
 .side-column { display: grid; gap: 16px; }
+.world-layout { grid-template-rows: auto 1fr; }
 .world-layout > .activity-panel { grid-column: 1; grid-row: 1; }
 .world-layout > .side-column { grid-column: 2; grid-row: 1 / span 2; }
 .lower-panels { grid-column: 1; grid-row: 2; display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 16px; align-items: start; }
@@ -404,6 +405,7 @@ a { color: inherit; text-decoration: none; }
   .activity-panel { height: min(72vh, 720px); min-height: 460px; }
   .side-column { display: contents; }
   .atmosphere-panel { order: 1; }
+  .world-layout { grid-template-rows: none; }
   .world-layout > .activity-panel, .world-layout > .side-column, .lower-panels { grid-column: 1; grid-row: auto; }
   .lower-panels { grid-template-columns: 1fr; order: 4; }
   .chat-panel { min-height: 350px; }
