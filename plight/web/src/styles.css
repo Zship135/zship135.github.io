@@ -142,6 +142,9 @@ a { color: inherit; text-decoration: none; }
 .d20-label { color: #b9a76a; font: 10px var(--mono); opacity: 0; transition: opacity .3s; }
 .d20-label.revealed { opacity: 1; color: #eee0a2; }
 .side-column { display: grid; gap: 16px; }
+.lower-panels { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.quest-tracker-panel { background: linear-gradient(160deg, #211a15, var(--panel) 70%); }
+.quest-tracker-panel .location-content { max-height: 440px; overflow-y: auto; }
 .location-content-panel { background: linear-gradient(160deg, #211a15, var(--panel) 70%); }
 .location-content { display: grid; gap: 13px; padding: 15px 17px; }
 .location-description { margin: 0; color: var(--world-text); font-size: 12px; line-height: 1.6; }
@@ -399,7 +402,8 @@ a { color: inherit; text-decoration: none; }
   .activity-panel { height: min(72vh, 720px); min-height: 460px; }
   .side-column { display: contents; }
   .atmosphere-panel { order: 1; }
-  .chat-panel { order: 2; min-height: 350px; }
+  .lower-panels { grid-template-columns: 1fr; order: 4; }
+  .chat-panel { min-height: 350px; }
   .people-panel { order: 3; }
   .activity-panel { order: 0; }
   .studio-shell { padding: 0 12px 20px; }

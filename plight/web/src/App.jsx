@@ -1608,46 +1608,6 @@ export default function App() {
                   ))}
                 </article>
               )} />
-              <WorldEntityList
-                title="Quest tracker"
-                entities={snapshot?.quest_log || []}
-                renderItem={(quest) => (
-                  <article className="quest-tracker-entry" key={quest.id}>
-                    <div className="quest-tracker-heading">
-                      <strong>{quest.title}</strong>
-                      <span className={`quest-status ${quest.status}`}>{quest.status}</span>
-                    </div>
-                    <p>{quest.description}</p>
-                    <small>Given by {quest.giver_name}</small>
-                    {quest.current_step_title && <strong className="quest-step-title">{quest.current_step_title}</strong>}
-                    {quest.step_description && <p>{quest.step_description}</p>}
-                    {quest.objectives.map((objective) => (
-                      <p className="quest-objective" key={objective.id}>
-                        {objective.type === "collect" ? "Collect" : objective.type === "kill" ? "Defeat" : objective.type === "talk" ? "Talk to" : "Visit"} {objective.target_name}: {objective.current}/{objective.required}
-                      </p>
-                    ))}
-                    {quest.can_choose && (
-                      <div className="quest-step-choices">
-                        {quest.choices.map((choice) => (
-                          <button
-                            className="dialogue-choice-button"
-                            disabled={questBusyId === quest.id}
-                            key={choice.id}
-                            onClick={() => runQuestAction(quest, "choose", {
-                              step_id: quest.current_step_id,
-                              choice_id: choice.id,
-                            })}
-                            type="button"
-                          >
-                            {choice.text}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {quest.can_turn_in && <small>Return to {quest.giver_name} to claim your rewards.</small>}
-                  </article>
-                )}
-              />
               <WorldEntityList title="Enemies" entities={snapshot?.area?.enemies || []} renderItem={(enemy) => (
                 <article className="world-entity enemy-entity" key={enemy.id}>
                   <strong>{enemy.name}</strong>
@@ -1701,16 +1661,63 @@ export default function App() {
               </div>
             </dl>
           </section>
-          <ChatPanel
-            activeChannel={activeChannel}
-            channels={channels}
-            messages={messages}
-            onClose={closeChannel}
-            onPrivateChat={openPrivateChat}
-            onSelect={setActiveChannelId}
-            onSend={sendChat}
-          />
         </aside>
+        <div className="lower-panels">
+          <section className="panel quest-tracker-panel" aria-label="Quest tracker">
+            <header className="panel-heading compact"><h2>Quest tracker</h2></header>
+            <div className="location-content">
+          <WorldEntityList
+            title="Active quests"
+            entities={snapshot?.quest_log || []}
+            renderItem={(quest) => (
+              <article className="quest-tracker-entry" key={quest.id}>
+                <div className="quest-tracker-heading">
+                  <strong>{quest.title}</strong>
+                  <span className={`quest-status ${quest.status}`}>{quest.status}</span>
+                </div>
+                <p>{quest.description}</p>
+                <small>Given by {quest.giver_name}</small>
+                {quest.current_step_title && <strong className="quest-step-title">{quest.current_step_title}</strong>}
+                {quest.step_description && <p>{quest.step_description}</p>}
+                {quest.objectives.map((objective) => (
+                  <p className="quest-objective" key={objective.id}>
+                    {objective.type === "collect" ? "Collect" : objective.type === "kill" ? "Defeat" : objective.type === "talk" ? "Talk to" : "Visit"} {objective.target_name}: {objective.current}/{objective.required}
+                  </p>
+                ))}
+                {quest.can_choose && (
+                  <div className="quest-step-choices">
+                    {quest.choices.map((choice) => (
+                      <button
+                        className="dialogue-choice-button"
+                        disabled={questBusyId === quest.id}
+                        key={choice.id}
+                        onClick={() => runQuestAction(quest, "choose", {
+                          step_id: quest.current_step_id,
+                          choice_id: choice.id,
+                        })}
+                        type="button"
+                      >
+                        {choice.text}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {quest.can_turn_in && <small>Return to {quest.giver_name} to claim your rewards.</small>}
+              </article>
+            )}
+          />
+            </div>
+          </section>
+        <ChatPanel
+          activeChannel={activeChannel}
+          channels={channels}
+          messages={messages}
+          onClose={closeChannel}
+          onPrivateChat={openPrivateChat}
+          onSelect={setActiveChannelId}
+          onSend={sendChat}
+        />
+        </div>
       </main>
 
       {diceOpen && (
