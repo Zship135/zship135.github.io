@@ -511,17 +511,18 @@ a { color: inherit; text-decoration: none; }
 .shop-section-label { margin: 10px 0 4px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .7; }
 
 .world-exit.quest-path button { border-color: #e0b84a; color: #f3d77a; box-shadow: 0 0 8px rgba(224, 184, 74, 0.45); }
-.world-map-dialog { width: min(720px, 94vw); }
-.world-map-svg { width: 100%; max-height: 60vh; background: rgba(0, 0, 0, 0.35); border-radius: 8px; }
+.world-map-dialog { width: min(820px, 96vw); }
+.world-map-scroll { overflow: auto; max-height: 62vh; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); border-radius: 8px; }
+.world-map-svg { display: block; margin: 0 auto; max-width: none; }
 .world-map-quest { color: #f3d77a; margin: 0 0 0.5rem; }
-.map-edge { stroke: #5a6270; stroke-width: 0.6; }
-.map-edge.route { stroke: #e0b84a; stroke-width: 1.2; }
-.map-node circle { fill: #8793a6; }
-.map-node.unvisited circle { fill: #3c4350; }
-.map-node.route circle { fill: #c9a23c; }
-.map-node.destination circle { fill: #ff7a45; }
-.map-node.current circle { fill: #ffd65c; stroke: #fff; stroke-width: 0.6; }
-.map-node text { fill: #d8dde6; font-size: 2.6px; text-anchor: middle; }
+.map-edge { stroke: #5a6270; stroke-width: 2; }
+.map-edge.route { stroke: #e0b84a; stroke-width: 4; }
+.map-node rect { fill: #232831; stroke: #8793a6; stroke-width: 1.5; }
+.map-node.unvisited rect { fill: #14171c; stroke: #3c4350; stroke-dasharray: 4 3; }
+.map-node.route rect { stroke: #c9a23c; stroke-width: 2.5; }
+.map-node.destination rect { fill: #3a2417; stroke: #ff7a45; stroke-width: 2.5; }
+.map-node.current rect { fill: #3b3216; stroke: #ffd65c; stroke-width: 3; }
+.map-node text { fill: #e6e9ef; font: 13px var(--serif); pointer-events: none; }
 .map-node.unvisited text { fill: #7d8696; }
 
 .book-page { white-space: pre-wrap; font-family: Georgia, serif; line-height: 1.6; }

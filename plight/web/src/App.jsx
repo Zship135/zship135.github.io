@@ -3,6 +3,7 @@ import { api, apiBlob, liveUrl } from "./api.js";
 import ContentStudio from "./ContentStudio.jsx";
 import Dice3D, { DiePreview } from "./Dice3D.jsx";
 import { friendAction } from "./playerProfile.js";
+import { layoutMap, wrapLabel } from "./mapLayout.js";
 import {
   EQUIPMENT_SLOT_GROUPS,
   EQUIPMENT_SLOT_LABELS,
@@ -2036,20 +2037,35 @@ function DiceSkinDialog({ busy, dieSkins, error, onClose, onSelect }) {
   );
 }
 
+const MAP_CELL_W = 150;
+const MAP_CELL_H = 84;
+const MAP_BOX_W = 116;
+const MAP_BOX_H = 52;
+
 function WorldMapDialog({ onClose, questPath, worldMap }) {
   const locations = worldMap.locations;
-  const byId = Object.fromEntries(locations.map((location) => [location.id, location]));
+  const cells = layoutMap(locations, worldMap.current_id);
   const routeIds = questPath?.route || [];
   const routeEdges = new Set(routeIds.slice(1).map((id, index) => `${routeIds[index]}>${id}`));
-  const xs = locations.map((location) => location.x);
-  const ys = locations.map((location) => location.y);
-  const minX = Math.min(...xs) - 10;
-  const minY = Math.min(...ys) - 10;
-  const width = Math.max(40, Math.max(...xs) - minX + 10);
-  const height = Math.max(40, Math.max(...ys) - minY + 10);
-  const edges = locations.flatMap((location) => Object.values(location.exits)
-    .filter((destination) => byId[destination])
-    .map((destination) => ({ from: location, to: byId[destination] })));
+  const points = locations.map((location) => {
+    const cell = cells.get(location.id) || { x: 0, y: 0 };
+    return { location, cx: cell.x * MAP_CELL_W, cy: cell.y * MAP_CELL_H };
+  });
+  const pointById = Object.fromEntries(points.map((point) => [point.location.id, point]));
+  const minX = Math.min(...points.map((point) => point.cx)) - MAP_CELL_W / 2;
+  const maxX = Math.max(...points.map((point) => point.cx)) + MAP_CELL_W / 2;
+  const minY = Math.min(...points.map((point) => point.cy)) - MAP_CELL_H / 2;
+  const maxY = Math.max(...points.map((point) => point.cy)) + MAP_CELL_H / 2;
+  const seen = new Set();
+  const edges = [];
+  for (const { location } of points) {
+    for (const destination of Object.values(location.exits)) {
+      const pairKey = [location.id, destination].sort().join("|");
+      if (!pointById[destination] || seen.has(pairKey)) continue;
+      seen.add(pairKey);
+      edges.push({ from: pointById[location.id], to: pointById[destination] });
+    }
+  }
   return (
     <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section aria-labelledby="world-map-title" aria-modal="true" className="inventory-dialog world-map-dialog" role="dialog">
@@ -2062,30 +2078,40 @@ function WorldMapDialog({ onClose, questPath, worldMap }) {
             {routeIds.length > 1 ? ` (${routeIds.length - 1} step${routeIds.length === 2 ? "" : "s"} away)` : ""}
           </p>
         )}
-        <svg className="world-map-svg" role="img" aria-label="Known locations" viewBox={`${minX} ${minY} ${width} ${height}`}>
-          {edges.map(({ from, to }) => {
-            const onRoute = routeEdges.has(`${from.id}>${to.id}`) || routeEdges.has(`${to.id}>${from.id}`);
-            return (
-              <line className={onRoute ? "map-edge route" : "map-edge"} key={`${from.id}-${to.id}`} x1={from.x} x2={to.x} y1={from.y} y2={to.y} />
-            );
-          })}
-          {locations.map((location) => {
-            const classes = [
-              "map-node",
-              location.visited ? "visited" : "unvisited",
-              location.id === worldMap.current_id ? "current" : "",
-              routeIds.includes(location.id) ? "route" : "",
-              questPath?.destination_ids?.includes(location.id) ? "destination" : "",
-            ].join(" ");
-            return (
-              <g className={classes} key={location.id}>
-                <circle cx={location.x} cy={location.y} r="2.4" />
-                <text x={location.x} y={location.y + 6}>{location.name}</text>
-              </g>
-            );
-          })}
-        </svg>
-        <p className="studio-hint">Dim locations are adjacent areas you have not visited yet. Gold marks your current location.</p>
+        <div className="world-map-scroll">
+          <svg
+            aria-label="Known locations"
+            className="world-map-svg"
+            role="img"
+            style={{ width: Math.max(320, maxX - minX), height: maxY - minY }}
+            viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`}
+          >
+            {edges.map(({ from, to }) => {
+              const onRoute = routeEdges.has(`${from.location.id}>${to.location.id}`) || routeEdges.has(`${to.location.id}>${from.location.id}`);
+              return <line className={onRoute ? "map-edge route" : "map-edge"} key={`${from.location.id}-${to.location.id}`} x1={from.cx} x2={to.cx} y1={from.cy} y2={to.cy} />;
+            })}
+            {points.map(({ location, cx, cy }) => {
+              const classes = [
+                "map-node",
+                location.visited ? "visited" : "unvisited",
+                location.id === worldMap.current_id ? "current" : "",
+                routeIds.includes(location.id) ? "route" : "",
+                questPath?.destination_ids?.includes(location.id) ? "destination" : "",
+              ].join(" ");
+              const lines = wrapLabel(location.name);
+              return (
+                <g className={classes} key={location.id}>
+                  <title>{location.visited ? location.name : `${location.name} (unexplored)`}</title>
+                  <rect height={MAP_BOX_H} rx="6" width={MAP_BOX_W} x={cx - MAP_BOX_W / 2} y={cy - MAP_BOX_H / 2} />
+                  <text textAnchor="middle" x={cx} y={cy - ((lines.length - 1) * 7) + 4}>
+                    {lines.map((line, index) => <tspan dy={index ? 14 : 0} key={line} x={cx}>{line}</tspan>)}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+        <p className="studio-hint">Dim boxes are adjacent areas you have not explored yet. Gold marks your current location; the highlighted trail leads to your active quest.</p>
       </section>
     </div>
   );
