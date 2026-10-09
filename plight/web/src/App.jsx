@@ -127,6 +127,8 @@ function ChatPanel({ activeChannel, channels, messages, onClose, onSelect, onSen
   );
 }
 
+import { SpellEffectsOverlay, SpellsDialog } from "./Spells.jsx";
+
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY));
   const [accountId, setAccountId] = useState(() => sessionStorage.getItem(ACCOUNT_KEY));
@@ -328,6 +330,8 @@ export default function App() {
   const [inventoryView, setInventoryView] = useState(null);
   const [mapOpen, setMapOpen] = useState(false);
   const [diceOpen, setDiceOpen] = useState(false);
+  const [spellsOpen, setSpellsOpen] = useState(false);
+  const [activeCasts, setActiveCasts] = useState([]);
   const [diceBusy, setDiceBusy] = useState(false);
   const [diceError, setDiceError] = useState("");
   const [notice, setNotice] = useState("");
@@ -1031,6 +1035,7 @@ export default function App() {
         result.result?.snapshot?.action_sounds || snapshot?.action_sounds,
       );
       setActivity((current) => upsertActivity(current, result));
+      if (result.result?.spell_casts?.length) setActiveCasts(result.result.spell_casts);
       if (result.result?.inventory_view) setInventoryView(result.result.inventory_view);
       const observedAccountId = result.result?.profile_account_ids?.[0];
       if (observedAccountId) {
@@ -1353,6 +1358,7 @@ export default function App() {
         <div className="topbar-right">
           <button className="text-button" onClick={() => setInventoryView("all")} type="button">Inventory</button>
           {(snapshot?.character?.die_skins?.unlocked || []).length > 0 && <button className="text-button" onClick={() => setDiceOpen(true)} type="button">Dice</button>}
+          {snapshot?.magic && <button className="text-button" onClick={() => setSpellsOpen(true)} type="button">Spells</button>}
           {snapshot?.character?.has_map && <button className="text-button" onClick={() => setMapOpen(true)} type="button">Map</button>}
           <button className="text-button" onClick={openPeople} type="button">Party & friends</button>
           <button className="text-button" onClick={openOwnProfile} type="button">My profile</button>
@@ -1696,6 +1702,17 @@ export default function App() {
           onSelect={selectDieSkin}
         />
       )}
+
+      {spellsOpen && snapshot?.magic && (
+        <SpellsDialog
+          busy={commandBusy}
+          enemies={snapshot?.area?.enemies || []}
+          magic={snapshot.magic}
+          onCast={runCommand}
+          onClose={() => setSpellsOpen(false)}
+        />
+      )}
+      <SpellEffectsOverlay casts={activeCasts} onDone={() => setActiveCasts([])} />
 
       {mapOpen && snapshot?.world_map && (
         <WorldMapDialog onClose={() => setMapOpen(false)} questPath={snapshot.quest_path} worldMap={snapshot.world_map} />
@@ -2128,7 +2145,7 @@ const BODY_SLOTS = [
   ["boots", "top: 86%; left: 50%"],
 ];
 const RING_SLOTS = ["ring_1", "ring_2", "ring_3", "ring_4", "ring_5"];
-const NECKLACE_SLOTS = ["necklace_1", "necklace_2"];
+const NECKLACE_SLOTS = ["necklace_1", "necklace_2", "spellbook"];
 
 function ItemStats({ item }) {
   const stats = Object.entries(item.stats || {});

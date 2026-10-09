@@ -17,7 +17,7 @@ WORLD_CONTENT_PATH = Path(__file__).with_name("world_content.json")
 _CONTENT_LOCK = threading.Lock()
 _SLUG = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _HEX_COLOR = r"^#[0-9a-fA-F]{6}$"
-ITEM_TYPES = {"item", "weapon", "shield", "armor", "ring", "necklace"}
+ITEM_TYPES = {"item", "weapon", "shield", "armor", "ring", "necklace", "spellbook"}
 ITEM_OR_RESOURCE_TYPES = ITEM_TYPES | {"resource"}
 ARMOR_SLOT_NAMES = ("helm", "tunic", "pants", "sleeves", "gloves", "boots")
 _DIRECTIONS = {"north", "south", "east", "west"}
@@ -475,6 +475,110 @@ class ResourceGathering(ContentModel):
         return self
 
 
+class SpellDamageEffect(ContentModel):
+    type: Literal["damage"]
+    amount: int = Field(ge=1, le=100_000)
+
+
+class SpellManaEffect(ContentModel):
+    type: Literal["restore_mana"]
+    amount: int = Field(ge=1, le=100_000)
+
+
+class SpellConjureEffect(ContentModel):
+    type: Literal["conjure_item"]
+    item_id: str = Field(pattern=_SLUG.pattern)
+    quantity: int = Field(default=1, ge=1, le=99)
+
+
+SpellEffect = Annotated[
+    ItemHealingEffect
+    | ItemStatBuffEffect
+    | ItemShieldEffect
+    | ItemTeleportEffect
+    | ItemLuckEffect
+    | SpellDamageEffect
+    | SpellManaEffect
+    | SpellConjureEffect,
+    Field(discriminator="type"),
+]
+
+
+class SpellVisual(ContentModel):
+    animation: Literal["bolt", "beam", "burst", "nova", "ring", "aura", "rain", "spiral"] = "bolt"
+    color: str = Field(default="#ff8a3d", pattern=_HEX_COLOR)
+    secondary_color: str = Field(default="#ffe08a", pattern=_HEX_COLOR)
+    intensity: int = Field(default=2, ge=1, le=3)
+    particle_effect: Literal["none", "sparks", "embers", "snow", "bubbles", "stars", "smoke"] = "sparks"
+
+
+class MagicSpecialty(ContentModel):
+    id: str = Field(pattern=_SLUG.pattern)
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    power_per_level_percent: int = Field(default=4, ge=0, le=100)
+    cost_reduction_per_level_percent: int = Field(default=1, ge=0, le=10)
+
+
+class MagicSchool(ContentModel):
+    id: str = Field(pattern=_SLUG.pattern)
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=2000)
+    color: str = Field(default="#8f7cff", pattern=_HEX_COLOR)
+    specialties: list[MagicSpecialty] = Field(default_factory=list, max_length=30)
+
+    @model_validator(mode="after")
+    def validate_specialties(self) -> MagicSchool:
+        if len({specialty.id for specialty in self.specialties}) != len(self.specialties):
+            raise ValueError(f"School {self.id} has duplicate specialty IDs.")
+        return self
+
+
+class Spell(ContentModel):
+    id: str = Field(pattern=_SLUG.pattern)
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=2000)
+    school_id: str = Field(pattern=_SLUG.pattern)
+    specialty_id: str = Field(pattern=_SLUG.pattern)
+    required_level: int = Field(default=1, ge=1, le=100)
+    mana_cost: int = Field(default=5, ge=0, le=100_000)
+    target: Literal["enemy", "self", "party"] = "enemy"
+    effects: list[SpellEffect] = Field(default_factory=list, min_length=1, max_length=10)
+    cast_message: str = Field(default="", max_length=300)
+    visual: SpellVisual = Field(default_factory=SpellVisual)
+
+    @model_validator(mode="after")
+    def validate_effects(self) -> Spell:
+        has_damage = any(isinstance(effect, SpellDamageEffect) for effect in self.effects)
+        if self.target == "enemy" and not has_damage:
+            raise ValueError(f"Spell {self.id} targets an enemy but has no damage effect.")
+        if self.target != "enemy" and has_damage:
+            raise ValueError(f"Spell {self.id} has damage but does not target an enemy.")
+        if sum(isinstance(effect, ItemTeleportEffect) for effect in self.effects) > 1:
+            raise ValueError(f"Spell {self.id} can have at most one teleport destination.")
+        keys: set[tuple[str, str]] = set()
+        for effect in self.effects:
+            if isinstance(effect, ItemStatBuffEffect):
+                key = ("stat_buff", effect.stat)
+            elif isinstance(effect, ItemShieldEffect):
+                key = ("shield", effect.mode)
+            elif isinstance(effect, ItemLuckEffect):
+                key = ("luck", "luck")
+            else:
+                continue
+            if key in keys:
+                raise ValueError(f"Spell {self.id} has duplicate timed effects of the same kind.")
+            keys.add(key)
+        return self
+
+
+class SpellSlot(ContentModel):
+    label: str = Field(default="", max_length=60)
+    school_id: str | None = Field(default=None, pattern=_SLUG.pattern)
+    max_level: int | None = Field(default=None, ge=1, le=100)
+    spell_id: str | None = Field(default=None, pattern=_SLUG.pattern)
+
+
 class BookPage(ContentModel):
     title: str = Field(default="", max_length=100)
     text: str = Field(min_length=1, max_length=8000)
@@ -487,7 +591,7 @@ class BookConfig(ContentModel):
 class ContentEntity(ContentModel):
     id: str = Field(pattern=_SLUG.pattern)
     type: Literal[
-        "enemy", "npc", "item", "weapon", "shield", "armor", "ring", "necklace",
+        "enemy", "npc", "item", "weapon", "shield", "armor", "ring", "necklace", "spellbook",
         "furniture", "object", "resource",
     ]
     armor_slot: Literal["helm", "tunic", "pants", "sleeves", "gloves", "boots"] | None = None
@@ -513,6 +617,7 @@ class ContentEntity(ContentModel):
     enchantment_ids: list[str] = Field(default_factory=list, max_length=10)
     is_map: bool = False
     book: BookConfig | None = None
+    spell_slots: list[SpellSlot] = Field(default_factory=list, max_length=40)
 
     @field_validator("ambience")
     @classmethod
@@ -670,6 +775,8 @@ class WorldContent(BaseModel):
     currencies: list[Currency] = Field(default_factory=list, max_length=100)
     enchantments: list[Enchantment] = Field(default_factory=list, max_length=500)
     die_skins: list[DieSkin] = Field(default_factory=list, max_length=200)
+    magic_schools: list[MagicSchool] = Field(default_factory=list, max_length=50)
+    spells: list[Spell] = Field(default_factory=list, max_length=1000)
 
     @field_validator("action_sounds")
     @classmethod
@@ -696,6 +803,8 @@ class WorldContent(BaseModel):
         currencies = unique_ids(self.currencies, "Currency")
         enchantments = unique_ids(self.enchantments, "Enchantment")
         die_skins = unique_ids(self.die_skins, "Die skin")
+        schools = unique_ids(self.magic_schools, "Magic school")
+        spells = unique_ids(self.spells, "Spell")
         entity_types = {entity_id: entity.type for entity_id, entity in entities.items()}
 
         starting_species = {
@@ -731,6 +840,37 @@ class WorldContent(BaseModel):
             for entity_id in location.resource_ids:
                 if entity_types.get(entity_id) != "resource":
                     raise ValueError(f"Location {location.id} references a missing or non-resource entity.")
+
+        for spell in self.spells:
+            school = schools.get(spell.school_id)
+            if school is None or spell.specialty_id not in {item.id for item in school.specialties}:
+                raise ValueError(f"Spell {spell.id} has a missing school or specialty.")
+            for effect in spell.effects:
+                if isinstance(effect, ItemTeleportEffect) and effect.destination_area_id not in locations:
+                    raise ValueError(f"Spell {spell.id} teleports to a missing location.")
+                if isinstance(effect, SpellConjureEffect) and entity_types.get(effect.item_id) not in ITEM_OR_RESOURCE_TYPES:
+                    raise ValueError(f"Spell {spell.id} conjures a missing item.")
+
+        for entity in self.entities:
+            if entity.type != "spellbook" and entity.spell_slots:
+                raise ValueError(f"Only spellbooks have spell slots ({entity.id}).")
+            if entity.type == "spellbook":
+                placed: set[str] = set()
+                for slot in entity.spell_slots:
+                    if slot.school_id is not None and slot.school_id not in schools:
+                        raise ValueError(f"Spellbook {entity.id} has a slot for a missing school.")
+                    if slot.spell_id is None:
+                        continue
+                    spell = spells.get(slot.spell_id)
+                    if spell is None:
+                        raise ValueError(f"Spellbook {entity.id} holds a missing spell.")
+                    if slot.spell_id in placed:
+                        raise ValueError(f"Spellbook {entity.id} holds {slot.spell_id} more than once.")
+                    placed.add(slot.spell_id)
+                    if slot.school_id is not None and spell.school_id != slot.school_id:
+                        raise ValueError(f"Spellbook {entity.id} has a spell in a slot for another school.")
+                    if slot.max_level is not None and spell.required_level > slot.max_level:
+                        raise ValueError(f"Spellbook {entity.id} has a spell above its slot's level limit.")
 
         for entity in self.entities:
             if entity.type not in {"furniture", "object"} and entity.interaction_effect is not None:

@@ -303,3 +303,14 @@ The NLP action semantics, starter recipes, and marketplace/direct-trade lifecycl
 - Content Studio has Armor, Necklaces, Rings and Die skins tabs. Armor picks a body slot (helm, tunic, pants, sleeves, gloves, boots); rings fit ring slots 1-5 and necklaces fit necklace slots 1-2. Shields, armor, rings and necklaces all add their `defense` attribute while equipped, and every equipped piece (not only carried items) applies its enchantments.
 - A die skin sets face, edge, number, glow and particle colors plus a particle effect (sparks, embers, snow, bubbles, stars, smoke). Quests grant skins as rewards; players choose the active skin from the Dice button (`PUT /api/v1/character/die-skin`). Characters gained `unlocked_die_skins` and `active_die_skin` (migration 0014).
 
+
+## Magic system
+
+Authored entirely in Content Studio (Magic schools, Spells and Spellbooks tabs).
+
+- **Schools and specialties.** A school (e.g. Fire) has niche specialties (e.g. Burning). Each spell belongs to one school and one specialty. Casting a spell grants experience to both; levels use `30 * (L-1)^2` XP and cap at 100. A specialty adds `power_per_level_percent` spell power and `cost_reduction_per_level_percent` (capped at 60% total) per level; each school level adds 1% power and 5 max mana.
+- **Mana.** Max mana is `20 + 5 * sum(school level - 1)`. It regenerates `max(0.2, 1% of max)` per second. Spells have a `required_level` that both the school and specialty must reach.
+- **Spellbooks.** A `spellbook` item is equipped in the Spellbook slot. Only spells in its slots can be cast. A slot may restrict the school and the maximum spell level.
+- **Spells.** Target an enemy, the caster, or the caster's party. Effects: damage, heal, stat buff, shield, luck, teleport (not in combat), restore mana, conjure item. Numbers scale with the caster's levels.
+- **Casting.** `cast Fireball at Rat` (or the Spells dialog). Offensive casts take part in combat like attacks.
+- **Visuals.** Each spell picks an animation (bolt, beam, burst, nova, ring, aura, rain, spiral), two colors, intensity and particles; Studio shows a live preview and the player sees it on cast.

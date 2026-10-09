@@ -115,6 +115,9 @@ class Character(Base):
         JSON, default=list, server_default=text("'[]'")
     )
     active_die_skin: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    magic_state: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
     shop_state: Mapped[dict[str, Any]] = mapped_column(
         JSON, default=dict, server_default=text("'{}'")
     )

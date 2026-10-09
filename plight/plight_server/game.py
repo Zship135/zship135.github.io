@@ -8,6 +8,7 @@ import re
 import time
 from typing import Any
 
+from plight_server import magic
 from plight_server.content import (
     enchantment_library,
     starting_location,
@@ -39,14 +40,15 @@ EQUIPMENT_SLOTS = (
     "necklace_2",
     "left_hand",
     "right_hand",
+    "spellbook",
 )
 DEFAULT_EQUIPMENT = {
     **{slot: "" for slot in EQUIPMENT_SLOTS},
     "right_hand": "fist",
 }
-EQUIPMENT_TYPE_SLOTS = {"weapon": {"right_hand"}, "shield": {"left_hand"}}
+EQUIPMENT_TYPE_SLOTS = {"weapon": {"right_hand"}, "shield": {"left_hand"}, "spellbook": {"spellbook"}}
 ARMOR_SLOTS = ("helm", "tunic", "pants", "sleeves", "gloves", "boots")
-EQUIPPABLE_TYPES = {"weapon", "shield", "armor", "ring", "necklace"}
+EQUIPPABLE_TYPES = {"weapon", "shield", "armor", "ring", "necklace", "spellbook"}
 ITEM_TYPES = {"item", *EQUIPPABLE_TYPES}
 
 
@@ -1579,6 +1581,7 @@ def _snapshot(
         "quest_path": quest_path,
         "tracked_quest_id": tracked_quest_id(character, content),
         "world_map": _world_map(character, areas) if has_map else None,
+        "magic": magic.magic_view(character, content, entities),
     }
 
 
@@ -1685,6 +1688,7 @@ def resolve_command(
     inventory_view: str | None = None
     queued_actions: list[dict[str, Any]] = []
     party_effect_messages: dict[str, list[str]] = {}
+    spell_casts: list[dict[str, Any]] = []
     for occurrence in occurrences:
         if occurrence["occurrence_id"] not in selected_ids:
             continue
@@ -1867,6 +1871,23 @@ def resolve_command(
                     award_rewards=not combat_context,
                 )
             )
+        elif action_id == "cast":
+            cast_messages, casts, cast_party = _cast_spell(
+                character,
+                areas,
+                entities,
+                occurrence,
+                content,
+                enemy_spawns_by_location,
+                party_members or [],
+                combat_context=combat_context,
+                resolve_retaliation=not combat_context,
+                award_rewards=not combat_context,
+            )
+            messages.extend(cast_messages)
+            spell_casts.extend(casts)
+            for account_id, recipient_messages in cast_party.items():
+                party_effect_messages.setdefault(account_id, []).extend(recipient_messages)
         elif action_id == "equip_item":
             messages.append(_equip(character, entities, args))
         elif action_id == "unequip_item":
@@ -1964,6 +1985,7 @@ def resolve_command(
         "profile_account_ids": profile_account_ids,
         "observed_player_equipment": observed_player_equipment,
         "party_effect_messages": party_effect_messages,
+        "spell_casts": spell_casts,
         "inventory_view": inventory_view,
         "queued_actions": queued_actions,
         "snapshot": _snapshot(character, content, enemy_spawns_by_location),
@@ -2401,7 +2423,7 @@ def attack_initiative_relation(character: Any, action_id: str, enemy: dict[str, 
         entity["id"]: entity for entity in world_content_dict().get("entities", [])
     }
     stats = _effective_stats(character, entities)
-    player_speed = stats["speed"] * ATTACK_INITIATIVE_MULTIPLIERS[action_id]
+    player_speed = stats["speed"] * ATTACK_INITIATIVE_MULTIPLIERS.get(action_id, 1.0)
     enemy_speed = _positive_stat(enemy, "speed", 0)
     return (player_speed > enemy_speed) - (player_speed < enemy_speed)
 
@@ -2569,7 +2591,7 @@ def resolve_combat_occurrence(
             "messages": ["You wait and listen to the sounds of the area."],
             "defeated_enemy_id": None,
         }
-    if action_id not in {"attack", "light_attack", "heavy_attack"}:
+    if action_id not in {"attack", "light_attack", "heavy_attack", "cast"}:
         if command_text is None:
             return {
                 "messages": ["That action cannot be used in combat."],
@@ -2602,16 +2624,30 @@ def resolve_combat_occurrence(
         spawn["id"] == target_spawn_id and spawn["is_alive"]
         for spawn in enemy_spawns_by_location.get(character.area_id, [])
     )
-    messages = _attack(
-        character,
-        areas,
-        entities,
-        occurrence,
-        content,
-        enemy_spawns_by_location,
-        resolve_retaliation=False,
-        award_rewards=False,
-    )
+    spell_casts: list[dict[str, Any]] = []
+    if action_id == "cast":
+        messages, spell_casts, _ = _cast_spell(
+            character,
+            areas,
+            entities,
+            occurrence,
+            content,
+            enemy_spawns_by_location,
+            combat_context=True,
+            resolve_retaliation=False,
+            award_rewards=False,
+        )
+    else:
+        messages = _attack(
+            character,
+            areas,
+            entities,
+            occurrence,
+            content,
+            enemy_spawns_by_location,
+            resolve_retaliation=False,
+            award_rewards=False,
+        )
     defeated_enemy_id = None
     if was_alive:
         spawn = next(
@@ -2637,7 +2673,237 @@ def resolve_combat_occurrence(
         )
         if target_enemy is not None and target_enemy.get("behavior", "neutral") == "passive":
             messages.append(f"{target_enemy['name']} does not fight back.")
-    return {"messages": messages, "defeated_enemy_id": defeated_enemy_id}
+    return {
+        "messages": messages,
+        "defeated_enemy_id": defeated_enemy_id,
+        "spell_casts": spell_casts,
+    }
+
+
+
+def _find_spell(
+    character: Any,
+    reference: str,
+    content: dict[str, Any],
+    entities: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any] | None, str | None]:
+    if magic.equipped_spellbook(character, entities) is None:
+        return None, "You need an equipped spellbook to cast spells."
+    if not reference.strip():
+        return None, "Name a spell from your spellbook to cast."
+    matches = _matching_items(reference, magic.book_spells(character, content, entities))
+    if len(matches) > 1:
+        return None, f"Which spell do you mean: {', '.join(spell['name'] for spell in matches)}?"
+    if not matches:
+        return None, f"Your spellbook does not hold a spell called {reference}."
+    return matches[0], None
+
+
+def cast_is_offensive(character: Any, occurrence: dict[str, Any]) -> bool:
+    """True when this cast would strike an enemy and can actually be cast now."""
+    content = world_content_dict()
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    spell, error = _find_spell(
+        character, str(occurrence["arguments"].get("spell") or ""), content, entities
+    )
+    return (
+        error is None
+        and spell is not None
+        and spell["target"] == "enemy"
+        and magic.cast_blocker(character, content, spell) is None
+    )
+
+
+def _spell_target(
+    character: Any,
+    area: dict[str, Any],
+    entities: dict[str, dict[str, Any]],
+    occurrence: dict[str, Any],
+    spawns_by_location: dict[str, list[dict[str, Any]]] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+    state = character.combat_state or {}
+    spawn_instances: dict[str, dict[str, Any]] = {}
+    enemies: list[dict[str, Any]] = []
+    if spawns_by_location is None:
+        for enemy_id in area["enemy_ids"]:
+            enemy = entities[enemy_id]
+            health = state.get("enemy_health", {}).get(enemy_id, _positive_stat(enemy, "health", 1))
+            if health > 0:
+                enemies.append({**enemy, "health": health})
+    else:
+        for spawn in spawns_by_location.get(character.area_id, []):
+            enemy = entities.get(spawn["enemy_id"])
+            if not spawn["is_alive"] or enemy is None or enemy["type"] != "enemy" or spawn["health"] <= 0:
+                continue
+            enemies.append(
+                {**enemy, "id": spawn["id"], "entity_id": spawn["enemy_id"], "health": spawn["health"]}
+            )
+            spawn_instances[spawn["id"]] = spawn
+    planned = occurrence.get("target_spawn_id")
+    subject = str(occurrence["arguments"].get("subject") or "")
+    if planned:
+        target = next((enemy for enemy in enemies if enemy["id"] == planned), None)
+        if target is None:
+            return None, None, "That enemy is no longer alive here."
+    elif subject:
+        matches = _matching_entities(subject, enemies)
+        if len(matches) > 1 and len({enemy.get("entity_id", enemy["id"]) for enemy in matches}) == 1:
+            matches = matches[:1]
+        if len(matches) != 1:
+            if matches:
+                return None, None, f"Which enemy do you mean: {', '.join(enemy['name'] for enemy in matches)}?"
+            return None, None, f"There is no {subject} here to target."
+        target = matches[0]
+    else:
+        target_id = state.get("target_id")
+        target = next(
+            (enemy for enemy in enemies if enemy["id"] == target_id or enemy.get("entity_id") == target_id),
+            None,
+        )
+        if target is None:
+            return None, None, "Name an enemy here to target."
+    return target, spawn_instances.get(target["id"]), None
+
+
+def _cast_spell(
+    character: Any,
+    areas: dict[str, dict[str, Any]],
+    entities: dict[str, dict[str, Any]],
+    occurrence: dict[str, Any],
+    content: dict[str, Any],
+    enemy_spawns_by_location: dict[str, list[dict[str, Any]]] | None = None,
+    party_members: Sequence[Any] = (),
+    *,
+    combat_context: bool = False,
+    resolve_retaliation: bool = True,
+    award_rewards: bool = True,
+    now: float | None = None,
+) -> tuple[list[str], list[dict[str, Any]], dict[str, list[str]]]:
+    current_time = time.time() if now is None else now
+    spell, error = _find_spell(
+        character, str(occurrence["arguments"].get("spell") or ""), content, entities
+    )
+    if error or spell is None:
+        return [error or "You cannot cast that."], [], {}
+    blocker = magic.cast_blocker(character, content, spell, current_time)
+    if blocker:
+        return [blocker], [], {}
+    if combat_context and any(effect["type"] == "teleport" for effect in spell["effects"]):
+        return [f"You cannot cast {spell['name']} in the middle of combat."], [], {}
+    area = areas[character.area_id]
+    target = spawn = None
+    if spell["target"] == "enemy":
+        target, spawn, target_error = _spell_target(
+            character, area, entities, occurrence, enemy_spawns_by_location
+        )
+        if target_error or target is None:
+            return [target_error or "Name an enemy here to target."], [], {}
+
+    multiplier = magic.power_multiplier(character, content, spell)
+    magic.set_mana(
+        character,
+        content,
+        magic.current_mana(character, content, current_time)
+        - magic.effective_mana_cost(character, content, spell),
+        current_time,
+    )
+    messages = [spell["cast_message"] or f"You cast {spell['name']}."]
+    casts = [{
+        "spell_id": spell["id"],
+        "name": spell["name"],
+        "visual": spell["visual"],
+        "target": spell["target"],
+        "target_name": target["name"] if target else None,
+    }]
+    party_messages: dict[str, list[str]] = {}
+    scaled_effects = [magic.scale_effect(effect, multiplier) for effect in spell["effects"]]
+
+    defeated = False
+    if target is not None:
+        enemy = entities.get(target.get("entity_id", target["id"]), target)
+        max_enemy_health = _positive_stat(enemy, "health", 1)
+        damage = sum(effect["amount"] for effect in scaled_effects if effect["type"] == "damage")
+        state = {
+            **(character.combat_state or {}),
+            "target_id": target["id"],
+            "enemy_health": dict((character.combat_state or {}).get("enemy_health", {})),
+        }
+        enemy_hp = max(0, min(target["health"], max_enemy_health) - damage)
+        if spawn is not None:
+            spawn["health"] = enemy_hp
+        else:
+            state["enemy_health"][target["id"]] = enemy_hp
+        messages.append(
+            f"{spell['name']} strikes {target['name']} for {damage} damage "
+            f"({enemy_hp}/{max_enemy_health} health)."
+        )
+        if enemy_hp == 0:
+            defeated = True
+            state["target_id"] = None
+            if spawn is not None:
+                spawn["is_alive"] = False
+        character.combat_state = state
+
+    recipients: dict[str, Any] = {character.account_id: character}
+    if spell["target"] == "party":
+        for member in party_members:
+            if member.area_id == character.area_id:
+                recipients[member.account_id] = member
+    for recipient in recipients.values():
+        texts: list[str] = []
+        for effect in scaled_effects:
+            kind = effect["type"]
+            if kind == "damage":
+                continue
+            if kind == "restore_mana":
+                magic.set_mana(
+                    recipient,
+                    content,
+                    magic.current_mana(recipient, content, current_time) + effect["amount"],
+                    current_time,
+                )
+                texts.append(f"restore {effect['amount']} mana")
+            elif kind == "conjure_item":
+                inventory = dict(recipient.inventory or {})
+                inventory[effect["item_id"]] = inventory.get(effect["item_id"], 0) + effect["quantity"]
+                recipient.inventory = inventory
+                item_name = entities.get(effect["item_id"], {}).get("name", effect["item_id"])
+                texts.append(f"conjure {_quantity_name(effect['quantity'], item_name)}")
+            elif kind == "teleport":
+                destination = effect["destination_area_id"]
+                if isinstance(getattr(recipient, "gathering_state", None), dict):
+                    recipient.gathering_state = None
+                recipient.area_id = destination
+                mark_visited(recipient, destination)
+                texts.append(f"travel to {areas[destination]['name']}")
+            else:
+                texts.append(_apply_item_effect(recipient, effect, entities, current_time))
+        if not texts:
+            continue
+        if recipient.account_id == character.account_id:
+            messages.append(f"The spell's effects: {', '.join(texts)}.")
+        else:
+            party_messages[recipient.account_id] = [
+                f"You receive the effects of {character.name}'s {spell['name']}: {', '.join(texts)}."
+            ]
+
+    messages.extend(magic.award_experience(character, content, spell))
+    if target is None:
+        return messages, casts, party_messages
+    if defeated:
+        messages.append(f"{target['name']} is defeated.")
+        if award_rewards:
+            enemy = entities.get(target.get("entity_id", target["id"]), target)
+            messages.extend(_reward_enemy_defeat(character, enemy, entities, content))
+            _record_quest_event(character, content, "kill", enemy["id"])
+        return messages, casts, party_messages
+    if resolve_retaliation:
+        enemy = entities.get(target.get("entity_id", target["id"]), target)
+        if enemy.get("behavior", "neutral") == "passive":
+            messages.append(f"{target['name']} does not fight back.")
+        else:
+            messages.extend(enemy_strike(character, enemy, areas, entities=entities, spawn=spawn))
+    return messages, casts, party_messages
 
 
 def _equip(

@@ -20,7 +20,7 @@ test("inventory menu exposes every requested equipment slot", () => {
   assert.deepEqual(EQUIPMENT_SLOTS, [
     "helm", "tunic", "pants", "sleeves", "gloves", "boots",
     "ring_1", "ring_2", "ring_3", "ring_4", "ring_5",
-    "necklace_1", "necklace_2", "left_hand", "right_hand",
+    "necklace_1", "necklace_2", "left_hand", "right_hand", "spellbook",
   ]);
   assert.deepEqual(equipmentSlotsForView("armor"), EQUIPMENT_SLOTS.slice(0, 13));
   assert.deepEqual(equipmentSlotsForView("hands"), ["left_hand", "right_hand"]);

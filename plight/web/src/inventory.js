@@ -1,11 +1,13 @@
 export const EQUIPMENT_SLOT_GROUPS = {
   armor: ["helm", "tunic", "pants", "sleeves", "gloves", "boots", "ring_1", "ring_2", "ring_3", "ring_4", "ring_5", "necklace_1", "necklace_2"],
   hands: ["left_hand", "right_hand"],
+  magic: ["spellbook"],
 };
 
 export const EQUIPMENT_SLOTS = [
   ...EQUIPMENT_SLOT_GROUPS.armor,
   ...EQUIPMENT_SLOT_GROUPS.hands,
+  ...EQUIPMENT_SLOT_GROUPS.magic,
 ];
 
 export const EQUIPMENT_SLOT_LABELS = Object.fromEntries(

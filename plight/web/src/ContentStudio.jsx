@@ -3,6 +3,7 @@ import { layoutMap, wrapLabel } from "./mapLayout.js";
 import { api, apiBlob } from "./api.js";
 import { restoreLocationSelection } from "./contentStudioSelection.js";
 import { DiePreview } from "./Dice3D.jsx";
+import { SpellVisual } from "./Spells.jsx";
 
 const SELECTED_LOCATION_KEY = "plight.content.selectedLocation";
 
@@ -25,9 +26,12 @@ const NAVIGATION = [
   ["currencies", "Currencies"],
   ["enchantments", "Enchantments"],
   ["dieskins", "Die skins"],
+  ["spellbooks", "Spellbooks"],
+  ["schools", "Magic schools"],
+  ["spells", "Spells"],
 ];
 
-const ITEM_TYPES = ["item", "weapon", "shield", "armor", "ring", "necklace"];
+const ITEM_TYPES = ["item", "weapon", "shield", "armor", "ring", "necklace", "spellbook"];
 const ITEM_RESOURCE_TYPES = [...ITEM_TYPES, "resource"];
 const ARMOR_SLOT_OPTIONS = [
   ["helm", "Helm"], ["tunic", "Tunic"], ["pants", "Pants"],
@@ -61,6 +65,7 @@ const ACTION_SOUND_OPTIONS = [
   ["market_list", "List market item"],
   ["market_buy", "Buy market listing"],
   ["market_cancel", "Cancel market listing"],
+  ["cast", "Cast spell"],
 ].map(([id, name]) => ({ id, name }));
 
 const ENTITY_TABS = {
@@ -72,6 +77,7 @@ const ENTITY_TABS = {
   armor: ["armor", { defense: 3, value: 10 }],
   necklaces: ["necklace", { value: 10 }],
   rings: ["ring", { value: 10 }],
+  spellbooks: ["spellbook", { value: 25 }],
   environment: ["furniture", { durability: 100 }],
   resources: ["resource", {}],
 };
@@ -85,6 +91,7 @@ const CATEGORY_NAMES = {
   armor: "Armor",
   necklace: "Necklaces",
   ring: "Rings",
+  spellbook: "Spellbooks",
   furniture: "Furniture",
   object: "Objects",
   resource: "Resources",
@@ -457,6 +464,10 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   const currencies = content?.currencies || [];
   const enchantments = content?.enchantments || [];
   const dieSkins = content?.die_skins || [];
+  const schools = content?.magic_schools || [];
+  const spells = content?.spells || [];
+  const currentSchool = tab === "schools" ? schools.find((item) => item.id === selectedId) : null;
+  const currentSpell = tab === "spells" ? spells.find((item) => item.id === selectedId) : null;
   const currentDieSkin = tab === "dieskins" ? dieSkins.find((item) => item.id === selectedId) : null;
   const currentEnchantment = tab === "enchantments" ? enchantments.find((item) => item.id === selectedId) : null;
   const currentCurrency = tab === "currencies" ? currencies.find((currency) => currency.id === selectedId) : null;
@@ -479,6 +490,10 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
     ? ACTION_SOUND_OPTIONS
     : tab === "locations"
       ? content?.locations || []
+        : tab === "schools"
+          ? schools
+        : tab === "spells"
+          ? spells
         : tab === "dieskins"
           ? dieSkins
         : tab === "enchantments"
@@ -518,6 +533,10 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         ? content.locations
         : nextTab === "map"
           ? content.locations
+          : nextTab === "schools"
+            ? content.magic_schools || []
+          : nextTab === "spells"
+            ? content.spells || []
           : nextTab === "dieskins"
             ? content.die_skins || []
           : nextTab === "enchantments"
@@ -605,6 +624,34 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
       setSelectedId(id);
       return;
     }
+    if (tab === "schools") {
+      const id = makeId("new_school", new Set(schools.map((item) => item.id)));
+      updateContent((next) => {
+        next.magic_schools = [...(next.magic_schools || []), {
+          id, name: "New school", description: "", color: "#8f7cff",
+          specialties: [{ id: "basics", name: "Basics", description: "", power_per_level_percent: 4, cost_reduction_per_level_percent: 1 }],
+        }];
+      });
+      setSelectedId(id);
+      return;
+    }
+    if (tab === "spells") {
+      const school = schools.find((item) => item.specialties.length > 0);
+      if (!school) {
+        setError("Create a magic school with at least one specialty before adding a spell.");
+        return;
+      }
+      const id = makeId("new_spell", new Set(spells.map((item) => item.id)));
+      updateContent((next) => {
+        next.spells = [...(next.spells || []), {
+          id, name: "New spell", description: "", school_id: school.id, specialty_id: school.specialties[0].id,
+          required_level: 1, mana_cost: 5, target: "enemy", effects: [{ type: "damage", amount: 10 }], cast_message: "",
+          visual: { animation: "bolt", color: school.color, secondary_color: "#ffe08a", intensity: 2, particle_effect: "sparks" },
+        }];
+      });
+      setSelectedId(id);
+      return;
+    }
     if (tab === "dieskins") {
       const id = makeId("new_die_skin", new Set(dieSkins.map((item) => item.id)));
       updateContent((next) => {
@@ -686,6 +733,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
           dialogue: { start_node_id: null, nodes: [] },
         } : {}),
         ambience: [],
+        spell_slots: [],
         stock: [],
         buy_list: [],
         weapon_ids: [],
@@ -696,10 +744,27 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
   }
 
   function deleteEntry() {
-    const name = currentLocation?.name || currentRecipe?.name || currentQuest?.title || currentEntity?.name || currentCurrency?.name || currentEnchantment?.name || currentDieSkin?.name;
+    const name = currentLocation?.name || currentRecipe?.name || currentQuest?.title || currentEntity?.name || currentCurrency?.name || currentEnchantment?.name || currentDieSkin?.name || currentSchool?.name || currentSpell?.name;
     if (!name || !window.confirm(`Delete "${name}"? References to this content will be removed.`)) return;
     updateContent((next) => {
-      if (tab === "dieskins") {
+      if (tab === "schools") {
+        const removedSpells = new Set((next.spells || []).filter((spell) => spell.school_id === selectedId).map((spell) => spell.id));
+        next.magic_schools = (next.magic_schools || []).filter((item) => item.id !== selectedId);
+        next.spells = (next.spells || []).filter((spell) => spell.school_id !== selectedId);
+        for (const entity of next.entities) {
+          for (const slot of entity.spell_slots || []) {
+            if (slot.school_id === selectedId) slot.school_id = null;
+            if (removedSpells.has(slot.spell_id)) slot.spell_id = null;
+          }
+        }
+      } else if (tab === "spells") {
+        next.spells = (next.spells || []).filter((spell) => spell.id !== selectedId);
+        for (const entity of next.entities) {
+          for (const slot of entity.spell_slots || []) {
+            if (slot.spell_id === selectedId) slot.spell_id = null;
+          }
+        }
+      } else if (tab === "dieskins") {
         next.die_skins = (next.die_skins || []).filter((item) => item.id !== selectedId);
         for (const quest of next.quests) {
           if (quest.reward_die_skin_ids) quest.reward_die_skin_ids = quest.reward_die_skin_ids.filter((id) => id !== selectedId);
@@ -907,7 +972,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
             {NAVIGATION.map(([id, label]) => (
               <button aria-current={tab === id ? "page" : undefined} className={tab === id ? "active" : ""} key={id} onClick={() => changeTab(id)} type="button">
                 <span>{label}</span>
-                <small>{id === "map" || id === "locations" ? content.locations.length : id === "audio" ? Object.keys(content.action_sounds || {}).length : id === "recipes" ? content.recipes.length : id === "currencies" ? currencies.length : id === "enchantments" ? enchantments.length : id === "dieskins" ? dieSkins.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
+                <small>{id === "schools" ? schools.length : id === "spells" ? spells.length : id === "map" || id === "locations" ? content.locations.length : id === "audio" ? Object.keys(content.action_sounds || {}).length : id === "recipes" ? content.recipes.length : id === "currencies" ? currencies.length : id === "enchantments" ? enchantments.length : id === "dieskins" ? dieSkins.length : id === "quests" ? quests.length : visibleCount(content, id)}</small>
               </button>
             ))}
             <div className="studio-nav-note">
@@ -953,7 +1018,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                     ))}
                     {currentEntries.length === 0 && <p className="studio-empty">Nothing here yet. Use + to create one.</p>}
                   </div>
-                  {(currentLocation || currentRecipe || currentQuest || currentEntity || currentCurrency || currentEnchantment || currentDieSkin) && (
+                  {(currentLocation || currentRecipe || currentQuest || currentEntity || currentCurrency || currentEnchantment || currentDieSkin || currentSchool || currentSpell) && (
                     <button className="studio-delete-button" onClick={deleteEntry} type="button">Delete selected</button>
                   )}
                 </aside>
@@ -993,6 +1058,8 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       entities={content.entities}
                       currencies={currencies}
                       enchantments={enchantments}
+                      schools={schools}
+                      spells={spells}
                       onGive={giveToSelf}
                       lootItems={eligibleItems}
                       onChange={updateEntity}
@@ -1012,6 +1079,27 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       onChange={(field, value) => updateContent((next) => {
                         const item = next.enchantments.find((entry) => entry.id === selectedId);
                         if (item) item[field] = value;
+                      })}
+                    />
+                  )}
+                  {currentSchool && tab === "schools" && (
+                    <SchoolEditor
+                      school={currentSchool}
+                      onChange={(mutate) => updateContent((next) => {
+                        const school = next.magic_schools.find((item) => item.id === selectedId);
+                        if (school) mutate(school);
+                      })}
+                    />
+                  )}
+                  {currentSpell && tab === "spells" && (
+                    <SpellEditor
+                      spell={currentSpell}
+                      schools={schools}
+                      entities={content.entities}
+                      locations={content.locations}
+                      onChange={(mutate) => updateContent((next) => {
+                        const spell = next.spells.find((item) => item.id === selectedId);
+                        if (spell) mutate(spell);
                       })}
                     />
                   )}
@@ -1060,7 +1148,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       })}
                     />
                   )}
-                  {!currentLocation && !currentEntity && !currentRecipe && !currentQuest && !currentCurrency && !currentEnchantment && !currentDieSkin && <div className="studio-empty-detail">Select an entry or create a new one.</div>}
+                  {!currentLocation && !currentEntity && !currentRecipe && !currentQuest && !currentCurrency && !currentEnchantment && !currentDieSkin && !currentSchool && !currentSpell && <div className="studio-empty-detail">Select an entry or create a new one.</div>}
                 </div>
               </div>
             )}
@@ -1235,7 +1323,7 @@ function ActionSoundEditor({
   );
 }
 
-function EntityEditor({ entity, entities, currencies = [], enchantments = [], locations, lootItems, onChange, onLocationToggle, onGive }) {
+function EntityEditor({ entity, entities, currencies = [], enchantments = [], schools = [], spells = [], locations, lootItems, onChange, onLocationToggle, onGive }) {
   const [giveQuantity, setGiveQuantity] = useState(1);
   const relationField = {
     enemy: "enemy_ids",
@@ -1419,6 +1507,9 @@ function EntityEditor({ entity, entities, currencies = [], enchantments = [], lo
           {Object.keys(entity.attributes).length === 0 && <p className="studio-hint">No attributes. Add stats such as health, speed, damage, or value.</p>}
         </div>
       </section>
+      {entity.type === "spellbook" && (
+        <SpellSlotsEditor slots={entity.spell_slots || []} schools={schools} spells={spells} onChange={(slots) => set("spell_slots", slots)} />
+      )}
       {ITEM_TYPES.includes(entity.type) && (
         <section className="studio-subsection">
           <h3>Enchantments and curses</h3>
@@ -2373,6 +2464,217 @@ function DieSkinEditor({ skin, onChange, onGive }) {
       <button className="studio-secondary-button" onClick={onGive} type="button">Give to me</button>
       <p className="studio-hint">Players unlock skins from quest rewards (set them in the Quests tab) and pick the active one from the Dice button.</p>
     </div>
+  );
+}
+
+const SPELL_EFFECT_DEFAULTS = (type, locations) => ({
+  damage: { type, amount: 10 },
+  heal: { type, mode: "fixed", amount: 25 },
+  stat_buff: { type, stat: "attack", mode: "flat", amount: 2, duration_seconds: 60 },
+  shield: { type, mode: "damage_pool", amount: 20, duration_seconds: 60 },
+  teleport: { type, destination_area_id: locations[0]?.id || "" },
+  luck: { type, drop_chance_bonus_percent: 10, gathering_yield_bonus_percent: 0, duration_seconds: 60 },
+  restore_mana: { type, amount: 10 },
+  conjure_item: { type, item_id: "", quantity: 1 },
+})[type];
+
+const SPELL_EFFECT_TYPES = [
+  ["damage", "Damage (enemy target)"], ["heal", "Restore health"], ["stat_buff", "Boost a stat"],
+  ["shield", "Shield"], ["teleport", "Teleport"], ["luck", "Luck"],
+  ["restore_mana", "Restore mana"], ["conjure_item", "Conjure item"],
+].map(([id, name]) => ({ id, name }));
+
+const SPELL_ANIMATION_OPTIONS = ["bolt", "beam", "burst", "nova", "ring", "aura", "rain", "spiral"]
+  .map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1) }));
+
+function SchoolEditor({ school, onChange }) {
+  const set = (field, value) => onChange((item) => { item[field] = value; });
+  const setSpecialty = (index, field, value) => onChange((item) => { item.specialties[index][field] = value; });
+  return (
+    <div className="studio-form">
+      <div className="studio-form-heading"><p className="eyebrow">MAGIC SCHOOL / {school.id}</p><h2>{school.name}</h2></div>
+      <Field label="Name" onChange={(value) => set("name", value)} value={school.name} />
+      <TextAreaField label="Description" onChange={(value) => set("description", value)} rows={3} value={school.description || ""} />
+      <label className="studio-field">
+        <span>School color</span>
+        <input onChange={(event) => set("color", event.target.value)} type="color" value={school.color} />
+      </label>
+      <section className="studio-subsection">
+        <div className="studio-subsection-heading">
+          <div><h3>Specialties</h3><p>Niche branches of this school. Each levels separately from casting its spells, adding spell power and cheaper casting.</p></div>
+          <button
+            className="studio-small-button"
+            onClick={() => onChange((item) => {
+              const used = new Set(item.specialties.map((entry) => entry.id));
+              item.specialties.push({ id: makeId("specialty", used), name: "New specialty", description: "", power_per_level_percent: 4, cost_reduction_per_level_percent: 1 });
+            })}
+            type="button"
+          >
+            Add specialty
+          </button>
+        </div>
+        {school.specialties.map((specialty, index) => (
+          <section className="studio-effect-card" key={specialty.id}>
+            <div className="studio-subsection-heading">
+              <strong>{specialty.id}</strong>
+              <button aria-label={`Remove ${specialty.name}`} className="studio-remove-button" onClick={() => onChange((item) => { item.specialties.splice(index, 1); })} type="button">×</button>
+            </div>
+            <Field label="Name" onChange={(value) => setSpecialty(index, "name", value)} value={specialty.name} />
+            <TextAreaField label="Description" onChange={(value) => setSpecialty(index, "description", value)} rows={2} value={specialty.description || ""} />
+            <div className="studio-two-fields">
+              <Field label="Power per level (%)" min={0} max={100} onChange={(value) => setSpecialty(index, "power_per_level_percent", value)} type="number" value={specialty.power_per_level_percent} />
+              <Field label="Mana cost reduction per level (%)" min={0} max={10} onChange={(value) => setSpecialty(index, "cost_reduction_per_level_percent", value)} type="number" value={specialty.cost_reduction_per_level_percent} />
+            </div>
+          </section>
+        ))}
+        {school.specialties.length === 0 && <p className="studio-hint">Add at least one specialty before creating spells in this school.</p>}
+      </section>
+      <p className="studio-hint">Deleting a school also deletes its spells.</p>
+    </div>
+  );
+}
+
+function SpellEditor({ spell, schools, entities, locations, onChange }) {
+  const set = (field, value) => onChange((item) => { item[field] = value; });
+  const setVisual = (field, value) => onChange((item) => { item.visual = { ...item.visual, [field]: value }; });
+  const setEffect = (index, field, value) => onChange((item) => { item.effects[index][field] = value; });
+  const school = schools.find((item) => item.id === spell.school_id);
+  const items = entities.filter((entity) => ITEM_RESOURCE_TYPES.includes(entity.type));
+  const [previewKey, setPreviewKey] = useState(0);
+  const visual = spell.visual;
+  return (
+    <div className="studio-form">
+      <div className="studio-form-heading"><p className="eyebrow">SPELL / {spell.id}</p><h2>{spell.name}</h2></div>
+      <Field label="Name" onChange={(value) => set("name", value)} value={spell.name} />
+      <TextAreaField label="Description" onChange={(value) => set("description", value)} rows={2} value={spell.description || ""} />
+      <div className="studio-two-fields">
+        <SelectField
+          label="School"
+          options={schools}
+          value={spell.school_id}
+          onChange={(value) => onChange((item) => {
+            item.school_id = value;
+            item.specialty_id = schools.find((entry) => entry.id === value)?.specialties[0]?.id || "";
+          })}
+        />
+        <SelectField label="Specialty" options={school?.specialties || []} value={spell.specialty_id} onChange={(value) => set("specialty_id", value)} />
+        <Field label="Required level (school and specialty)" min={1} max={100} onChange={(value) => set("required_level", value)} type="number" value={spell.required_level} />
+        <Field label="Mana cost" min={0} max={100000} onChange={(value) => set("mana_cost", value)} type="number" value={spell.mana_cost} />
+        <SelectField
+          label="Target"
+          options={[{ id: "enemy", name: "An enemy" }, { id: "self", name: "The caster" }, { id: "party", name: "Caster and party here" }]}
+          value={spell.target}
+          onChange={(value) => set("target", value)}
+        />
+      </div>
+      <Field label="Cast message (optional)" onChange={(value) => set("cast_message", value)} value={spell.cast_message || ""} />
+      <section className="studio-subsection">
+        <div className="studio-subsection-heading">
+          <div><h3>Effects</h3><p>Numbers scale up with the caster's school and specialty levels. Enemy spells need a Damage effect.</p></div>
+          <SelectField
+            label="Add effect"
+            emptyLabel="Choose…"
+            options={SPELL_EFFECT_TYPES}
+            value=""
+            onChange={(type) => type && onChange((item) => { item.effects.push(SPELL_EFFECT_DEFAULTS(type, locations)); })}
+          />
+        </div>
+        {spell.effects.map((effect, index) => (
+          <section className="studio-effect-card" key={`${effect.type}-${index}`}>
+            <div className="studio-subsection-heading">
+              <strong>{SPELL_EFFECT_TYPES.find((entry) => entry.id === effect.type)?.name}</strong>
+              <button aria-label={`Remove effect ${index + 1}`} className="studio-remove-button" onClick={() => onChange((item) => { item.effects.splice(index, 1); })} type="button">×</button>
+            </div>
+            <div className="studio-two-fields">
+              {(effect.type === "damage" || effect.type === "restore_mana") && (
+                <Field label="Amount" min={1} max={100000} onChange={(value) => setEffect(index, "amount", value)} type="number" value={effect.amount} />
+              )}
+              {effect.type === "heal" && (
+                <>
+                  <SelectField label="Healing amount" options={[{ id: "fixed", name: "Fixed health" }, { id: "percent", name: "Percent of max health" }, { id: "full", name: "Restore to full" }]} value={effect.mode} onChange={(value) => setEffect(index, "mode", value)} />
+                  {effect.mode !== "full" && <Field label="Amount" min={1} max={10000} onChange={(value) => setEffect(index, "amount", value)} type="number" value={effect.amount} />}
+                </>
+              )}
+              {effect.type === "stat_buff" && (
+                <>
+                  <SelectField label="Stat" options={["attack", "defense", "speed"].map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1) }))} value={effect.stat} onChange={(value) => setEffect(index, "stat", value)} />
+                  <SelectField label="Bonus type" options={[{ id: "flat", name: "Flat points" }, { id: "percent", name: "Percent" }]} value={effect.mode} onChange={(value) => setEffect(index, "mode", value)} />
+                  <Field label="Bonus amount" min={1} max={500} onChange={(value) => setEffect(index, "amount", value)} type="number" value={effect.amount} />
+                </>
+              )}
+              {effect.type === "shield" && (
+                <>
+                  <SelectField label="Shield mode" options={[{ id: "damage_pool", name: "Absorb a damage pool" }, { id: "damage_reduction", name: "Reduce each hit" }, { id: "temporary_health", name: "Temporary health" }]} value={effect.mode} onChange={(value) => setEffect(index, "mode", value)} />
+                  <Field label="Shield amount" min={1} max={100000} onChange={(value) => setEffect(index, "amount", value)} type="number" value={effect.amount} />
+                </>
+              )}
+              {effect.type === "luck" && (
+                <>
+                  <Field label="Loot drop chance bonus (%)" min={0} max={1000} onChange={(value) => setEffect(index, "drop_chance_bonus_percent", value)} type="number" value={effect.drop_chance_bonus_percent} />
+                  <Field label="Gathering yield bonus (%)" min={0} max={1000} onChange={(value) => setEffect(index, "gathering_yield_bonus_percent", value)} type="number" value={effect.gathering_yield_bonus_percent} />
+                </>
+              )}
+              {["stat_buff", "shield", "luck"].includes(effect.type) && (
+                <Field label="Duration (seconds)" min={1} max={86400} onChange={(value) => setEffect(index, "duration_seconds", value)} type="number" value={effect.duration_seconds} />
+              )}
+              {effect.type === "teleport" && (
+                <SelectField label="Destination" options={locations} value={effect.destination_area_id} onChange={(value) => setEffect(index, "destination_area_id", value)} />
+              )}
+              {effect.type === "conjure_item" && (
+                <>
+                  <SelectField label="Item" emptyLabel="Choose an item" options={items} value={effect.item_id} onChange={(value) => setEffect(index, "item_id", value)} />
+                  <Field label="Quantity" min={1} max={99} onChange={(value) => setEffect(index, "quantity", value)} type="number" value={effect.quantity} />
+                </>
+              )}
+            </div>
+          </section>
+        ))}
+      </section>
+      <section className="studio-subsection">
+        <h3>Visual effect</h3>
+        <div className="studio-two-fields">
+          <SelectField label="Animation" options={SPELL_ANIMATION_OPTIONS} value={visual.animation} onChange={(value) => setVisual("animation", value)} />
+          <SelectField label="Particles" options={PARTICLE_EFFECTS} value={visual.particle_effect} onChange={(value) => setVisual("particle_effect", value || "none")} />
+          <label className="studio-field"><span>Main color</span><input onChange={(event) => setVisual("color", event.target.value)} type="color" value={visual.color} /></label>
+          <label className="studio-field"><span>Secondary color</span><input onChange={(event) => setVisual("secondary_color", event.target.value)} type="color" value={visual.secondary_color} /></label>
+          <Field label="Intensity (1-3)" min={1} max={3} onChange={(value) => setVisual("intensity", value)} type="number" value={visual.intensity} />
+        </div>
+        <div className="spell-preview-box">
+          <SpellVisual key={previewKey} visual={visual} />
+        </div>
+        <button className="studio-secondary-button" onClick={() => setPreviewKey((key) => key + 1)} type="button">Replay preview</button>
+      </section>
+    </div>
+  );
+}
+
+function SpellSlotsEditor({ slots, schools, spells, onChange }) {
+  const update = (index, field, value) => onChange(slots.map((slot, slotIndex) => slotIndex === index ? { ...slot, [field]: value } : slot));
+  return (
+    <section className="studio-subsection">
+      <div className="studio-subsection-heading">
+        <div><h3>Spell slots</h3><p>Only spells in the slots of the equipped spellbook can be cast. A slot can be limited to one school and a maximum spell level.</p></div>
+        <button className="studio-small-button" onClick={() => onChange([...slots, { label: `Slot ${slots.length + 1}`, school_id: null, max_level: null, spell_id: null }])} type="button">Add slot</button>
+      </div>
+      {slots.map((slot, index) => {
+        const options = spells.filter((spell) => (!slot.school_id || spell.school_id === slot.school_id) && (!slot.max_level || spell.required_level <= slot.max_level));
+        return (
+          <section className="studio-effect-card" key={index}>
+            <div className="studio-subsection-heading">
+              <strong>Slot {index + 1}</strong>
+              <button aria-label={`Remove slot ${index + 1}`} className="studio-remove-button" onClick={() => onChange(slots.filter((_, slotIndex) => slotIndex !== index))} type="button">×</button>
+            </div>
+            <div className="studio-two-fields">
+              <Field label="Label" onChange={(value) => update(index, "label", value)} value={slot.label || ""} />
+              <SelectField label="Restrict to school" emptyLabel="Any school" options={schools} value={slot.school_id || ""} onChange={(value) => onChange(slots.map((entry, slotIndex) => slotIndex === index ? { ...entry, school_id: value || null, spell_id: null } : entry))} />
+              <Field label="Maximum spell level (blank for none)" min={1} max={100} onChange={(value) => update(index, "max_level", !value ? null : value)} type="number" value={slot.max_level ?? ""} />
+              <SelectField label="Spell" emptyLabel="Empty" options={options} value={slot.spell_id || ""} onChange={(value) => update(index, "spell_id", value || null)} />
+            </div>
+          </section>
+        );
+      })}
+      {slots.length === 0 && <p className="studio-hint">No slots yet. Add slots, then pick which spell sits in each.</p>}
+    </section>
   );
 }
 

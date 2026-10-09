@@ -53,6 +53,7 @@ from plight_server.game import (
     award_enemy_defeat,
     award_experience,
     attack_initiative_relation,
+    cast_is_offensive,
     enemy_strike,
     initial_area,
     initialize_quest_step,
@@ -3007,6 +3008,7 @@ def _submit_command_locked(
         result = prior_result
         result["messages"] = list(result.get("messages", []))
         result["action_events"] = list(result.get("action_events", []))
+        result["spell_casts"] = list(result.get("spell_casts", []))
         result["dialogues"] = list(result.get("dialogues", []))
         result["profile_account_ids"] = list(result.get("profile_account_ids", []))
         result["observed_player_equipment"] = dict(result.get("observed_player_equipment", {}))
@@ -3107,6 +3109,7 @@ def _submit_command_locked(
             actions = result.pop("queued_actions", [])
             result["messages"] = list(result.get("messages", []))
             result["action_events"] = []
+            result["spell_casts"] = []
             result["dialogues"] = list(result.get("dialogues", []))
             result["profile_account_ids"] = list(result.get("profile_account_ids", []))
             result["observed_player_equipment"] = dict(
@@ -3138,7 +3141,9 @@ def _submit_command_locked(
                 )
             )
             action_id = occurrence["action_id"]
-            is_attack = action_id in {"attack", "light_attack", "heavy_attack"}
+            is_attack = action_id in {"attack", "light_attack", "heavy_attack"} or (
+                action_id == "cast" and cast_is_offensive(character, occurrence)
+            )
             if is_attack:
                 target_spawn_id, error_message = resolve_attack_target_id(
                     character,
@@ -3290,6 +3295,7 @@ def _submit_command_locked(
                 )
                 if "inventory_view" in outcome:
                     result["inventory_view"] = outcome["inventory_view"]
+                result["spell_casts"].extend(outcome.get("spell_casts", []))
                 result["action_events"].append(occurrence["action_id"])
                 continue
 
@@ -3341,6 +3347,7 @@ def _submit_command_locked(
                 party_notifications[recipient_id].extend(recipient_messages)
             if not attack_interrupted:
                 result["action_events"].append(action_id)
+                result["spell_casts"].extend(outcome.get("spell_casts", []))
             result["messages"].extend(outcome["messages"])
             result["dialogues"].extend(outcome.get("dialogues", []))
             result["profile_account_ids"].extend(

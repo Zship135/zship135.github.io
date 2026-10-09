@@ -41,6 +41,7 @@ ACTION_ALIASES: dict[str, tuple[str, ...]] = {
         "brace", "evade", "duck", "sidestep", "deflect", "withstand", "take cover",
     ),
     "wait": ("wait", "rest"),
+    "cast": ("cast", "channel"),
     "gather": ("gather", "chop", "mine", "harvest", "collect", "forage"),
     "cancel_gather": ("cancel gathering", "cancel gather", "stop gathering", "stop"),
     "craft": ("craft", "make", "build", "create", "forge"),
@@ -70,6 +71,7 @@ ACTION_DESCRIPTIONS: dict[str, str] = {
     "heavy_attack": "make a heavy or powerful attack",
     "defend": "block or defend against an attack",
     "wait": "wait for an event",
+    "cast": "cast a spell from an equipped spellbook",
     "gather": "gather, chop, mine, or harvest a resource with a tool",
     "cancel_gather": "cancel active gathering",
     "craft": "craft or make an item from a recipe",
@@ -373,6 +375,14 @@ def _extract_arguments(
             args["resource"] = _clean_phrase(re.sub(r"^(?:for|some)\s+", "", resource, flags=re.I))
         if tool:
             args["tool"] = _quantity_and_name(tool.group(1))
+    elif mention.action_id == "cast":
+        spell_text = re.sub(r"^(?:the|a|an|my)\s+", "", fragment, flags=re.I)
+        spell_target = re.search(r"\b(?:at|on|upon|against|onto|toward|towards)\s+(.+)$", spell_text, re.I)
+        spell_name = spell_text[: spell_target.start()] if spell_target else spell_text
+        if _clean_phrase(spell_name):
+            args["spell"] = _clean_phrase(spell_name)
+        if spell_target and _clean_phrase(spell_target.group(1)):
+            args["subject"] = _clean_phrase(spell_target.group(1))
     elif mention.action_id == "craft":
         product = re.search(r"\b(?:a|an|the)?\s*(.+?)(?:\s+from\s+.+)?$", fragment, re.I)
         if product and _clean_phrase(product.group(1)):

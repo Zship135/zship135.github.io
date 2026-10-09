@@ -3842,3 +3842,106 @@ def test_tracked_quest_defaults_and_follows_choice(tmp_path: Any, monkeypatch: p
     character.quest_state["_tracked"] = "q1"
     assert game.tracked_quest_id(character, content) == "q2"
     assert game.tracked_quest_id(_enchant_character(), content) is None
+
+
+def _magic_world(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    world = content_store.WorldContent.model_validate(
+        {
+            "locations": [{"id": "a", "name": "A", "description": "d", "position": {"x": 0, "y": 0},
+                           "starting_species": ["human", "goblin"], "enemy_ids": ["rat"]}],
+            "magic_schools": [{"id": "fire", "name": "Fire", "specialties": [
+                {"id": "burning", "name": "Burning", "power_per_level_percent": 10,
+                 "cost_reduction_per_level_percent": 10}]}],
+            "spells": [
+                {"id": "spark", "name": "Spark", "school_id": "fire", "specialty_id": "burning",
+                 "mana_cost": 4, "effects": [{"type": "damage", "amount": 10}]},
+                {"id": "mend", "name": "Mend", "school_id": "fire", "specialty_id": "burning",
+                 "mana_cost": 5, "target": "self", "effects": [{"type": "heal", "mode": "fixed", "amount": 20}]},
+                {"id": "inferno", "name": "Inferno", "school_id": "fire", "specialty_id": "burning",
+                 "required_level": 3, "mana_cost": 10, "effects": [{"type": "damage", "amount": 50}]},
+            ],
+            "entities": [
+                {"id": "rat", "type": "enemy", "name": "Rat", "description": "x", "attack_die_sides": 2,
+                 "attributes": {"health": 100, "attack": 0, "defense": 0, "speed": 1}},
+                {"id": "tome", "type": "spellbook", "name": "Tome", "description": "x", "spell_slots": [
+                    {"label": "One", "school_id": "fire", "spell_id": "spark"},
+                    {"label": "Two", "spell_id": "mend"},
+                    {"label": "Three", "max_level": 5, "spell_id": "inferno"},
+                ]},
+            ],
+        }
+    )
+    path = tmp_path / "world_content.json"
+    path.write_text(world.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", path)
+    return world.model_dump(mode="json")
+
+
+def test_magic_content_validation(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    content = _magic_world(tmp_path, monkeypatch)
+    base = {key: content[key] for key in ("locations", "magic_schools")}
+    bad_spells = (
+        {"id": "x", "name": "X", "school_id": "fire", "specialty_id": "burning", "effects": [{"type": "restore_mana", "amount": 1}]},
+        {"id": "x", "name": "X", "school_id": "fire", "specialty_id": "nope", "target": "self", "effects": [{"type": "restore_mana", "amount": 1}]},
+    )
+    for spell in bad_spells:
+        with pytest.raises(ValueError):
+            content_store.WorldContent.model_validate({**base, "spells": [spell]})
+    book = {"id": "b", "type": "spellbook", "name": "B", "description": "x"}
+    with pytest.raises(ValueError):
+        content_store.WorldContent.model_validate({
+            **base, "spells": content["spells"],
+            "entities": [{**book, "spell_slots": [{"school_id": "fire", "max_level": 1, "spell_id": "inferno"}]}],
+        })
+    with pytest.raises(ValueError):
+        content_store.WorldContent.model_validate({
+            **base, "entities": [{**book, "type": "item", "spell_slots": [{}]}],
+        })
+
+
+def test_casting_requires_book_level_and_mana_and_grants_experience(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = _magic_world(tmp_path, monkeypatch)
+    character = _enchant_character(inventory={"tome": 1}, magic_state={})
+    assert "equipped spellbook" in game.resolve_command("cast spark at rat", character)["messages"][0]
+    assert "You equip Tome" in game.resolve_command("equip tome", character)["messages"][0]
+    assert character.equipment["spellbook"] == "tome"
+
+    result = game.resolve_command("cast spark at rat", character)
+    assert any("Spark strikes Rat for 10 damage" in message for message in result["messages"])
+    assert result["spell_casts"][0]["spell_id"] == "spark"
+    assert character.combat_state["enemy_health"]["rat"] == 90
+    assert character.magic_state["mana"] == pytest.approx(16, abs=0.5)
+    assert character.magic_state["experience"]["fire"] == character.magic_state["experience"]["fire/burning"]
+
+    blocked = game.resolve_command("cast inferno at rat", character)["messages"][0]
+    assert "needs Burning level 3" in blocked
+    assert "does not hold" in game.resolve_command("cast blizzard", character)["messages"][0]
+
+    character.magic_state = {"experience": {"fire": 120, "fire/burning": 120}}
+    magic_view = game.snapshot(character)["magic"]
+    assert magic_view["schools"][0]["level"] == 3 and magic_view["max_mana"] == 30
+    assert magic_view["spellbook"]["slots"][2]["spell"]["castable"] is True
+    assert magic_view["spellbook"]["slots"][0]["spell"]["mana_cost"] == 4
+    result = game.resolve_command("cast inferno at rat", character)
+    assert any("for 61 damage" in message for message in result["messages"]), result["messages"]
+
+    character.magic_state = {"experience": {"fire": 120, "fire/burning": 120}, "mana": 0, "mana_at": 1e12}
+    assert "mana to cast" in game.resolve_command("cast spark at rat", character)["messages"][0]
+    assert game.snapshot(character)["magic"]["mana"] >= 0
+    assert game.magic.current_mana(character, content, now=1e12 + 100) > 0
+
+
+def test_self_spell_heals_and_untargeted_cast_skips_combat(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _magic_world(tmp_path, monkeypatch)
+    character = _enchant_character(
+        inventory={"tome": 1}, equipment={"spellbook": "tome", "right_hand": "fist"}, magic_state={}
+    )
+    before = character.combat_stats["health"]
+    result = game.resolve_command("cast mend", character)
+    assert character.combat_stats["health"] == before + 20
+    assert not game.cast_is_offensive(character, {"arguments": {"spell": "mend"}})
+    assert game.cast_is_offensive(character, {"arguments": {"spell": "spark"}})
