@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { layoutMap, wrapLabel } from "./mapLayout.js";
 import { api, apiBlob } from "./api.js";
 import { restoreLocationSelection } from "./contentStudioSelection.js";
 import { DiePreview } from "./Dice3D.jsx";
@@ -327,71 +328,82 @@ function EntityPicker({ title, options, selected, onToggle, emptyMessage = "Noth
 
 function WorldMap({ content, onSelect }) {
   const locations = content.locations;
-  const locationsById = new Map(locations.map((location) => [location.id, location]));
-  const links = locations.flatMap((location) =>
-    Object.entries(location.exits).map(([direction, destinationId]) => ({
-      id: `${location.id}-${direction}-${destinationId}`,
-      from: location,
-      to: locationsById.get(destinationId),
-      direction,
-    })).filter((link) => link.to),
-  );
+  const cells = layoutMap(locations, content.selectedLocationId || locations[0]?.id);
+  const CELL_W = 230;
+  const CELL_H = 120;
+  const points = new Map(locations.map((location) => {
+    const cell = cells.get(location.id) || { x: 0, y: 0 };
+    return [location.id, { x: cell.x * CELL_W, y: cell.y * CELL_H }];
+  }));
+  const coords = [...points.values()];
+  const minX = Math.min(0, ...coords.map((point) => point.x)) - CELL_W / 2;
+  const maxX = Math.max(0, ...coords.map((point) => point.x)) + CELL_W / 2;
+  const minY = Math.min(0, ...coords.map((point) => point.y)) - CELL_H / 2;
+  const maxY = Math.max(0, ...coords.map((point) => point.y)) + CELL_H / 2;
+  const links = new Map();
+  for (const location of locations) {
+    for (const [direction, destinationId] of Object.entries(location.exits)) {
+      if (!points.has(destinationId)) continue;
+      const pair = [location.id, destinationId].sort().join("|");
+      const link = links.get(pair) || { id: pair, from: location.id, to: destinationId, directions: [], twoWay: false };
+      if (link.directions.length && link.from !== location.id) link.twoWay = true;
+      link.directions.push(`${location.id === link.from ? "" : "← "}${direction}`);
+      links.set(pair, link);
+    }
+  }
 
   return (
-    <svg aria-label="Map of connected world locations" className="studio-map" role="img" viewBox="0 0 1000 620">
-      <defs>
-        <marker id="map-arrow" markerHeight="8" markerWidth="8" orient="auto" refX="6" refY="3" viewBox="0 0 6 6">
-          <path d="M0,0 L6,3 L0,6" fill="none" stroke="#c78248" strokeWidth="1.2" />
-        </marker>
-      </defs>
-      <g className="studio-map-grid">
-        {Array.from({ length: 9 }, (_, index) => <path d={`M${index * 125 + 62} 0 V620`} key={`v${index}`} />)}
-        {Array.from({ length: 5 }, (_, index) => <path d={`M0 ${index * 125 + 60} H1000`} key={`h${index}`} />)}
-      </g>
-      {links.map((link) => {
-        const x1 = link.from.position.x * 10;
-        const y1 = link.from.position.y * 6;
-        const x2 = link.to.position.x * 10;
-        const y2 = link.to.position.y * 6;
-        const midpointX = (x1 + x2) / 2;
-        const midpointY = (y1 + y2) / 2;
-        return (
-          <g className="studio-map-link" key={link.id}>
-            <line markerEnd="url(#map-arrow)" x1={x1} x2={x2} y1={y1} y2={y2} />
-            <text x={midpointX} y={midpointY - 9}>{link.direction}</text>
-          </g>
-        );
-      })}
-      {locations.map((location) => {
-        const x = location.position.x * 10;
-        const y = location.position.y * 6;
-        const selected = location.id === content.selectedLocationId;
-        const kinds = [
-          location.enemy_ids.length && `${location.enemy_ids.length} enemy`,
-          location.npc_ids.length && `${location.npc_ids.length} NPC`,
-        ].filter(Boolean).join(" / ");
-        return (
-          <g
-            aria-label={`${location.name}, ${location.exits && Object.keys(location.exits).length} exits`}
-            className={`studio-map-node ${selected ? "selected" : ""}`}
-            key={location.id}
-            onClick={() => onSelect(location.id)}
-            role="button"
-            tabIndex="0"
-            transform={`translate(${x} ${y})`}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") onSelect(location.id);
-            }}
-          >
-            <rect height="76" rx="4" width="176" x="-88" y="-38" />
-            <text className="studio-map-node-name" y="-4">{location.name}</text>
-            <text className="studio-map-node-meta" y="17">{kinds || "Quiet location"}</text>
-            <text className="studio-map-coordinate" y="31">{location.position.x}, {location.position.y}</text>
-          </g>
-        );
-      })}
-      {locations.length === 0 && <text className="studio-map-empty" x="500" y="310">Create a location to start your map.</text>}
-    </svg>
+    <div className="studio-map-scroll">
+      <svg
+        aria-label="Map of connected world locations"
+        className="studio-map"
+        role="img"
+        style={{ width: Math.max(600, maxX - minX), height: Math.max(360, maxY - minY) }}
+        viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`}
+      >
+        <defs>
+          <marker id="map-arrow" markerHeight="8" markerWidth="8" orient="auto" refX="6" refY="3" viewBox="0 0 6 6">
+            <path d="M0,0 L6,3 L0,6" fill="none" stroke="#c78248" strokeWidth="1.2" />
+          </marker>
+        </defs>
+        {[...links.values()].map((link) => {
+          const a = points.get(link.from);
+          const b = points.get(link.to);
+          return (
+            <g className="studio-map-link" key={link.id}>
+              <line markerEnd={link.twoWay ? undefined : "url(#map-arrow)"} x1={a.x} x2={b.x} y1={a.y} y2={b.y} />
+            </g>
+          );
+        })}
+        {locations.map((location) => {
+          const { x, y } = points.get(location.id);
+          const selected = location.id === content.selectedLocationId;
+          const kinds = [
+            location.enemy_ids.length && `${location.enemy_ids.length} enemy`,
+            location.npc_ids.length && `${location.npc_ids.length} NPC`,
+          ].filter(Boolean).join(" / ");
+          return (
+            <g
+              aria-label={`${location.name}, ${Object.keys(location.exits || {}).length} exits`}
+              className={`studio-map-node ${selected ? "selected" : ""}`}
+              key={location.id}
+              onClick={() => onSelect(location.id)}
+              role="button"
+              tabIndex="0"
+              transform={`translate(${x} ${y})`}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") onSelect(location.id);
+              }}
+            >
+              <rect height="64" rx="4" width="176" x="-88" y="-32" />
+              <text className="studio-map-node-name" y="-3">{wrapLabel(location.name, 24)[0]}</text>
+              <text className="studio-map-node-meta" y="17">{kinds || "Quiet location"}</text>
+            </g>
+          );
+        })}
+        {locations.length === 0 && <text className="studio-map-empty" x="0" y="0">Create a location to start your map.</text>}
+      </svg>
+    </div>
   );
 }
 
@@ -914,7 +926,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                   <WorldMap content={{ ...content, selectedLocationId: selectedId }} onSelect={(id) => { selectLocation(id); setTab("locations"); }} />
                 </div>
                 <div className="studio-map-controls">
-                  <p>Connections create matching exits in both locations. Select nodes to edit them; their map position can be adjusted in location details.</p>
+                  <p>Connections create matching exits in both locations. The map is laid out automatically from each location\u2019s exits; select a node to edit it.</p>
                   <div className="studio-link-controls">
                     <SelectField label="From" options={content.locations} value={linkForm.from} onChange={(value) => setLinkForm((form) => ({ ...form, from: value || "" }))} />
                     <SelectField label="Direction" options={["north", "east", "south", "west"].map((name) => ({ id: name, name: name[0].toUpperCase() + name.slice(1) }))} value={linkForm.direction} onChange={(value) => setLinkForm((form) => ({ ...form, direction: value || "east" }))} />
@@ -1132,14 +1144,6 @@ function LocationEditor({
           ))}
         </div>
       </fieldset>
-      <section className="studio-subsection">
-        <h3>Map position</h3>
-        <p>Move this location around on the map using its coordinates.</p>
-        <div className="studio-two-fields">
-          <Field label="Horizontal (0–100)" max={100} min={0} onChange={(value) => onChange((current) => { current.position.x = value; })} type="number" value={location.position.x} />
-          <Field label="Vertical (0–100)" max={100} min={0} onChange={(value) => onChange((current) => { current.position.y = value; })} type="number" value={location.position.y} />
-        </div>
-      </section>
       <section className="studio-subsection">
         <h3>Connected exits</h3>
         <p>Choose the destination reachable from each direction.</p>
