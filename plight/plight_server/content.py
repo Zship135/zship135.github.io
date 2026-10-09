@@ -352,12 +352,18 @@ class ItemLuckEffect(ContentModel):
         return self
 
 
+class ItemLearnSpellEffect(ContentModel):
+    type: Literal["learn_spell"]
+    spell_id: str = Field(pattern=_SLUG.pattern)
+
+
 ItemEffect = Annotated[
     ItemHealingEffect
     | ItemStatBuffEffect
     | ItemShieldEffect
     | ItemTeleportEffect
-    | ItemLuckEffect,
+    | ItemLuckEffect
+    | ItemLearnSpellEffect,
     Field(discriminator="type"),
 ]
 
@@ -546,6 +552,7 @@ class Spell(ContentModel):
     effects: list[SpellEffect] = Field(default_factory=list, min_length=1, max_length=10)
     cast_message: str = Field(default="", max_length=300)
     visual: SpellVisual = Field(default_factory=SpellVisual)
+    auto_unlock: bool = True
 
     @model_validator(mode="after")
     def validate_effects(self) -> Spell:
@@ -680,6 +687,7 @@ class Quest(ContentModel):
     reward_items: list[QuestRewardItem] = Field(default_factory=list, max_length=20)
     reward_currencies: list[CurrencyAmount] = Field(default_factory=list, max_length=20)
     reward_die_skin_ids: list[str] = Field(default_factory=list, max_length=20)
+    reward_spell_ids: list[str] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="before")
     @classmethod
@@ -898,6 +906,8 @@ class WorldContent(BaseModel):
                 raise ValueError(f"Gathering settings only apply to resources ({entity.id}).")
             if entity.item_use is not None:
                 for effect in entity.item_use.effects:
+                    if isinstance(effect, ItemLearnSpellEffect) and effect.spell_id not in spells:
+                        raise ValueError(f"Item {entity.id} teaches a missing spell.")
                     if (
                         isinstance(effect, ItemTeleportEffect)
                         and effect.destination_area_id not in locations
@@ -1027,6 +1037,10 @@ class WorldContent(BaseModel):
                 skin_id not in die_skins for skin_id in quest.reward_die_skin_ids
             ):
                 raise ValueError(f"Quest {quest.id} has a duplicate or missing die skin reward.")
+            if len(set(quest.reward_spell_ids)) != len(quest.reward_spell_ids) or any(
+                spell_id not in spells for spell_id in quest.reward_spell_ids
+            ):
+                raise ValueError(f"Quest {quest.id} has a duplicate or missing spell reward.")
         return self
 
 

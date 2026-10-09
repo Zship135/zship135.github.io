@@ -169,6 +169,98 @@ def equipped_spellbook(
     return item
 
 
+def learned_spell_ids(character: Any) -> list[str]:
+    values = _state(character).get("known_spells")
+    return [str(value) for value in values] if isinstance(values, list) else []
+
+
+def carried_spellbooks(
+    character: Any, entities: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    inventory = getattr(character, "inventory", None) or {}
+    return [
+        entity for entity in entities.values()
+        if entity.get("type") == "spellbook" and inventory.get(entity["id"], 0) > 0
+    ]
+
+
+def known_spell_ids(
+    character: Any, content: dict[str, Any], entities: dict[str, dict[str, Any]]
+) -> set[str]:
+    catalog = spell_catalog(content)
+    known = {spell_id for spell_id in learned_spell_ids(character) if spell_id in catalog}
+    for spell in catalog.values():
+        if spell.get("auto_unlock", True) and specialty_level(
+            character, spell["school_id"], spell["specialty_id"]
+        ) >= spell["required_level"]:
+            known.add(spell["id"])
+    for book in carried_spellbooks(character, entities):
+        known.update(
+            slot["spell_id"] for slot in book.get("spell_slots", [])
+            if slot.get("spell_id") in catalog
+        )
+    return known
+
+
+def learn_spell(character: Any, content: dict[str, Any], spell_id: str) -> str | None:
+    spell = spell_catalog(content).get(spell_id)
+    if spell is None:
+        return None
+    learned = learned_spell_ids(character)
+    if spell_id in learned:
+        return None
+    state = _state(character)
+    state["known_spells"] = [*learned, spell_id]
+    character.magic_state = state
+    return f"You learn the spell {spell['name']}."
+
+
+def slot_spell_id(character: Any, book: dict[str, Any], index: int) -> str | None:
+    overrides = (_state(character).get("books") or {}).get(book["id"]) or {}
+    if str(index) in overrides:
+        return overrides[str(index)] or None
+    return (book.get("spell_slots") or [])[index].get("spell_id")
+
+
+def book_slot_spell_ids(character: Any, book: dict[str, Any]) -> list[str | None]:
+    return [slot_spell_id(character, book, index) for index in range(len(book.get("spell_slots", [])))]
+
+
+def assign_slot(
+    character: Any,
+    content: dict[str, Any],
+    entities: dict[str, dict[str, Any]],
+    book_id: str,
+    index: int,
+    spell_id: str | None,
+) -> str | None:
+    """Put a known spell into a slot of a carried spellbook. Returns an error message or None."""
+    book = next((entry for entry in carried_spellbooks(character, entities) if entry["id"] == book_id), None)
+    if book is None:
+        return "You are not carrying that spellbook."
+    slots = book.get("spell_slots", [])
+    if not 0 <= index < len(slots):
+        return "That spellbook has no such slot."
+    if spell_id:
+        spell = spell_catalog(content).get(spell_id)
+        if spell is None or spell_id not in known_spell_ids(character, content, entities):
+            return "You do not know that spell."
+        slot = slots[index]
+        if slot.get("school_id") and slot["school_id"] != spell["school_id"]:
+            return "That slot only holds spells from another school."
+        if slot.get("max_level") and spell["required_level"] > slot["max_level"]:
+            return "That spell is too advanced for this slot."
+        current = book_slot_spell_ids(character, book)
+        if spell_id in [value for position, value in enumerate(current) if position != index]:
+            return "That spell is already in this spellbook."
+    state = _state(character)
+    books = {key: dict(value) for key, value in (state.get("books") or {}).items()}
+    books.setdefault(book_id, {})[str(index)] = spell_id or ""
+    state["books"] = books
+    character.magic_state = state
+    return None
+
+
 def book_spells(
     character: Any, content: dict[str, Any], entities: dict[str, dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -176,11 +268,7 @@ def book_spells(
     if book is None:
         return []
     catalog = spell_catalog(content)
-    return [
-        catalog[slot["spell_id"]]
-        for slot in book.get("spell_slots", [])
-        if slot.get("spell_id") in catalog
-    ]
+    return [catalog[spell_id] for spell_id in book_slot_spell_ids(character, book) if spell_id in catalog]
 
 
 def cast_blocker(
@@ -302,20 +390,34 @@ def magic_view(
     maximum = max_mana(character, content)
     book = equipped_spellbook(character, entities)
     catalog = spell_catalog(content)
-    slots = []
-    for index, slot in enumerate((book or {}).get("spell_slots", [])):
-        spell = catalog.get(slot.get("spell_id") or "")
-        slots.append({
-            "index": index,
-            "label": slot.get("label") or f"Slot {index + 1}",
-            "school_id": slot.get("school_id"),
-            "max_level": slot.get("max_level"),
-            "spell": _spell_view(character, content, spell, current_time) if spell else None,
-        })
+    def book_view(entry: dict[str, Any]) -> dict[str, Any]:
+        slots = []
+        for index, slot in enumerate(entry.get("spell_slots", [])):
+            spell = catalog.get(slot_spell_id(character, entry, index) or "")
+            slots.append({
+                "index": index,
+                "label": slot.get("label") or f"Slot {index + 1}",
+                "school_id": slot.get("school_id"),
+                "max_level": slot.get("max_level"),
+                "spell": _spell_view(character, content, spell, current_time) if spell else None,
+            })
+        return {
+            "id": entry["id"],
+            "name": entry["name"],
+            "equipped": bool(book and book["id"] == entry["id"]),
+            "slots": slots,
+        }
+
+    known = known_spell_ids(character, content, entities)
     return {
         "mana": int(current_mana(character, content, current_time)),
         "max_mana": maximum,
         "regen_per_second": round(mana_regen_per_second(maximum), 2),
         "schools": schools,
-        "spellbook": {"id": book["id"], "name": book["name"], "slots": slots} if book else None,
+        "spellbook": book_view(book) if book else None,
+        "books": [book_view(entry) for entry in carried_spellbooks(character, entities)],
+        "known_spells": [
+            _spell_view(character, content, spell, current_time)
+            for spell in content["spells"] if spell["id"] in known
+        ],
     }

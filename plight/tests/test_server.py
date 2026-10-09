@@ -3945,3 +3945,49 @@ def test_self_spell_heals_and_untargeted_cast_skips_combat(
     assert character.combat_stats["health"] == before + 20
     assert not game.cast_is_offensive(character, {"arguments": {"spell": "mend"}})
     assert game.cast_is_offensive(character, {"arguments": {"spell": "spark"}})
+
+
+def test_spells_unlock_and_spellbook_slots_are_player_editable(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = _magic_world(tmp_path, monkeypatch)
+    content["spells"].append({
+        **content["spells"][0], "id": "ash", "name": "Ash", "auto_unlock": False,
+    })
+    content["spells"].append({
+        **content["spells"][0], "id": "scorch", "name": "Scorch", "required_level": 2,
+    })
+    content["entities"].append({
+        "id": "scroll", "type": "item", "name": "Ash Scroll", "description": "x",
+        "item_use": {"effects": [{"type": "learn_spell", "spell_id": "ash"}], "target_scope": "self", "consume_on_use": True},
+    })
+    content["entities"].append({
+        "id": "blank", "type": "spellbook", "name": "Blank Book", "description": "x",
+        "spell_slots": [{"label": "A"}, {"label": "B", "max_level": 1}],
+    })
+    content_store.WORLD_CONTENT_PATH.write_text(
+        content_store.WorldContent.model_validate(content).model_dump_json(), encoding="utf-8"
+    )
+    content = game.world_content_dict()
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    character = _enchant_character(inventory={"blank": 1, "scroll": 1}, magic_state={})
+    known = game.magic.known_spell_ids(character, content, entities)
+    assert known == {"spark", "mend"}
+    assert game.magic.assign_slot(character, content, entities, "blank", 0, "ash") == "You do not know that spell."
+    assert game.magic.assign_slot(character, content, entities, "blank", 0, "spark") is None
+    assert game.magic.assign_slot(character, content, entities, "blank", 1, "spark") == "That spell is already in this spellbook."
+    assert game.magic.assign_slot(character, content, entities, "blank", 5, "mend") == "That spellbook has no such slot."
+    game.resolve_command("equip blank book", character)
+    assert [spell["id"] for spell in game.magic.book_spells(character, content, entities)] == ["spark"]
+
+    assert any("learn the spell Ash" in m for m in game.resolve_command("use ash scroll", character)["messages"])
+    assert game.magic.assign_slot(character, content, entities, "blank", 1, "ash") is None
+    view = game.snapshot(character)["magic"]
+    assert {spell["id"] for spell in view["known_spells"]} >= {"spark", "ash"}
+    assert [slot["spell"]["id"] for slot in view["spellbook"]["slots"]] == ["spark", "ash"]
+    assert game.magic.assign_slot(character, content, entities, "blank", 1, None) is None
+    assert game.snapshot(character)["magic"]["spellbook"]["slots"][1]["spell"] is None
+
+    character.magic_state = {"experience": {"fire": 100, "fire/burning": 100}}
+    assert "scorch" in game.magic.known_spell_ids(character, content, entities)
+    assert game.grant_spells(character, content, ["ash", "ash"]) == ["Reward: the spell Ash."]

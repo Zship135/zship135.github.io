@@ -1054,6 +1054,14 @@ export default function App() {
 
   }
 
+  async function editSpellbookSlot(bookId, slot, spellId) {
+    try {
+      setSnapshot(await api("/api/v1/character/spellbook", { token, method: "PUT", body: JSON.stringify({ book_id: bookId, slot, spell_id: spellId }) }));
+    } catch (error) {
+      showError(error);
+    }
+  }
+
   async function selectDieSkin(skinId) {
     setDiceBusy(true);
     setDiceError("");
@@ -1709,6 +1717,7 @@ export default function App() {
           enemies={snapshot?.area?.enemies || []}
           magic={snapshot.magic}
           onCast={runCommand}
+          onEditSlot={editSpellbookSlot}
           onClose={() => setSpellsOpen(false)}
         />
       )}

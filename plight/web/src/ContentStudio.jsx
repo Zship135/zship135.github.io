@@ -645,7 +645,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
       updateContent((next) => {
         next.spells = [...(next.spells || []), {
           id, name: "New spell", description: "", school_id: school.id, specialty_id: school.specialties[0].id,
-          required_level: 1, mana_cost: 5, target: "enemy", effects: [{ type: "damage", amount: 10 }], cast_message: "",
+          required_level: 1, mana_cost: 5, auto_unlock: true, target: "enemy", effects: [{ type: "damage", amount: 10 }], cast_message: "",
           visual: { animation: "bolt", color: school.color, secondary_color: "#ffe08a", intensity: 2, particle_effect: "sparks" },
         }];
       });
@@ -751,7 +751,11 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         const removedSpells = new Set((next.spells || []).filter((spell) => spell.school_id === selectedId).map((spell) => spell.id));
         next.magic_schools = (next.magic_schools || []).filter((item) => item.id !== selectedId);
         next.spells = (next.spells || []).filter((spell) => spell.school_id !== selectedId);
+        for (const quest of next.quests) {
+          if (quest.reward_spell_ids) quest.reward_spell_ids = quest.reward_spell_ids.filter((id) => !removedSpells.has(id));
+        }
         for (const entity of next.entities) {
+          if (entity.item_use) entity.item_use.effects = entity.item_use.effects.filter((effect) => !removedSpells.has(effect.spell_id));
           for (const slot of entity.spell_slots || []) {
             if (slot.school_id === selectedId) slot.school_id = null;
             if (removedSpells.has(slot.spell_id)) slot.spell_id = null;
@@ -759,7 +763,11 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
         }
       } else if (tab === "spells") {
         next.spells = (next.spells || []).filter((spell) => spell.id !== selectedId);
+        for (const quest of next.quests) {
+          if (quest.reward_spell_ids) quest.reward_spell_ids = quest.reward_spell_ids.filter((id) => id !== selectedId);
+        }
         for (const entity of next.entities) {
+          if (entity.item_use) entity.item_use.effects = entity.item_use.effects.filter((effect) => effect.spell_id !== selectedId);
           for (const slot of entity.spell_slots || []) {
             if (slot.spell_id === selectedId) slot.spell_id = null;
           }
@@ -1097,6 +1105,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       schools={schools}
                       entities={content.entities}
                       locations={content.locations}
+                      onGive={() => giveToSelf("spell", currentSpell.id)}
                       onChange={(mutate) => updateContent((next) => {
                         const spell = next.spells.find((item) => item.id === selectedId);
                         if (spell) mutate(spell);
@@ -1141,6 +1150,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       entities={content.entities}
                       currencies={currencies}
                       dieSkins={dieSkins}
+                      spells={spells}
                       locations={content.locations}
                       onChange={(field, value) => updateContent((next) => {
                         const quest = next.quests.find((item) => item.id === selectedId);
@@ -1543,7 +1553,7 @@ function EntityEditor({ entity, entities, currencies = [], enchantments = [], sc
         <BookEditor book={entity.book} onChange={(value) => set("book", value)} />
       )}
       {entity.type === "item" && (
-        <ItemUseEditor itemUse={entity.item_use} locations={locations} onChange={(value) => set("item_use", value)} />
+        <ItemUseEditor itemUse={entity.item_use} locations={locations} spells={spells} onChange={(value) => set("item_use", value)} />
       )}
       {entity.type === "resource" && (
         <ResourceGatheringEditor gathering={entity.gathering} items={lootItems} onChange={(value) => set("gathering", value)} />
@@ -1642,7 +1652,7 @@ function BookEditor({ book, onChange }) {
   );
 }
 
-function ItemUseEditor({ itemUse, locations, onChange }) {
+function ItemUseEditor({ itemUse, locations, spells = [], onChange }) {
   const config = itemUse || { effects: [], target_scope: "self", consume_on_use: true };
   const effects = config.effects || [];
 
@@ -1666,6 +1676,7 @@ function ItemUseEditor({ itemUse, locations, onChange }) {
       shield: { type, mode: "damage_pool", amount: 20, duration_seconds: 300 },
       teleport: { type, destination_area_id: locations[0]?.id || "" },
       luck: { type, drop_chance_bonus_percent: 10, gathering_yield_bonus_percent: 0, duration_seconds: 300 },
+      learn_spell: { type, spell_id: spells[0]?.id || "" },
     };
     onChange({ ...config, effects: [...effects, defaults[type]] });
   }
@@ -1732,6 +1743,7 @@ function ItemUseEditor({ itemUse, locations, onChange }) {
               { id: "shield", name: "Shield" },
               { id: "teleport", name: "Teleport" },
               { id: "luck", name: "Luck" },
+              { id: "learn_spell", name: "Teach a spell" },
             ]}
             value={effect.type}
             onChange={(type) => {
@@ -1741,6 +1753,7 @@ function ItemUseEditor({ itemUse, locations, onChange }) {
                 shield: { type, mode: "damage_pool", amount: 20, duration_seconds: 300 },
                 teleport: { type, destination_area_id: locations[0]?.id || "" },
                 luck: { type, drop_chance_bonus_percent: 10, gathering_yield_bonus_percent: 0, duration_seconds: 300 },
+                learn_spell: { type, spell_id: spells[0]?.id || "" },
               };
               onChange({
                 ...config,
@@ -1813,6 +1826,9 @@ function ItemUseEditor({ itemUse, locations, onChange }) {
               value={effect.destination_area_id}
               onChange={(value) => updateEffect(index, "destination_area_id", value)}
             />
+          )}
+          {effect.type === "learn_spell" && (
+            <SelectField label="Spell taught" emptyLabel="Choose a spell" options={spells} value={effect.spell_id} onChange={(value) => updateEffect(index, "spell_id", value)} />
           )}
           {effect.type === "luck" && (
             <div className="studio-two-fields">
@@ -1971,7 +1987,7 @@ function LootTableEditor({
   );
 }
 
-function QuestEditor({ quest, npcs, entities, currencies = [], dieSkins = [], locations, onChange }) {
+function QuestEditor({ quest, npcs, entities, currencies = [], dieSkins = [], spells = [], locations, onChange }) {
   function set(field, value) {
     onChange((current, next) => { current[field] = next; }, value);
   }
@@ -2315,6 +2331,24 @@ function QuestEditor({ quest, npcs, entities, currencies = [], dieSkins = [], lo
         ))}
         {dieSkins.length === 0 && <p className="studio-hint">Create a skin in the Die skins section first.</p>}
       </section>
+      <section className="studio-subsection">
+        <h3>Spell rewards</h3>
+        {spells.map((spell) => (
+          <label className="studio-field studio-inline-check" key={spell.id}>
+            <span>{spell.name}</span>
+            <input
+              checked={(quest.reward_spell_ids || []).includes(spell.id)}
+              onChange={(event) => onChange((current) => {
+                const ids = new Set(current.reward_spell_ids || []);
+                if (event.target.checked) ids.add(spell.id); else ids.delete(spell.id);
+                current.reward_spell_ids = [...ids];
+              })}
+              type="checkbox"
+            />
+          </label>
+        ))}
+        {spells.length === 0 && <p className="studio-hint">Create a spell in the Spells section first.</p>}
+      </section>
       <p className="studio-hint">To gate a passage, select this quest as the exit requirement in the destination location's editor.</p>
     </div>
   );
@@ -2535,7 +2569,7 @@ function SchoolEditor({ school, onChange }) {
   );
 }
 
-function SpellEditor({ spell, schools, entities, locations, onChange }) {
+function SpellEditor({ spell, schools, entities, locations, onChange, onGive }) {
   const set = (field, value) => onChange((item) => { item[field] = value; });
   const setVisual = (field, value) => onChange((item) => { item.visual = { ...item.visual, [field]: value }; });
   const setEffect = (index, field, value) => onChange((item) => { item.effects[index][field] = value; });
@@ -2568,6 +2602,11 @@ function SpellEditor({ spell, schools, entities, locations, onChange }) {
           onChange={(value) => set("target", value)}
         />
       </div>
+      <label className="studio-field studio-inline-check">
+        <span>Unlocks automatically when the player reaches the required level (otherwise only quests, scrolls or books teach it)</span>
+        <input checked={spell.auto_unlock !== false} onChange={(event) => set("auto_unlock", event.target.checked)} type="checkbox" />
+      </label>
+      <button className="studio-secondary-button" onClick={onGive} type="button">Give to me</button>
       <Field label="Cast message (optional)" onChange={(value) => set("cast_message", value)} value={spell.cast_message || ""} />
       <section className="studio-subsection">
         <div className="studio-subsection-heading">

@@ -156,10 +156,16 @@ class ErrorResponse(BaseModel):
 
 
 class DevGiveRequest(BaseModel):
-    kind: Literal["item", "die_skin"]
+    kind: Literal["item", "die_skin", "spell"]
     id: str = Field(max_length=64)
     quantity: int = Field(default=1, ge=1, le=9999)
 
 
 class DieSkinRequest(BaseModel):
     skin_id: str | None = Field(default=None, max_length=64)
+
+
+class SpellbookSlotRequest(BaseModel):
+    book_id: str = Field(max_length=64)
+    slot: int = Field(ge=0, le=39)
+    spell_id: str | None = Field(default=None, max_length=64)

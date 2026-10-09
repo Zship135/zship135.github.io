@@ -229,6 +229,15 @@ def _die_skin_view(character: Any, content: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def grant_spells(character: Any, content: dict[str, Any], spell_ids: list[str]) -> list[str]:
+    messages = []
+    for spell_id in spell_ids:
+        message = magic.learn_spell(character, content, spell_id)
+        if message:
+            messages.append(f"Reward: the spell {magic.spell_catalog(content)[spell_id]['name']}.")
+    return messages
+
+
 def grant_die_skins(character: Any, content: dict[str, Any], skin_ids: list[str]) -> list[str]:
     skins = {skin["id"]: skin for skin in content.get("die_skins", [])}
     unlocked = list(getattr(character, "unlocked_die_skins", None) or [])
@@ -2252,6 +2261,11 @@ def _apply_item_effect(
     now: float,
 ) -> str:
     kind = effect["type"]
+    if kind == "learn_spell":
+        spell_id = effect["spell_id"]
+        learned = magic.learn_spell(character, world_content_dict(), spell_id)
+        name = next((s["name"] for s in world_content_dict().get("spells", []) if s["id"] == spell_id), spell_id)
+        return f"learn the spell {name}" if learned else f"already know {name}"
     if kind == "heal":
         base_stats = {**PLAYER_BASE_STATS, **(character.combat_stats or {})}
         stats = _effective_stats(character, entities, now)

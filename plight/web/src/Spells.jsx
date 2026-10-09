@@ -174,7 +174,7 @@ export function SpellVisual({ visual, delay = 0, loop = false, width = 320, heig
   }, [visual, delay, loop, width, height]);
   return <canvas className="spell-canvas" height={height} ref={canvasRef} width={width} />;
 }
-export function SpellsDialog({ busy, enemies, magic, onCast, onClose }) {
+export function SpellsDialog({ busy, enemies, magic, onCast, onClose, onEditSlot }) {
   const [target, setTarget] = useState("");
   useEffect(() => {
     if (!enemies.some((enemy) => enemy.name === target)) setTarget(enemies[0]?.name || "");
@@ -219,6 +219,42 @@ export function SpellsDialog({ busy, enemies, magic, onCast, onClose }) {
                   <button disabled={busy || !slot.spell.castable || (slot.spell.target === "enemy" && !target)} onClick={() => cast(slot.spell)} type="button">Cast</button>
                 </>
               ) : <span>Empty</span>}
+            </article>
+          ))}
+        </div>
+        <h3>Edit spellbooks</h3>
+        {(magic?.books || []).length === 0 && <p className="inventory-empty">You are not carrying a spellbook.</p>}
+        {(magic?.books || []).map((entry) => (
+          <article className="spellbook-editor" key={entry.id}>
+            <strong>{entry.name}{entry.equipped ? " (equipped)" : ""}</strong>
+            {entry.slots.map((slot) => {
+              const others = new Set(entry.slots.filter((other) => other.index !== slot.index && other.spell).map((other) => other.spell.id));
+              const options = (magic.known_spells || []).filter((spell) => (
+                (!slot.school_id || spell.school_id === slot.school_id)
+                && (!slot.max_level || spell.required_level <= slot.max_level)
+                && !others.has(spell.id)
+              ));
+              return (
+                <label className="spellbook-slot" key={slot.index}>
+                  <span>{slot.label}{slot.school_id ? ` · ${slot.school_id}` : ""}{slot.max_level ? ` · max level ${slot.max_level}` : ""}</span>
+                  <select disabled={busy} onChange={(event) => onEditSlot(entry.id, slot.index, event.target.value || null)} value={slot.spell?.id || ""}>
+                    <option value="">Empty</option>
+                    {slot.spell && !options.some((spell) => spell.id === slot.spell.id) && <option value={slot.spell.id}>{slot.spell.name}</option>}
+                    {options.map((spell) => <option key={spell.id} value={spell.id}>{spell.name} (level {spell.required_level}, {spell.specialty_name})</option>)}
+                  </select>
+                </label>
+              );
+            })}
+          </article>
+        ))}
+        <h3>Known spells ({(magic?.known_spells || []).length})</h3>
+        <div className="spell-slots">
+          {(magic?.known_spells || []).map((spell) => (
+            <article className="spell-card" key={spell.id} style={{ "--school-color": spell.school_color }}>
+              <strong>{spell.name}</strong>
+              <span>{spell.school_name} / {spell.specialty_name} · level {spell.required_level} · {spell.mana_cost} mana</span>
+              <ul>{spell.effects.map((effect) => <li key={effect}>{effect}</li>)}</ul>
+              {spell.blocker && !spell.blocker.includes("mana") && <em>{spell.blocker}</em>}
             </article>
           ))}
         </div>

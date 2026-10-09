@@ -48,6 +48,7 @@ from plight_server.game import (
     TRACKED_QUEST_KEY,
     ITEM_TYPES,
     grant_die_skins,
+    grant_spells,
     _complete_gathering,
     apply_damage_over_time,
     award_enemy_defeat,
@@ -80,6 +81,7 @@ from plight_server.models import (
     PlayerSession,
     utc_now,
 )
+from plight_server import magic
 from plight_server.schemas import (
     ChatSendRequest,
     CharacterCreateRequest,
@@ -92,6 +94,7 @@ from plight_server.schemas import (
     PartyInviteCreate,
     PartyInviteUpdate,
     DevGiveRequest,
+    SpellbookSlotRequest,
     DieSkinRequest,
     ProfileUpdateRequest,
     QuestChoiceRequest,
@@ -2372,6 +2375,9 @@ def turn_in_quest(
         currency_messages.extend(
             grant_die_skins(character, content, quest.get("reward_die_skin_ids", []))
         )
+        currency_messages.extend(
+            grant_spells(character, content, quest.get("reward_spell_ids", []))
+        )
         state[quest_id] = {
             **quest_state,
             "status": "completed",
@@ -2434,6 +2440,24 @@ def select_die_skin(
             raise HTTPException(status_code=409, detail="You have not unlocked that die skin.")
     character.active_die_skin = body.skin_id
     db.commit()
+    return _snapshot_for_character(character, db)
+
+
+@app.put("/api/v1/character/spellbook")
+def edit_spellbook(
+    body: SpellbookSlotRequest,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    character = _require_character(account)
+    content = world_content_dict()
+    entities = {entity["id"]: entity for entity in content["entities"]}
+    with _character_lock(account.id):
+        db.refresh(character)
+        error = magic.assign_slot(character, content, entities, body.book_id, body.slot, body.spell_id)
+        if error:
+            raise HTTPException(status_code=409, detail=error)
+        db.commit()
     return _snapshot_for_character(character, db)
 
 
@@ -2556,6 +2580,12 @@ def give_to_editor(
                 raise HTTPException(status_code=404, detail="Save the world first; that die skin is not live yet.")
             grant_die_skins(character, content, [body.id])
             message = f"You now own the {skin['name']} die skin."
+        elif body.kind == "spell":
+            spell = next((entry for entry in content.get("spells", []) if entry["id"] == body.id), None)
+            if spell is None:
+                raise HTTPException(status_code=404, detail="Save the world first; that spell is not live yet.")
+            magic.learn_spell(character, content, body.id)
+            message = f"You now know the spell {spell['name']}."
         else:
             entity = next(
                 (e for e in content["entities"] if e["id"] == body.id and e["type"] in ITEM_TYPES | {"resource"}),
