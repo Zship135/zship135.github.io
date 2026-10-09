@@ -1666,45 +1666,11 @@ export default function App() {
           <section className="panel quest-tracker-panel" aria-label="Quest tracker">
             <header className="panel-heading compact"><h2>Quest tracker</h2></header>
             <div className="location-content">
-          <WorldEntityList
-            title="Active quests"
-            entities={snapshot?.quest_log || []}
-            renderItem={(quest) => (
-              <article className="quest-tracker-entry" key={quest.id}>
-                <div className="quest-tracker-heading">
-                  <strong>{quest.title}</strong>
-                  <span className={`quest-status ${quest.status}`}>{quest.status}</span>
-                </div>
-                <p>{quest.description}</p>
-                <small>Given by {quest.giver_name}</small>
-                {quest.current_step_title && <strong className="quest-step-title">{quest.current_step_title}</strong>}
-                {quest.step_description && <p>{quest.step_description}</p>}
-                {quest.objectives.map((objective) => (
-                  <p className="quest-objective" key={objective.id}>
-                    {objective.type === "collect" ? "Collect" : objective.type === "kill" ? "Defeat" : objective.type === "talk" ? "Talk to" : "Visit"} {objective.target_name}: {objective.current}/{objective.required}
-                  </p>
-                ))}
-                {quest.can_choose && (
-                  <div className="quest-step-choices">
-                    {quest.choices.map((choice) => (
-                      <button
-                        className="dialogue-choice-button"
-                        disabled={questBusyId === quest.id}
-                        key={choice.id}
-                        onClick={() => runQuestAction(quest, "choose", {
-                          step_id: quest.current_step_id,
-                          choice_id: choice.id,
-                        })}
-                        type="button"
-                      >
-                        {choice.text}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {quest.can_turn_in && <small>Return to {quest.giver_name} to claim your rewards.</small>}
-              </article>
-            )}
+          <QuestTrackerSections
+            busyId={questBusyId}
+            onAction={runQuestAction}
+            quests={snapshot?.quest_log || []}
+            trackedId={snapshot?.tracked_quest_id || null}
           />
             </div>
           </section>
@@ -2189,6 +2155,101 @@ function InventoryDialog({ busy, onClose, onEquip, onUnequip, onUse, onSelectVie
           )) : <p className="inventory-empty">Nothing is carried in this view.</p>}
         </section>
       </section>
+    </div>
+  );
+}
+
+function QuestEntry({ busyId, onAction, quest, compact = false, trackedId }) {
+  const [open, setOpen] = useState(!compact);
+  const showDetail = !compact || open;
+  const objectiveLabel = { collect: "Collect", kill: "Defeat", talk: "Talk to" };
+  return (
+    <article className="quest-tracker-entry">
+      <div className="quest-tracker-heading">
+        <strong>{quest.title}</strong>
+        <span className={`quest-status ${quest.status}`}>{quest.status}</span>
+      </div>
+      {compact && (
+        <div className="quest-entry-actions">
+          <button onClick={() => setOpen((value) => !value)} type="button">{open ? "Hide details" : "Details"}</button>
+          {quest.status === "active" && quest.id !== trackedId && (
+            <button disabled={busyId === quest.id} onClick={() => onAction(quest, "track")} type="button">Make active</button>
+          )}
+        </div>
+      )}
+      {showDetail && (
+        <>
+          <p>{quest.description}</p>
+          <small>Given by {quest.giver_name}</small>
+          {quest.status === "active" && (
+            <>
+              {quest.current_step_title && <strong className="quest-step-title">{quest.current_step_title}</strong>}
+              {quest.step_description && <p>{quest.step_description}</p>}
+              {quest.objectives.map((objective) => (
+                <p className="quest-objective" key={objective.id}>
+                  {objectiveLabel[objective.type] || "Visit"} {objective.target_name}: {objective.current}/{objective.required}
+                </p>
+              ))}
+              {quest.can_choose && (
+                <div className="quest-step-choices">
+                  {quest.choices.map((choice) => (
+                    <button
+                      className="dialogue-choice-button"
+                      disabled={busyId === quest.id}
+                      key={choice.id}
+                      onClick={() => onAction(quest, "choose", { step_id: quest.current_step_id, choice_id: choice.id })}
+                      type="button"
+                    >
+                      {choice.text}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {quest.can_turn_in && <small>Return to {quest.giver_name} to claim your rewards.</small>}
+            </>
+          )}
+        </>
+      )}
+    </article>
+  );
+}
+
+function QuestTrackerSections({ busyId, onAction, quests, trackedId }) {
+  const [collapsed, setCollapsed] = useState({});
+  const active = quests.filter((quest) => quest.id === trackedId && quest.status === "active");
+  const inProgress = quests.filter((quest) => quest.status === "active" && quest.id !== trackedId);
+  const completed = quests.filter((quest) => quest.status === "completed");
+  const sections = [
+    ["active", "Active", active, false, "Your active quest guides the map and the star on the exits list."],
+    ["progress", "In progress", inProgress, true, "Accepted quests. Pick one to make it your active quest."],
+    ["completed", "Completed", completed, true, ""],
+  ];
+  return (
+    <div className="quest-sections">
+      {sections.map(([key, title, list, compact, hint]) => {
+        const isCollapsed = Boolean(collapsed[key]);
+        return (
+          <section className="quest-section" key={key}>
+            <button
+              aria-expanded={!isCollapsed}
+              className="quest-section-toggle"
+              onClick={() => setCollapsed((current) => ({ ...current, [key]: !current[key] }))}
+              type="button"
+            >
+              <span>{isCollapsed ? "▸" : "▾"} {title}</span>
+              <small>{list.length}</small>
+            </button>
+            {!isCollapsed && (
+              <div className="quest-section-body">
+                {hint && list.length > 0 && <p className="studio-hint">{hint}</p>}
+                {list.length ? list.map((quest) => (
+                  <QuestEntry busyId={busyId} compact={compact} key={quest.id} onAction={onAction} quest={quest} trackedId={trackedId} />
+                )) : <p className="world-empty">None</p>}
+              </div>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }

@@ -3827,3 +3827,16 @@ def test_dev_give_endpoint_requires_editor(tmp_path: Any, monkeypatch: pytest.Mo
     _gear_world(tmp_path, monkeypatch)
     from plight_server import app as app_module
     assert "/api/v1/content/give" in {route.path for route in app_module.app.routes}
+
+def test_tracked_quest_defaults_and_follows_choice(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    content = _gear_world(tmp_path, monkeypatch)
+    content["quests"] = [{"id": "q1"}, {"id": "q2"}, {"id": "q3"}]
+    character = _enchant_character(quest_state={
+        "q1": {"status": "completed"}, "q2": {"status": "active"}, "q3": {"status": "active"},
+    })
+    assert game.tracked_quest_id(character, content) == "q2"
+    character.quest_state["_tracked"] = "q3"
+    assert game.tracked_quest_id(character, content) == "q3"
+    character.quest_state["_tracked"] = "q1"
+    assert game.tracked_quest_id(character, content) == "q2"
+    assert game.tracked_quest_id(_enchant_character(), content) is None

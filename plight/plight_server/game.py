@@ -1192,6 +1192,21 @@ def _route(
     return None
 
 
+TRACKED_QUEST_KEY = "_tracked"
+
+
+def tracked_quest_id(character: Any, content: dict[str, Any]) -> str | None:
+    """The player's chosen active quest, falling back to the first accepted quest."""
+    state = getattr(character, "quest_state", None) or {}
+    active = [
+        quest["id"]
+        for quest in content.get("quests", [])
+        if (state.get(quest["id"]) or {}).get("status") == "active"
+    ]
+    chosen = state.get(TRACKED_QUEST_KEY)
+    return chosen if chosen in active else (active[0] if active else None)
+
+
 def _quest_path(
     character: Any,
     content: dict[str, Any],
@@ -1200,7 +1215,9 @@ def _quest_path(
 ) -> dict[str, Any] | None:
     quests = {quest["id"]: quest for quest in content.get("quests", [])}
     quest_state = getattr(character, "quest_state", None) or {}
-    for quest in content.get("quests", []):
+    tracked = tracked_quest_id(character, content)
+    ordered = sorted(content.get("quests", []), key=lambda quest: quest["id"] != tracked)
+    for quest in ordered:
         if quest_state.get(quest["id"], {}).get("status") != "active":
             continue
         view = _quest_view(character, quest, entities, areas)
@@ -1548,6 +1565,7 @@ def _snapshot(
         "action_sounds": content.get("action_sounds", {}),
         "atmosphere": atmosphere_data,
         "quest_path": quest_path,
+        "tracked_quest_id": tracked_quest_id(character, content),
         "world_map": _world_map(character, areas) if has_map else None,
     }
 

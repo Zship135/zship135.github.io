@@ -45,6 +45,7 @@ from plight_server.game import (
     _add_currency,
     _currency_text,
     _die_skin_view,
+    TRACKED_QUEST_KEY,
     ITEM_TYPES,
     grant_die_skins,
     _complete_gathering,
@@ -2190,6 +2191,31 @@ def accept_quest(
         )
         return {
             "message": f"You accept “{quest['title']}” from {giver['name']}.",
+            "snapshot": _snapshot_for_character(character, db),
+        }
+
+
+@app.post("/api/v1/quests/{quest_id}/track")
+def track_quest(
+    quest_id: str,
+    request: Request,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _check_rate(request, "quest_actions", 30, 60)
+    character = _require_character(account)
+    with _character_lock(account.id):
+        db.refresh(character)
+        content = world_content_dict()
+        quest = _quest_by_id(content, quest_id)
+        state = dict(character.quest_state or {})
+        if (state.get(quest_id) or {}).get("status") != "active":
+            raise HTTPException(status_code=409, detail="Only accepted quests can be made active.")
+        state[TRACKED_QUEST_KEY] = quest_id
+        character.quest_state = state
+        db.commit()
+        return {
+            "message": f"“{quest['title']}” is now your active quest.",
             "snapshot": _snapshot_for_character(character, db),
         }
 
