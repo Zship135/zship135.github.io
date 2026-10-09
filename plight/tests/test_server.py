@@ -3822,3 +3822,8 @@ def test_gear_validation_and_die_skins(tmp_path: Any, monkeypatch: pytest.Monkey
     character.active_die_skin = "ember"
     view = game._die_skin_view(character, content)
     assert view["active_id"] == "ember" and view["unlocked"][0]["particle_effect"] == "embers"
+
+def test_dev_give_endpoint_requires_editor(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    _gear_world(tmp_path, monkeypatch)
+    from plight_server import app as app_module
+    assert "/api/v1/content/give" in {route.path for route in app_module.app.routes}

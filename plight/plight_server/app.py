@@ -45,6 +45,7 @@ from plight_server.game import (
     _add_currency,
     _currency_text,
     _die_skin_view,
+    ITEM_TYPES,
     grant_die_skins,
     _complete_gathering,
     apply_damage_over_time,
@@ -88,6 +89,7 @@ from plight_server.schemas import (
     LoginRequest,
     PartyInviteCreate,
     PartyInviteUpdate,
+    DevGiveRequest,
     DieSkinRequest,
     ProfileUpdateRequest,
     QuestChoiceRequest,
@@ -2507,6 +2509,39 @@ def _is_content_editor(account: Account) -> bool:
 @app.get("/api/v1/content/permission")
 def content_permission(account: Account = Depends(require_account)) -> dict[str, bool]:
     return {"can_edit": _is_content_editor(account)}
+
+
+@app.post("/api/v1/content/give")
+def give_to_editor(
+    body: DevGiveRequest,
+    account: Account = Depends(require_account),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if not _is_content_editor(account):
+        raise HTTPException(status_code=403, detail="World content editing is not enabled for this account.")
+    character = _require_character(account)
+    content = world_content_dict()
+    with _character_lock(account.id):
+        db.refresh(character)
+        if body.kind == "die_skin":
+            skin = next((entry for entry in content.get("die_skins", []) if entry["id"] == body.id), None)
+            if skin is None:
+                raise HTTPException(status_code=404, detail="Save the world first; that die skin is not live yet.")
+            grant_die_skins(character, content, [body.id])
+            message = f"You now own the {skin['name']} die skin."
+        else:
+            entity = next(
+                (e for e in content["entities"] if e["id"] == body.id and e["type"] in ITEM_TYPES | {"resource"}),
+                None,
+            )
+            if entity is None:
+                raise HTTPException(status_code=404, detail="Save the world first; that item is not live yet.")
+            inventory = dict(character.inventory or {})
+            inventory[body.id] = inventory.get(body.id, 0) + body.quantity
+            character.inventory = inventory
+            message = f"Added {body.quantity} {entity['name']} to your inventory."
+        db.commit()
+    return {"message": message}
 
 
 @app.get("/api/v1/content")

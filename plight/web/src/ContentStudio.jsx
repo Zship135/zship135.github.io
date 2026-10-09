@@ -780,6 +780,18 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
     setSelectedId("");
   }
 
+  async function giveToSelf(kind, id, quantity = 1) {
+    setError("");
+    try {
+      const result = await api("/api/v1/content/give", {
+        token, method: "POST", body: JSON.stringify({ kind, id, quantity }),
+      });
+      setNotice(result.message);
+    } catch (giveError) {
+      setError(giveError.message);
+    }
+  }
+
   async function saveContent() {
     if (pendingAudioUploads > 0) {
       setError("Wait for the MP3 upload to finish before saving the world.");
@@ -969,6 +981,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                       entities={content.entities}
                       currencies={currencies}
                       enchantments={enchantments}
+                      onGive={giveToSelf}
                       lootItems={eligibleItems}
                       onChange={updateEntity}
                       onLocationToggle={(locationId, relationField, checked) => updateContent((next) => {
@@ -993,6 +1006,7 @@ export default function ContentStudio({ token, onClose, onSignOut }) {
                   {currentDieSkin && tab === "dieskins" && (
                     <DieSkinEditor
                       skin={currentDieSkin}
+                      onGive={() => giveToSelf("die_skin", currentDieSkin.id)}
                       onChange={(field, value) => updateContent((next) => {
                         const skin = next.die_skins.find((item) => item.id === selectedId);
                         if (skin) skin[field] = value;
@@ -1217,7 +1231,8 @@ function ActionSoundEditor({
   );
 }
 
-function EntityEditor({ entity, entities, currencies = [], enchantments = [], locations, lootItems, onChange, onLocationToggle }) {
+function EntityEditor({ entity, entities, currencies = [], enchantments = [], locations, lootItems, onChange, onLocationToggle, onGive }) {
+  const [giveQuantity, setGiveQuantity] = useState(1);
   const relationField = {
     enemy: "enemy_ids",
     npc: "npc_ids",
@@ -1285,6 +1300,12 @@ function EntityEditor({ entity, entities, currencies = [], enchantments = [], lo
       )}
       <Field label="Name" value={entity.name} onChange={(value) => set("name", value)} />
       <TextAreaField label="Description" value={entity.description} onChange={(value) => set("description", value)} />
+      {ITEM_RESOURCE_TYPES.includes(entity.type) && (
+        <div className="studio-give-row">
+          <Field label="Quantity" min={1} max={9999} onChange={(value) => setGiveQuantity(Math.max(1, Number(value) || 1))} type="number" value={giveQuantity} />
+          <button className="studio-secondary-button" onClick={() => onGive("item", entity.id, giveQuantity)} type="button">Give to me</button>
+        </div>
+      )}
       {entity.type === "npc" && (
         <>
           <label className="studio-field">
@@ -2314,7 +2335,7 @@ function EnchantmentEditor({ enchantment, onChange }) {
   );
 }
 
-function DieSkinEditor({ skin, onChange }) {
+function DieSkinEditor({ skin, onChange, onGive }) {
   const colorField = (label, field, optional = false) => (
     <label className="studio-field">
       <span>{label}</span>
@@ -2345,6 +2366,7 @@ function DieSkinEditor({ skin, onChange }) {
       {colorField("Particle color", "particle_color")}
       <p className="studio-hint">Preview</p>
       <DiePreview skin={skin} />
+      <button className="studio-secondary-button" onClick={onGive} type="button">Give to me</button>
       <p className="studio-hint">Players unlock skins from quest rewards (set them in the Quests tab) and pick the active one from the Dice button.</p>
     </div>
   );

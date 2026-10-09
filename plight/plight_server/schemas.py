@@ -155,5 +155,11 @@ class ErrorResponse(BaseModel):
     error: ErrorDetail
 
 
+class DevGiveRequest(BaseModel):
+    kind: Literal["item", "die_skin"]
+    id: str = Field(max_length=64)
+    quantity: int = Field(default=1, ge=1, le=9999)
+
+
 class DieSkinRequest(BaseModel):
     skin_id: str | None = Field(default=None, max_length=64)

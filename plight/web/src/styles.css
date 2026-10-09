@@ -519,3 +519,5 @@ a { color: inherit; text-decoration: none; }
 .book-page h3 { margin: 0 0 0.5rem; }
 .book-text { margin: 0 0 0.75rem; }
 .book-controls { display: flex; gap: 0.5rem; }
+.studio-give-row { display: flex; align-items: flex-end; gap: 12px; }
+.studio-give-row .studio-field { max-width: 120px; }
