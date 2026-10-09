@@ -1942,7 +1942,7 @@ def resolve_command(
             combat_state = dict(character.combat_state or {})
             combat_state["defending"] = True
             character.combat_state = combat_state
-            messages.append("You take a guarded stance; your next enemy strike will deal half damage.")
+            messages.append("You take a guarded stance; your equipped shield adds its defense against the next enemy strike.")
         else:
             messages.append(f"You cannot {action_id.replace('_', ' ')} here yet.")
 
@@ -2552,7 +2552,7 @@ def resolve_combat_occurrence(
         state["defending"] = True
         character.combat_state = state
         return {
-            "messages": ["You take a guarded stance; damage from the immediate enemy response is halved."],
+            "messages": ["You take a guarded stance; your equipped shield adds its defense against the immediate enemy response."],
             "defeated_enemy_id": None,
         }
     if action_id == "wait":
@@ -2897,8 +2897,6 @@ def enemy_strike(
         0,
         _positive_stat(enemy, "attack", 0) + roll - stats["defense"],
     )
-    if state.get("defending", False):
-        incoming_damage //= 2
     active_effects = _live_effects(character)
     shield_messages: list[str] = []
     retained_effects = []
