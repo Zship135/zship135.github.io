@@ -2484,6 +2484,7 @@ const SPELL_EFFECT_TYPES = [
   ["restore_mana", "Restore mana"], ["conjure_item", "Conjure item"],
 ].map(([id, name]) => ({ id, name }));
 
+const SPELL_PARTICLE_OPTIONS = PARTICLE_EFFECTS.map((o) => (o.id === "none" ? { ...o, name: "Plain glowing dots" } : o));
 const SPELL_ANIMATION_OPTIONS = ["bolt", "beam", "burst", "nova", "ring", "aura", "rain", "spiral"]
   .map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1) }));
 
@@ -2631,10 +2632,11 @@ function SpellEditor({ spell, schools, entities, locations, onChange }) {
         ))}
       </section>
       <section className="studio-subsection">
-        <h3>Visual effect</h3>
+        <h3>Particle effect</h3>
+        <p className="studio-hint">Animation sets how the particles move; particle style sets what they look like.</p>
         <div className="studio-two-fields">
           <SelectField label="Animation" options={SPELL_ANIMATION_OPTIONS} value={visual.animation} onChange={(value) => setVisual("animation", value)} />
-          <SelectField label="Particles" options={PARTICLE_EFFECTS} value={visual.particle_effect} onChange={(value) => setVisual("particle_effect", value || "none")} />
+          <SelectField label="Particle style" options={SPELL_PARTICLE_OPTIONS} value={visual.particle_effect} onChange={(value) => setVisual("particle_effect", value || "none")} />
           <label className="studio-field"><span>Main color</span><input onChange={(event) => setVisual("color", event.target.value)} type="color" value={visual.color} /></label>
           <label className="studio-field"><span>Secondary color</span><input onChange={(event) => setVisual("secondary_color", event.target.value)} type="color" value={visual.secondary_color} /></label>
           <Field label="Intensity (1-3)" min={1} max={3} onChange={(value) => setVisual("intensity", value)} type="number" value={visual.intensity} />

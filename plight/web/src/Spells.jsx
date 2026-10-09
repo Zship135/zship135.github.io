@@ -1,45 +1,179 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export const SPELL_ANIMATIONS = ["bolt", "beam", "burst", "nova", "ring", "aura", "rain", "spiral"];
 
 export function SpellEffectsOverlay({ casts, onDone }) {
   useEffect(() => {
     if (!casts?.length) return undefined;
-    const timer = setTimeout(onDone, 1800);
+    const timer = setTimeout(onDone, 2600);
     return () => clearTimeout(timer);
   }, [casts, onDone]);
   if (!casts?.length) return null;
   return (
     <div className="spell-overlay" aria-hidden="true">
-      {casts.map((cast, index) => <SpellVisual key={`${cast.spell_id}-${index}`} visual={cast.visual} delay={index * 350} />)}
+      {casts.map((cast, index) => <SpellVisual key={`${cast.spell_id}-${index}`} visual={cast.visual} delay={index * 450} width={640} height={420} />)}
     </div>
   );
 }
 
-export function SpellVisual({ visual, delay = 0, loop = false }) {
-  const { animation = "bolt", color = "#8f7cff", secondary_color: secondary, intensity = 1, particle_effect: particle } = visual || {};
-  const style = {
-    "--spell-color": color,
-    "--spell-color-2": secondary || color,
-    "--spell-scale": 0.8 + intensity * 0.4,
-    animationDelay: `${delay}ms`,
-    animationIterationCount: loop ? "infinite" : 1,
-  };
-  const count = 6 + intensity * 4;
-  return (
-    <div className={`spell-visual spell-${animation}`} style={style}>
-      <span className="spell-core" />
-      {Array.from({ length: particle && particle !== "none" ? count : 0 }, (_, index) => (
-        <i
-          className={`spell-particle spell-particle-${particle}`}
-          key={index}
-          style={{ "--i": index, "--n": count, animationDelay: `${delay + index * 60}ms`, animationIterationCount: loop ? "infinite" : 1 }}
-        />
-      ))}
-    </div>
-  );
+const TAU = Math.PI * 2;
+const rand = (min, max) => min + Math.random() * (max - min);
+
+function makeParticles(animation, count, w, h) {
+  const cx = w / 2;
+  const cy = h / 2;
+  const list = [];
+  for (let i = 0; i < count; i += 1) {
+    const p = { x: cx, y: cy, vx: 0, vy: 0, delay: 0, life: 1, size: rand(2, 5), polar: null, alt: Math.random() < 0.5 };
+    const angle = rand(0, TAU);
+    if (animation === "bolt") {
+      if (i < count * 0.6) {
+        p.x = w * 0.08; p.y = h * 0.8; p.delay = rand(0, 0.5); p.life = 0.55;
+        p.vx = (cx - p.x) / p.life + rand(-30, 30); p.vy = (cy - p.y) / p.life + rand(-30, 30);
+      } else {
+        p.delay = 0.55 + rand(0, 0.1); p.life = 0.9;
+        const speed = rand(40, 200);
+        p.vx = Math.cos(angle) * speed; p.vy = Math.sin(angle) * speed;
+      }
+    } else if (animation === "beam") {
+      p.x = w * 0.05; p.y = cy + rand(-8, 8); p.delay = rand(0, 0.7); p.life = 0.5;
+      p.vx = (cx - p.x) / p.life; p.vy = rand(-12, 12);
+      if (i > count * 0.75) { p.x = cx; p.vx = rand(-40, 40); p.vy = rand(-100, 100); p.delay = 0.5 + rand(0, 0.3); }
+    } else if (animation === "burst") {
+      const speed = rand(60, 260);
+      p.vx = Math.cos(angle) * speed; p.vy = Math.sin(angle) * speed; p.life = rand(0.7, 1.2);
+    } else if (animation === "nova") {
+      const speed = rand(250, 290);
+      p.vx = Math.cos(angle) * speed; p.vy = Math.sin(angle) * speed; p.life = 1;
+    } else if (animation === "ring") {
+      p.polar = { angle, radius: 100, spin: 3.2, shrink: 0 }; p.life = 1.5; p.delay = rand(0, 0.3);
+    } else if (animation === "aura") {
+      const radius = rand(10, 70);
+      p.x = cx + Math.cos(angle) * radius; p.y = cy + 50 + Math.sin(angle) * radius * 0.4;
+      p.vy = rand(-90, -40); p.vx = rand(-12, 12); p.delay = rand(0, 1); p.life = rand(0.9, 1.4);
+    } else if (animation === "rain") {
+      p.x = cx + rand(-130, 130); p.y = -10; p.vy = rand(260, 380); p.delay = rand(0, 1); p.life = (cy + 20) / p.vy + rand(0, 0.2);
+    } else if (animation === "spiral") {
+      p.polar = { angle: angle, radius: 150, spin: 7, shrink: 130 }; p.life = 1.2; p.delay = rand(0, 0.5);
+    }
+    list.push(p);
+  }
+  return list;
 }
 
+function drawParticle(ctx, p, shape, color, alpha, age, rotation) {
+  ctx.globalAlpha = Math.max(0, alpha);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  if (shape === "sparks") {
+    const length = 7 + p.size * 2;
+    const speed = Math.hypot(p.vx, p.vy) || 1;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x - (p.vx / speed) * length, p.y - (p.vy / speed) * length);
+    ctx.stroke();
+  } else if (shape === "stars") {
+    const r = p.size * 1.8;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(rotation);
+    ctx.beginPath();
+    for (let k = 0; k < 8; k += 1) {
+      const radius = k % 2 === 0 ? r : r * 0.35;
+      const a = (k / 8) * TAU;
+      ctx.lineTo(Math.cos(a) * radius, Math.sin(a) * radius);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  } else if (shape === "bubbles") {
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * 1.6, 0, TAU);
+    ctx.stroke();
+  } else if (shape === "smoke") {
+    const radius = p.size * (3 + age * 6);
+    const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius);
+    gradient.addColorStop(0, color);
+    gradient.addColorStop(1, "transparent");
+    ctx.globalAlpha = Math.max(0, alpha) * 0.35;
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, radius, 0, TAU);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, shape === "snow" ? p.size * 0.9 : p.size, 0, TAU);
+    ctx.fill();
+  }
+}
+
+export function SpellVisual({ visual, delay = 0, loop = false, width = 320, height = 180 }) {
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    const ctx = canvas.getContext("2d");
+    const { animation = "bolt", color = "#ff8a3d", secondary_color: secondary, intensity = 2, particle_effect: effect = "sparks" } = visual || {};
+    const colors = [color, secondary || color];
+    const shape = effect === "none" ? "dots" : effect;
+    const count = 45 + intensity * 35;
+    const scale = Math.min(width / 640, height / 420) < 0.6 ? 0.55 : 1;
+    let particles = makeParticles(animation, count, width / scale, height / scale);
+    let start = performance.now() + delay;
+    let last = start;
+    let frame = 0;
+    function tick(now) {
+      frame = requestAnimationFrame(tick);
+      if (now < start) return;
+      const dt = Math.min(0.05, (now - last) / 1000);
+      const elapsed = (now - start) / 1000;
+      last = now;
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      ctx.clearRect(0, 0, width / scale, height / scale);
+      ctx.globalCompositeOperation = shape === "smoke" ? "source-over" : "lighter";
+      let alive = 0;
+      const cx = width / scale / 2;
+      const cy = height / scale / 2;
+      for (const p of particles) {
+        const age = (elapsed - p.delay) / p.life;
+        if (age < 0) { alive += 1; continue; }
+        if (age >= 1) continue;
+        alive += 1;
+        if (p.polar) {
+          p.polar.angle += p.polar.spin * dt;
+          p.polar.radius = Math.max(0, p.polar.radius - p.polar.shrink * dt);
+          p.x = cx + Math.cos(p.polar.angle) * p.polar.radius;
+          p.y = cy + Math.sin(p.polar.angle) * p.polar.radius * 0.7;
+          p.vx = -Math.sin(p.polar.angle) * 40; p.vy = Math.cos(p.polar.angle) * 40;
+        } else {
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          if (shape === "embers") { p.vy -= 70 * dt; p.x += Math.sin(elapsed * 6 + p.size) * 0.6; }
+          else if (shape === "snow") { p.vy += 40 * dt; p.vx *= 0.98; p.x += Math.sin(elapsed * 3 + p.size * 3) * 0.8; }
+          else if (shape === "bubbles") { p.vy -= 35 * dt; p.vx *= 0.97; }
+          else if (shape === "smoke") { p.vy -= 20 * dt; p.vx *= 0.97; }
+        }
+        const fade = age < 0.15 ? age / 0.15 : 1 - (age - 0.15) / 0.85;
+        drawParticle(ctx, p, shape, colors[p.alt ? 1 : 0], fade, age, elapsed * 3 + p.size);
+      }
+      ctx.globalAlpha = 1;
+      if (alive === 0) {
+        if (loop) {
+          particles = makeParticles(animation, count, width / scale, height / scale);
+          start = now + 250;
+        } else {
+          ctx.clearRect(0, 0, width / scale, height / scale);
+          cancelAnimationFrame(frame);
+        }
+      }
+    }
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [visual, delay, loop, width, height]);
+  return <canvas className="spell-canvas" height={height} ref={canvasRef} width={width} />;
+}
 export function SpellsDialog({ busy, enemies, magic, onCast, onClose }) {
   const [target, setTarget] = useState("");
   useEffect(() => {
