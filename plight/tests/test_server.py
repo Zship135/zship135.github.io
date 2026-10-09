@@ -3736,3 +3736,27 @@ def test_book_item_opens_reader_window(tmp_path: Any, monkeypatch: pytest.Monkey
             {"locations": [], "entities": [{"id": "s", "type": "weapon", "name": "S", "description": "x",
                                             "book": {"pages": [{"text": "x"}]}}]}
         )
+
+def test_craft_multiple_scales_ingredients(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = content_store.WorldContent.model_validate(
+        {
+            "locations": [{"id": "a", "name": "A", "description": "d", "position": {"x": 0, "y": 0},
+                           "starting_species": ["human", "goblin"]}],
+            "entities": [
+                {"id": "hide", "type": "item", "name": "Cow Hide", "description": "x"},
+                {"id": "raw", "type": "item", "name": "Raw Hide", "description": "x"},
+            ],
+            "recipes": [{"id": "hide_recipe", "name": "Cow Hide", "output_item_id": "hide",
+                         "output_quantity": 2, "ingredients": [{"item_id": "raw", "quantity": 3}]}],
+        }
+    )
+    path = tmp_path / "world_content.json"
+    path.write_text(world.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(content_store, "WORLD_CONTENT_PATH", path)
+    character = _enchant_character(inventory={"raw": 10})
+    assert "missing 2 Raw Hide" in game.resolve_command("craft 4 cow hide", character)["messages"][0]
+    assert character.inventory == {"raw": 10}
+    for text in ("craft 3 cow hide", ):
+        assert game.resolve_command(text, character)["messages"][0] == "You craft 6 Cow Hides."
+    assert character.inventory == {"raw": 1, "hide": 6}
+    assert game.resolve_command("craft cow hide", _enchant_character(inventory={"raw": 3}))["messages"][0] == "You craft 2 Cow Hides."

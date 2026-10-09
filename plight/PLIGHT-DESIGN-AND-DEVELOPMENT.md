@@ -292,3 +292,8 @@ The initial Speed-based attack initiative decision is implemented: attacks compa
 The NLP action semantics, starter recipes, and marketplace/direct-trade lifecycle are specified in the companion NLP document. The initial laptop-hosted networking, browser UI, framework, database, transport, and backup decisions are recorded in [NETWORKING-AND-UI-ARCHITECTURE.md](./NETWORKING-AND-UI-ARCHITECTURE.md). Resolve the remaining system-specific questions just before those systems are built, using small prototypes and concrete test cases. The initial priority is to prove that players can express intent in ordinary text and reliably see that intent resolved within a persistent, shared world.
 
 
+
+## Crafting quantities (implemented)
+
+`craft 4 cow hide`, `craft 4x cow hide` and `craft cow hide x4` craft several at once (1-999). Ingredients scale with the count, missing amounts are reported for the whole request, and skill XP is awarded per craft. A recipe whose exact name matches the full text is never treated as a quantity.
+

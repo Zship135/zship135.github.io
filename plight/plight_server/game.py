@@ -2096,6 +2096,18 @@ def _craft(
         arguments, "recipe", "product", "item", "subject", "target"
     )
     recipes = content.get("recipes", [])
+    count = 1
+    if subject and not any(
+        _normalize_npc_name(recipe['name']) == _normalize_npc_name(subject) for recipe in recipes
+    ):
+        quantity_match = re.fullmatch(
+            r"(?:(\d+)\s*x?\s+(.+?)|(.+?)\s+x\s*(\d+))", subject.strip(), flags=re.I
+        )
+        if quantity_match:
+            count = int(quantity_match.group(1) or quantity_match.group(4))
+            subject = quantity_match.group(2) or quantity_match.group(3)
+        if count < 1 or count > 999:
+            return ["Choose a craft quantity from 1 to 999."]
     matches = _matching_items(subject, recipes) if subject else recipes
     if len(matches) > 1:
         return [f"Which recipe do you mean: {', '.join(item['name'] for item in matches)}?"]
@@ -2116,29 +2128,29 @@ def _craft(
         return [f"You need {SKILL_LABELS[skill]} level {skill_level} to craft {recipe['name']}."]
     inventory = dict(character.inventory or {})
     missing = [
-        f"{ingredient['quantity'] - inventory.get(ingredient['item_id'], 0)} "
+        f"{ingredient['quantity'] * count - inventory.get(ingredient['item_id'], 0)} "
         f"{entities.get(ingredient['item_id'], {}).get('name', ingredient['item_id'])}"
         for ingredient in recipe["ingredients"]
-        if inventory.get(ingredient["item_id"], 0) < ingredient["quantity"]
+        if inventory.get(ingredient["item_id"], 0) < ingredient["quantity"] * count
     ]
     if missing:
-        return [f"You are missing {', '.join(missing)} to craft {recipe['name']}."]
+        suffix = f" {count} times" if count > 1 else ""
+        return [f"You are missing {', '.join(missing)} to craft {recipe['name']}{suffix}."]
     for ingredient in recipe["ingredients"]:
-        inventory[ingredient["item_id"]] -= ingredient["quantity"]
+        inventory[ingredient["item_id"]] -= ingredient["quantity"] * count
         if inventory[ingredient["item_id"]] == 0:
             del inventory[ingredient["item_id"]]
     output_id = recipe["output_item_id"]
-    inventory[output_id] = inventory.get(output_id, 0) + recipe["output_quantity"]
+    total = recipe["output_quantity"] * count
+    inventory[output_id] = inventory.get(output_id, 0) + total
     character.inventory = inventory
-    _record_quest_event(character, content, "collect", output_id, recipe["output_quantity"])
+    _record_quest_event(character, content, "collect", output_id, total)
     output = entities.get(output_id)
     output_name = output["name"] if output else output_id.replace("_", " ").title()
-    messages = [
-        f"You craft {recipe['output_quantity']} {output_name}"
-        f"{'' if recipe['output_quantity'] == 1 else 's'}."
-    ]
+    messages = [f"You craft {total} {output_name}{'' if total == 1 else 's'}."]
     if skill:
-        messages.extend(_award_skill_experience(character, skill, max(1, skill_level)))
+        for _ in range(count):
+            messages.extend(_award_skill_experience(character, skill, max(1, skill_level)))
     return messages
 
 
